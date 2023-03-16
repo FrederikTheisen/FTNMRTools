@@ -17,14 +17,27 @@ DataPointCount = 10
 Baselines = {}
 CLOSE = False
 colors = []
+polydegree = 2
+ppmrange = []
+XAXIS = []
+PEAKPOINTS = []
 
 def ReadData():
 	global colors
+	global XAXIS
+	global ppmrange
 	data = {}
+	points = None
 
 	with open(PATH) as f:
 		rowid = -1
 		for line in f:
+			if '# F2LEFT' in line:
+				dat = line.split()
+				ppmrange = [float(dat[3]),float(dat[7])]
+			if '# NCOLS' in line:
+				dat = line.split()
+				points = int(dat[3])
 			if "# row" in line: #Register new row
 				dat = line.split()
 				rowid = int(dat[-1])
@@ -32,6 +45,8 @@ def ReadData():
 			elif rowid > -1: #register data
 				value = float(line)
 				data[rowid].append(value)
+
+	XAXIS = list(np.linspace(ppmrange[0],ppmrange[1],points))
 
 	# Get the 'viridis' colormap
 	cmap = cm.get_cmap('viridis')
@@ -45,20 +60,19 @@ def ReadData():
 	return data, len(data[rowid])
 
 def PrintData(dat):
-	header = "x "
+	header = "ppm "
 	for rowid in dat:
 		header += str(rowid) + " "
-	print(header)
-
-	for i in range(DataPointCount):
-		out = str(i) + " "
-		for rowid in dat:
-			row = dat[rowid]
-			out += str(row[i]) + " "
-		print(out.strip())
+	with open("baselined.txt","w+") as f:
+		f.write(header + "\n")
+		for i in range(DataPointCount):
+			out = str(XAXIS[i]) + " "
+			for rowid in dat:
+				row = dat[rowid]
+				out += str(row[i]) + " "
+			f.write(out.strip() + "\n")
 
 def BaselineCorrect(data):
-	
 	#constants
 	btn_width = 0.15
 	btn_margin = 0.1
@@ -66,35 +80,62 @@ def BaselineCorrect(data):
 	# creating plot
 	fig = plt.figure()
 	ax = fig.subplots()
+
 	plt.subplots_adjust(bottom = 0.25)
 
 	# Add polynomium degree options
-	# button_ax = plt.axes([1-btn_margin-2*btn_width,0,btn_width,.1])
-	# clear_btn = Button(button_ax, 'Pol Degree +1', color='lightgoldenrodyellow', hovercolor='0.975')
-	# clear_btn.on_clicked(lambda event: onclearbuttonclick(event, data, ax))
-	# button_ax = plt.axes([1-btn_margin-2*btn_width,0,btn_width,.1])
-	# clear_btn = Button(button_ax, 'Pol Degree -1', color='lightgoldenrodyellow', hovercolor='0.975')
-	# clear_btn.on_clicked(lambda event: onclearbuttonclick(event, data, ax))
+	button_ax = plt.axes([btn_margin+1*btn_width,0,btn_width,.1])
+	polyplus_btn = Button(button_ax, 'Pol Degree +1', color='lightgoldenrodyellow', hovercolor='0.975')
+	polyplus_btn.on_clicked(lambda event: onpolydegreebtnclick(event, data, ax, 1))
+	button_ax = plt.axes([btn_margin,0,btn_width,.1])
+	polyminus_btn = Button(button_ax, 'Pol Degree -1', color='lightgoldenrodyellow', hovercolor='0.975')
+	polyminus_btn.on_clicked(lambda event: onpolydegreebtnclick(event, data, ax, -1))
 
 	# Add a 'Clear' button to the plot
 	button_ax = plt.axes([1-btn_margin-2*btn_width,0,btn_width,.1])
-	clear_btn = Button(button_ax, 'Clear', color="lightgoldenrodyellow", hovercolor='0.975')
+	clear_btn = Button(button_ax, 'Clear BSL Points', color="lightgoldenrodyellow", hovercolor='0.975')
 	clear_btn.on_clicked(lambda event: onclearbuttonclick(event, data, ax)) # Connect the onbuttonclick function to the button
 	# Add a 'Finished' button to the plot
 	button_ax = plt.axes([1-btn_margin-btn_width,0,btn_width,.1])
-	fin_btn = Button(button_ax, 'Finished', color='lightgoldenrodyellow', hovercolor='0.975')
+	fin_btn = Button(button_ax, 'Subtract Baseline', color='lightgoldenrodyellow', hovercolor='0.975')
 	fin_btn.on_clicked(onfinishbuttonclick) # Connect the onbuttonclick function to the button
 
 	# Connect the onclick function to the plot
 	cid = fig.canvas.mpl_connect('button_press_event', lambda event: onclick(event, data, ax))
 
-	Draw(data, ax)
+	Draw(data, ax, mode = 0)
 
 
 	# Show the plot and wait for user interaction
 	#plt.show()
 
-def Draw(data, ax):
+def PeakPicking(data):
+	#constants
+	btn_width = 0.15
+	btn_margin = 0.1
+
+	# creating plot
+	fig = plt.figure()
+	ax = fig.subplots()
+
+	plt.subplots_adjust(bottom = 0.25)
+
+	# Add a 'Clear' button to the plot
+	button_ax = plt.axes([1-btn_margin-2*btn_width,0,btn_width,.1])
+	clear_btn = Button(button_ax, 'Clear', color="lightgoldenrodyellow", hovercolor='0.975')
+	clear_btn.on_clicked(lambda event: onpeakpickingclearbtnclick(event, data, ax)) # Connect the onbuttonclick function to the button
+	# Add a 'Finished' button to the plot
+	button_ax = plt.axes([1-btn_margin-btn_width,0,btn_width,.1])
+	fin_btn = Button(button_ax, 'Finished', color='lightgoldenrodyellow', hovercolor='0.975')
+	fin_btn.on_clicked(onpeakpickingfinishedclick) # Connect the onbuttonclick function to the button
+
+	# Connect the onclick function to the plot
+	cid = fig.canvas.mpl_connect('button_press_event', lambda event: onpeakpickingclick(event, data, ax))
+
+	Draw(data, ax, mode = 1)
+
+# Draw function
+def Draw(data, ax, mode = 0):
 
 	old_x_lim = None
 
@@ -105,35 +146,59 @@ def Draw(data, ax):
 	ax.clear()
 	for rowid in data:
 		graph = data[rowid]
-		ax.plot(range(len(graph)), graph, color=colors[rowid])
-		if len(Baselines) > 0:
-			print("Draw baselines")
-			ax.plot(range(len(graph)), Baselines[rowid],color=colors[rowid])
-		x = []
-		y = []
-		for bp in BaselinePoints[rowid]:
-			x.append(bp[0])
-			y.append(bp[1])
-		ax.scatter(x,y, color=colors[rowid])
+		#ax.plot(range(len(graph)), graph, color=colors[rowid])
+		ax.plot(XAXIS, graph, color=colors[rowid])
+		if mode == 0: #DRAW BASELINES
+			if len(Baselines) > 0:
+				print("Draw baselines")
+				#ax.plot(range(len(graph)), Baselines[rowid],color=colors[rowid])
+				ax.plot(XAXIS, Baselines[rowid],color=colors[rowid]) 
+			x = []
+			y = []
+			for bp in BaselinePoints[rowid]:
+				x.append(bp[0])
+				y.append(bp[1])
+			ax.scatter(x,y, color=colors[rowid])
+
+	if mode == 1: #DRAW PEAK PICKING
+		if len(PEAKPOINTS) > 0:
+			print("Draw peaks")
+			peakrange = ax.get_ylim()
+			for peak in PEAKPOINTS:
+				print(peak)
+				ax.vlines(x = peak, ymin = old_y_lim[0], ymax = old_y_lim[1])
+
+			if len(PEAKPOINTS) > 1: 
+				for i in range(0,len(PEAKPOINTS) - 1,2):
+					print(i)
+					peakstart = PEAKPOINTS[i]
+					peakend = PEAKPOINTS[i+1]
+					ax.axvspan(peakstart, peakend, facecolor='b', alpha=0.2)
 
 
 	if old_x_lim is not None:
 		ax.set_xlim(old_x_lim)  # and restore zoom
 		ax.set_ylim(old_y_lim)
+	else:
+		ax.invert_xaxis()
 
 	plt.draw()
 	plt.show()
 	plt.pause(0.0001)
 	plt.clf()
 
-def onclick(event, data, ax): # Define a function to handle mouse clicks on the plot
+# Define a function to handle mouse clicks on the plot
+def onclick(event, data, ax): 
 	global Baselines
-
+	x_pos = event.xdata
+	print("Clicked at x = {}".format(x_pos))
 	if event.inaxes is not None and event.dblclick:
 	    # Get the x position of the click
-	    x_pos = event.xdata
-	    if x_pos < 1: return #not a relevant click
-	    print("Clicked at x = {}".format(x_pos))
+	    
+	    print(ppmrange)
+	    if x_pos > ppmrange[0] or x_pos < ppmrange[1]: 
+	    	print("ignore")
+	    	return #not a relevant click
 
 	    AddPointsAtPosition(x_pos,data)
 
@@ -141,7 +206,8 @@ def onclick(event, data, ax): # Define a function to handle mouse clicks on the 
 
 	    Draw(data, ax)
 
-# Define a function to handle button clicks
+# Define a functions to handle button clicks
+# Baseline correction plot
 def onfinishbuttonclick(event):
     #global CLOSE
     print("Finished button clicked")
@@ -155,18 +221,57 @@ def onclearbuttonclick(event, data, ax):
     Baselines = {}
 
     Draw(data, ax)
+def onpolydegreebtnclick(event, data, ax, delta):
+	global polydegree
+	global Baselines
+
+	polydegree = polydegree + delta
+	if polydegree < 0: polydegree = 0
+	if polydegree > 20: polydegree = 20
+
+	Baselines = FitBaselines()
+
+	Draw(data, ax)
+
+# Peak picking plot
+def onpeakpickingclick(event, data, ax):
+	x_pos = event.xdata
+	print("Clicked at x = {}".format(x_pos))
+	if event.inaxes is not None and event.dblclick:
+	    # Get the x position of the click
+	    
+	    print(ppmrange)
+	    if x_pos > ppmrange[0] or x_pos < ppmrange[1]: 
+	    	print("ignore")
+	    	return #not a relevant click
+
+	    AddPeakRangePoint(x_pos,data)
+
+	    Draw(data, ax, mode = 1)
+def onpeakpickingclearbtnclick(event, data, ax):
+	PEAKPOINTS.clear()
+	print(len(PEAKPOINTS))
+
+	Draw(data, ax, mode = 1)
+def onpeakpickingfinishedclick(event):
+	print("done")
+	plt.close()
 
 def AddPointsAtPosition(position,data):
-	position = int(position)
-
+	print(GetAxisIndexFromPosition(position))
 	for rowid in data:
-		BaselinePoints[rowid].append([position,data[rowid][position]])
+		BaselinePoints[rowid].append([position,data[rowid][GetAxisIndexFromPosition(position)]])
+
+def GetAxisIndexFromPosition(position):
+	for i in range(len(XAXIS)):
+		pos = XAXIS[i]
+		if pos < position: return i
 
 def FitBaselines():
 	baselines = {}
 
 	for rowid in BaselinePoints:
-		if len(BaselinePoints[rowid]) < 3: return baselines
+		if len(BaselinePoints[rowid]) < polydegree + 1: return baselines
 
 		x = []
 		y = []
@@ -177,13 +282,13 @@ def FitBaselines():
 		fit = FitBaseline(x,y)
 
 		baselines[rowid] = []
-		for i in range(DataPointCount):
+		for i in XAXIS:
 			baselines[rowid].append(np.polyval(fit,i))
 
 	return baselines
 
 def FitBaseline(x,y):
-	return np.polyfit(x,y,2)
+	return np.polyfit(x,y,polydegree)
 
 def SubtractBaseline(data):
 	baselinecorrected = {}
@@ -197,6 +302,42 @@ def SubtractBaseline(data):
 
 	return baselinecorrected
 
+def AddPeakRangePoint(position, data):
+	axis_idx = GetAxisIndexFromPosition(position)
+
+	PEAKPOINTS.append(position)
+
+def ExportPeakVolumes(data):
+	volumes = {}
+	peakcount = 0
+
+	for rowid in data: volumes[rowid] = []
+
+	for i in range(0,len(PEAKPOINTS) - 1,2):
+		peakstart = PEAKPOINTS[i]
+		peakend = PEAKPOINTS[i+1]
+		idx_start = GetAxisIndexFromPosition(peakstart)
+		idx_end = GetAxisIndexFromPosition(peakend)
+		peakcount += 1
+
+		for rowid in data:
+			volume = sum(data[rowid][idx_start:idx_end])
+			volumes[rowid].append(volume)
+
+	header = "peak "
+	for rowid in data:
+		header += str(rowid) + " "
+
+	with open("peaks.txt","w+") as f:
+		f.write(header + "\n")
+		for i in range(peakcount):
+			out = str(i) + " "
+			for rowid in volumes:
+				vs = volumes[rowid]
+				out += str(vs[i]) + " "
+			f.write(out.strip() + "\n")
+	
+
 
 def Main():
 	global DataPointCount
@@ -207,8 +348,16 @@ def Main():
 
 	BaselineCorrect(data)
 
+	print("Subtracting baselines...")
 	corr = SubtractBaseline(data)
-
+	plt.close()
+	print("Saving baseline corrected data...")
 	PrintData(corr)
+	print("Done")
+
+	PeakPicking(corr)
+
+	ExportPeakVolumes(corr)
 
 Main()
+
