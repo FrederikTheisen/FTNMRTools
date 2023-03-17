@@ -185,7 +185,6 @@ def Draw(data, ax, mode = 0):
 	plt.draw()
 	plt.show()
 	plt.pause(0.0001)
-	plt.clf()
 
 # Define a function to handle mouse clicks on the plot
 def onclick(event, data, ax): 
@@ -337,8 +336,6 @@ def ExportPeakVolumes(data):
 				out += str(vs[i]) + " "
 			f.write(out.strip() + "\n")
 	
-
-
 def Main():
 	global DataPointCount
 
@@ -360,4 +357,3 @@ def Main():
 	ExportPeakVolumes(corr)
 
 Main()
-
