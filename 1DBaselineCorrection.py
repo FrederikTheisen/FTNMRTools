@@ -105,10 +105,6 @@ def BaselineCorrect(data):
 
 	Draw(data, ax, mode = 0)
 
-
-	# Show the plot and wait for user interaction
-	#plt.show()
-
 def PeakPicking(data):
 	#constants
 	btn_width = 0.15
