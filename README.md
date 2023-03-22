@@ -1,6 +1,10 @@
 # FTNMRTools
 
-Various python tools to handle NMR tasks
+Various tools to handle NMR processing and analysis tasks
+
+## CEST
+
+Collection of tools and files needed to process and analyze CEST data in SBiNLab.
 
 ## 1DBaselineCorrection:
 
@@ -80,4 +84,3 @@ Exp #1001, time: 1678887925
 ```
 
 ------
-
