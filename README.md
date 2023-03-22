@@ -4,12 +4,48 @@ Various python tools to handle NMR tasks
 
 ## 1DBaselineCorrection:
 
-Python tool to baseline correct data assuming a polynomial baseline.
+Python tool to baseline correct data assuming a polynomial baseline. The script should work on MacOS and Linux. Windows is not tested yet.
 
 Will also let you integrate regions of the loaded spectra.
 
+The script will read a topspin exported file in the following format:
+
+```
+# File created = Wednesday, March 8, 2023 2:44:20 PM CET
+# Data set = expname  121  1  /path/to/folder
+# Spectral Region:
+# F1LEFT = 0.0 s. F1RIGHT = 0.0049992 s.
+# F2LEFT = 2.8 ppm. F2RIGHT = 0.0 ppm.
+#
+# NROWS = 16 ( = number of points along the F1 axis)
+# NCOLS = 5874 ( = number of points along the F2 axis)
+...
+# row = 0
+1.55127808E9
+1.536176128E9
+1.522184192E9
+1.525284864E9
+...
+```
+
+Usage of the script:
+```
+python3 1DBaselineCorrection.py path-to-file
+```
+
 ## GetOffsetTimes:
 
-Python tool to get experiment times from a folder containing experiments.
+Python tool to get experiment times from a folder containing experiments. Script is tested on Linux.
 
-Tool is designed to collect offset times for series of experiments where the first experiment of each series is number x001.
+Tool is designed to collect offset times for series of experiments where the first experiment of each series is number x001. The script will look for folders in the currect directory.
+Folder structure should be as follows:
+```
+1         # exp is ignored
+2         # exp is ignored
+1001      # series 1 reference exp and first data point
+1002      # s1 point 2
+...
+2001      # series 2 reference exp and first data point
+2002      # s2 point 2
+...
+```
