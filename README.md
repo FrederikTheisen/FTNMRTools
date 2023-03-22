@@ -1,6 +1,7 @@
 # FTNMRTools
 
-Various tools to handle NMR processing and analysis tasks
+Various tools to handle NMR processing and analysis tasks.
+To download a file, open the file and right click the 'Raw' button in top right of the file area and click download archive.
 
 ## CEST
 
