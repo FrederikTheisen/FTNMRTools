@@ -33,6 +33,7 @@ Usage of the script:
 python3 1DBaselineCorrection.py path-to-file
 ```
 Output is 2 files containing the baseline corrected data and the integrated peaks.
+
 baselined.txt: [offset in column 1 with corrected data in subsequent columns]
 ```
 ppm 0 1 ...
