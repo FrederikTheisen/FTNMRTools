@@ -61,3 +61,23 @@ Folder structure should be as follows:
 2002      # s2 point 2
 ...
 ```
+
+Usage:
+```
+# navigate to folder with spectra
+# save GetOffsetTimes.py to this folder
+
+python3 GetOffsetTimes.py
+```
+
+Output: Console dump
+```
+Exp #1001, time: 1678887925
+1001 0
+1002 65
+1003 130
+...
+```
+
+------
+
