@@ -1,0 +1,104 @@
+################################
+### Processing the CEST data ###
+################################
+### Frederik Theisen 2022
+### Made for SBiN-Lab NMR processing pipeline
+
+Download the necessary files and put in folders:
+fid.com => experiment/
+proc.com => experiment/
+make2d.com => experiment/
+stPeakList.pl => experiment/data (does not exist before running proc.com)
+For each file go to properties and change the permission to allow execution as script
+If you get a permission error: chmod 777 <scriptname>
+
+open experiment in bruker console (bruker)
+- read parameters
+- read the 'other options' header and put in the fid.com
+- read the y axis total points (real/valid). Input in column two of included fid.com file
+- read the z axis #B1 offsets and input in third column (Real). Both the N and T of the B1 dimension should be the same.
+- copy-pasting the generated bruker script is also an option, though care must be taken to avoid mistakes
+- for the 15N CEST pulseprograms the saturation dimension is the y dimension (as given in the example fid.com file), this might be different for 13C CEST
+run calcOffset in experiment folder and input your 1D SF value
+- input reference values in fid.com
+run fid.com
+run proc.com
+open nmrDraw
+- phase spectrum (example proc is probably phased for 15N CEST)
+- input phase in proc.com
+reprocess using proc.com
+run make2d.proc to modify spectra for input into ccpnmr analysis
+
+### Peak positions ###
+Using analysis, export a sparky peak list
+- import recorded HSQC from CEST folder (test001.ft2) and assign peaks
+- export sparky -> peaklist
+- sparky list should contain assign w1 w2 height volume
+- two residues cannot have the same number
+Use stPeakList.pl to convert sparky list to nmrpipe
+Usage: ./stPeakList.pl spectrum sparkylist. eg: stPeakList.pl test001.ft2 peaks_sparky >> peaks_nmrpipe
+'>> peaks_nmrpipe' will put output into a new file called peaks_nmrpipe
+
+### Extracting the peak information ###
+open python and run (replace 85 with #B1 freqs + 1):
+for i in range(1,85): print("test" + str(i).zfill(3) + ".ft2)")
+paste result into file called "list2". The file should look like this:
+test001.ft2
+test002.ft2
+...
+put the list2 file in the 'data' folder 
+run seriesTab.com in same folder
+usage: seriesTab -in peaks_nmrpipe -out peaks.ser -list list2 -dx 3 -dy 3
+- seriesTab will output a file called 'peaks.ser'
+- file should contain peak position information, assignment (eg: G343HN-G343N) followed by intensities (first should be 1.000, following should be less than 1)
+- Errors in the .ser file might be caused by errors in the sparky peak list
+
+### Prepare data for analysis ###
+Rename the peaks.ser to B1.ser
+eg for a B1 = 12.5 Hz: 12p5.ser or 12_5.ser
+Save file along with the fqXlist (probably fq1list or fq3list) file from the experiment folder
+In the end you should have a folder (referred to as the input folder later) with the following files (example):
+fq1list
+6_25.ser
+12_5.ser
+25.ser
+
+#######################
+### ChemEx Analysis ###
+#######################
+### ChemEx is a CLI tool for analysis of NMR data. Written in python and can thus be adapted for specific needs.
+### For ChemEx processing you need to install ChemEx in a conda environment with Python 3.9
+### ChemEx requirements may change and might not be updated here
+Install conda 
+Create new environment:
+conda create -n chemex python=3.9
+Activate conda environment and intall ChemEx:
+conda activate chemex
+pip install git+https://github.com/gbouvignies/chemex.git
+OR CHEMEX_FFT (Includes three-state peak picking and overlap detect model, install in new conda env 'chemex_fft')
+pip install git+https://github.com/FrederikTheisen/chemex_FFT.git
+
+### Prepare your data for ChemEx ###
+Navigate your terminal to a suitable folder (experiment specific). Your data processing will happen here and you will run chemex from this folder.
+Download the makechemex.py script and put it in the suitable folder. 
+Open the script and check that the settings in the top matches your requirements. Modify as needed.
+Run the script with your input folder as argument:
+python3 makechemex.py <input folder>
+The makechemex.py script will setup an appropriate folder structure and create a script called 'guide.sh'. Avoid running the script.
+The guide.sh file contains a guide for what to do next.
+- pick ground and minor states (if any minor states)
+- run no exchange fit
+- examine fits
+- run two-state model fit
+- examine
+- Cluster residues with exchange using PB/KEX. Parameters can be collected using the 'gather.py' script. Modify as needed.
+- consider globally fitting clusters (this can take significant time (advanced model = several days))
+- lack of error indicates that parameters are covariant (thus error = very high)
+
+#########################
+### RING NMR Analysis ###
+#########################
+### RING NMR is preinstalled on SBiN-Lab computers and provides user friendly GUI for analysis.
+### Not yet implemented
+### RingNMR project setup script is currently not compatible with the .ser file format provided by the processing pipeline
+### When using RING-NMR, disable as much error estimation as possible until a final fit is necessary.
