@@ -32,7 +32,18 @@ Usage of the script:
 ```
 python3 1DBaselineCorrection.py path-to-file
 ```
+Output is 2 files containing the baseline corrected data and the integrated peaks.
+baselined.txt: [offset in column 1 with corrected data in subsequent columns]
+```
+ppm 0 1 ...
+2.8 8871249.127078533 38488362.885465145 ...
+```
 
+peaks.txt: [peak# in column 1 and subsequent columns contain the areas of the peaks for each spectra]
+```
+peak 0 1 ... 
+0 97437044817.22278 89422449114.04411 ...
+```
 ## GetOffsetTimes:
 
 Python tool to get experiment times from a folder containing experiments. Script is tested on Linux.
