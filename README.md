@@ -9,7 +9,7 @@ Collection of tools and files needed to process and analyze CEST data in SBiNLab
 
 ## 1DBaselineCorrection:
 
-Python tool to baseline correct data assuming a polynomial baseline. The script should work on MacOS and Linux. Windows is not tested yet.
+Python tool to baseline correct data assuming a polynomial baseline. The script should work on MacOS, Linux and Windows.
 
 Will also let you integrate regions of the loaded spectra.
 
