@@ -34,16 +34,20 @@ The script can read two file types:
 ...
 ```
 
-2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspi
+2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin
+
+Topspin command line
 ```
 multitotxt
->Number of experiments to export?
->Export path?
 ```
+The AU program will ask for the number of experiments and the output path. The output files will be named according to the EXPNO of the experiments.
 
 Usage of the script:
 ```
+#If all data sets are in the same file
 python3 1DBaselineCorrection.py path-to-file
+#If multiple files exported using multitotxt (or totxt many times)
+python3 1DBaselineCorrection.py path-to-folder-with-files
 ```
 Output is 2 files containing the baseline corrected data and the integrated peaks.
 
