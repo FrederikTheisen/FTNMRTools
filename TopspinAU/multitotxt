@@ -105,7 +105,7 @@ int multicmd(const char* curdat)
     Proc_err(ERROPT_AK_NO, "On dataset '%s' %d\nRunning command(s)\n%s", name, expno, TSCmdLstDisp);
 
     sprintf(tempCmd, "%s%d.txt", cmd, expno);
-    # Execute cmd "sendgui totxt <path-to-file>"
+    // Execute cmd "sendgui totxt <path-to-file>"
     XCMD(tempCmd);
 
     // Iterate EXPNO
