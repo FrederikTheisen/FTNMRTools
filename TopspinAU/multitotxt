@@ -96,9 +96,18 @@ int multicmd(const char* curdat)
   if (Answer[0] == 0)
     return 0;
 
-  sprintf(cmd,"%s%s%s", "sendgui totxt ", Answer, "/");
+  // Should add '/' to end?
+  if (Answer[strlen(Answer) - 1] == '/')
+  {
+    sprintf(cmd,"%s%s", "sendgui totxt ", Answer);
+  }
+  else
+  {
+    sprintf(cmd,"%s%s%s", "sendgui totxt ", Answer, "/");
+  }
+
+  // Show the command that will be run
   GETSTRING("cmd",cmd);
-  TSCmdNrMax = 1; //one cmd that we will modify at execution time
 
   /* Loop with execution of commands */
   TIMES(i1)
