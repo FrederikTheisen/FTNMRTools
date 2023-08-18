@@ -16,31 +16,31 @@ Will also let you integrate regions of the loaded spectra.
 The script can read two file types:
 1) Topspin exported file in the following format:
 
-```
-# File created = Wednesday, March 8, 2023 2:44:20 PM CET
-# Data set = expname  121  1  /path/to/folder
-# Spectral Region:
-# F1LEFT = 0.0 s. F1RIGHT = 0.0049992 s.
-# F2LEFT = 2.8 ppm. F2RIGHT = 0.0 ppm.
-#
-# NROWS = 16 ( = number of points along the F1 axis)
-# NCOLS = 5874 ( = number of points along the F2 axis)
-...
-# row = 0
-1.55127808E9
-1.536176128E9
-1.522184192E9
-1.525284864E9
-...
-```
+  ```
+  # File created = Wednesday, March 8, 2023 2:44:20 PM CET
+  # Data set = expname  121  1  /path/to/folder
+  # Spectral Region:
+  # F1LEFT = 0.0 s. F1RIGHT = 0.0049992 s.
+  # F2LEFT = 2.8 ppm. F2RIGHT = 0.0 ppm.
+  #
+  # NROWS = 16 ( = number of points along the F1 axis)
+  # NCOLS = 5874 ( = number of points along the F2 axis)
+  ...
+  # row = 0
+  1.55127808E9
+  1.536176128E9
+  1.522184192E9
+  1.525284864E9
+  ...
+  ```
 
 2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin. The output files are similar, but not identical, to the format described above.
 
-Topspin command line
-```
-multitotxt
-```
-The AU program will ask for the number of experiments and the output path. The output files will be named according to the EXPNO of the experiments.
+  Topspin command line
+  ```
+  multitotxt
+  ```
+  The AU program will ask for the number of experiments and the output path. The output files will be named according to the EXPNO of the experiments.
 
 Usage of the script:
 ```
