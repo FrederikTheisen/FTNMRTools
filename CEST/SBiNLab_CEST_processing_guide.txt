@@ -66,7 +66,7 @@ fq1list
 #######################
 ### ChemEx Analysis ###
 #######################
-### ChemEx is a CLI tool for analysis of NMR data. Written in python and can thus be adapted for specific needs.
+### ChemEx is a CLI (Command Line Interface) tool for analysis of NMR data. Written in python and can thus be adapted for specific needs.
 ### For ChemEx processing you need to install ChemEx in a conda environment with Python 3.9
 ### ChemEx requirements may change and might not be updated here
 Install conda 
