@@ -39,7 +39,9 @@ First: Topspin exported file in the following format:
 
 This file can be acquired by currently unknown means...
 
-Second: Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin. The output files are similar, but not identical, to the format described above.
+Second: Topspin 'totxt' exported files in a folder. 
+
+'multitotxt' can be used by downloading the AU program from here and running that in Topspin. The output files are similar to the format described above.
 
 Topspin command line
 ```
