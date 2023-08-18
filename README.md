@@ -13,10 +13,10 @@ Python tool to baseline correct data assuming a polynomial baseline. The script 
 
 Will also let you integrate regions of the loaded spectra.
 
-The script can read two file types:
-1) Topspin exported file in the following format:
+1. The script can read two file types:
+Topspin exported file in the following format:
 
-   This file can be acquired by currently unknown means...
+
 
 ```
 # File created = Wednesday, March 8, 2023 2:44:20 PM CET
@@ -36,13 +36,15 @@ The script can read two file types:
 ...
 ```
 
-2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin. The output files are similar, but not identical, to the format described above.
+This file can be acquired by currently unknown means...
 
-   Topspin command line
+2. Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin. The output files are similar, but not identical, to the format described above.
+
+Topspin command line
 ```
 multitotxt
 ```
-   The AU program will ask for the number of experiments and the output path. The output files will be named according to the EXPNO of the experiments.
+The AU program will ask for the number of experiments and the output path. The output files will be named according to the EXPNO of the experiments.
 
 Usage of the script:
 ```
