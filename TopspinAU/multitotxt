@@ -1,25 +1,20 @@
 /*** ^^A -*-C++-*- **********************************************/
-/*	multicmd		13.09.2001			*/
+/*	multitotxt		17.08.2023			*/
 /****************************************************************/
 /*	Short Description :					*/
-/*	Performs multiple commands on increasing expnos.	*/
+/*	Performs totxt on increasing expnos.	*/
 /****************************************************************/
 /*	Keywords :						*/
 /*	serial acquisitions, serial processing			*/
 /****************************************************************/
 /*	Description/Usage :					*/
-/*	This AU program performs multiple commands on		*/
-/*	increasing expnos. If datasets do not yet exist, the	*/
-/*	current dataset and its parameters are copied. If the	*/
-/*	data sets already exist, then the commands are		*/
-/*	executed as the datasets are.				*/
-/*	For the commands 'zg', 'go' or 'xaua' the total		*/
-/*	experiment time is estimated and printed out.		*/
+/*	This AU program performs the totxt command on		*/
+/*	increasing expnos. 
 /****************************************************************/
 /*	Author(s) :						*/
-/*	Name		: Ulrich Braumann			*/
-/*	Organisation	: Bruker BioSpin GmbH			*/
-/*	Email		: ulrich.braumann@bruker.com		*/
+/*	Name		: Frederik Friis Theisen		*/
+/*	Organisation	: University of Copenhagen		*/
+/*	Email		: FrederikTheisen@bio.ku.dk		*/
 /****************************************************************/
 /*	Name		Date	Modification:			*/
 /*	eub	010810	derived from 'multizg'			*/
@@ -32,6 +27,7 @@
 /*	eub	071025	Processing command with autospooling	*/
 /*			possible.				*/
 /*	ge   20100127  UXNMR_SAFETY problem with spooler solved */
+/*	fft	230817	Adapted for multitotxt			*/
 /****************************************************************/
 /*
 $Id:$
@@ -61,11 +57,8 @@ int multicmd(const char* curdat)
   if (i_argc > 2  &&  strcmp(i_argv[2], "help") == 0)
   {
     Proc_err(DEF_ERR_OPT,
-	     "Executes up to 1-8 TOPSPIN commands on\n"
-	     "subsequent EXPNOs. For example\n"
-	     "simply 'zg'\n"
-	     "or 'rga' 'zg' 'ef' 'apk'\n"
-	     "or more complex like 'rpar PROTON proc'");
+	     "Executes totxt on\n"
+	     "subsequent EXPNOs.");
       return -1;
   }
 
@@ -81,7 +74,7 @@ int multicmd(const char* curdat)
     return -1;
   }
 
-  /* Find out how many experiments */
+  /* Find out how many experiments... why??? */
   if (i_argc > 2)
     i1 = atoi(i_argv[2]);
   else
@@ -93,7 +86,7 @@ int multicmd(const char* curdat)
     return -1;
   }
 
-  strcpy(Answer,"/home/vjr699/");
+  strcpy(Answer,"/home/<username>/");
   strcpy(Question,"Enter path to export");
   GETSTRING(Question,Answer);
 
@@ -105,22 +98,17 @@ int multicmd(const char* curdat)
 
   sprintf(cmd,"%s%s%s", "sendgui totxt ", Answer, "/");
   GETSTRING("cmd",cmd);
-
-  //cmd = strcat("totxt ",Answer);
   TSCmdNrMax = 1; //one cmd that we will modify at execution time
 
   /* Loop with execution of commands */
   TIMES(i1)
-    if (TSCmdNrMax > 0)
-    {
-      Proc_err(ERROPT_AK_NO, "On dataset '%s' %d\nRunning command(s)\n%s", name, expno, TSCmdLstDisp);
-      
-    }
+    Proc_err(ERROPT_AK_NO, "On dataset '%s' %d\nRunning command(s)\n%s", name, expno, TSCmdLstDisp);
 
     sprintf(tempCmd, "%s%d.txt", cmd, expno);
-
+    # Execute cmd "sendgui totxt <path-to-file>"
     XCMD(tempCmd);
 
+    // Iterate EXPNO
     if (loopcount1+1 < i1)
     {
       IEXPNO
