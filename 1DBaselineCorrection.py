@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
 import matplotlib.cm as cm
+import os
 
 args = sys.argv
 
@@ -16,11 +17,67 @@ BaselinePoints = {}
 DataPointCount = 10
 Baselines = {}
 CLOSE = False
-colors = []
+colors = {}
 polydegree = 2
 ppmrange = []
 XAXIS = []
 PEAKPOINTS = []
+
+def IdentifyInputData():
+	if os.path.isdir(PATH): return 0
+	else: return 1
+
+def ReadFolderData():
+	global colors
+	global XAXIS
+	global ppmrange
+	data = {}
+	point = None
+	minpoints = 9999999999
+
+	files = [f for f in os.listdir(PATH) if not os.path.isdir(f) and 'Icon' not in f]
+
+	for fn in files:
+		path = PATH + "/" + fn
+		spectrum = []
+		with open(path) as f:
+			for line in f:
+				if '#' in line:
+					if '# LEFT' in line: #Get ppm range
+						dat = line.split()
+						ppmrange = [float(dat[3]),float(dat[7])]
+					if '# SIZE' in line: #Get number of data points
+						dat = line.split()
+						points = int(dat[3])
+						if points < minpoints: minpoints = points
+				else: #get data point value
+					value = float(line)
+					
+					spectrum.append(value)
+		data[int(fn.split('.')[0])] = spectrum
+
+	XAXIS = list(np.linspace(ppmrange[0],ppmrange[1],minpoints))
+
+	# Truncate data sets with too many points (number of points are +- 1 for unknown reasons)
+	for d in data:
+		data[d] = data[d][0:minpoints]
+
+	# Get the 'viridis' colormap
+	cmap = cm.get_cmap('viridis')
+
+	# Generate a range of values between 0 and 1
+	values = np.linspace(0, 1, len(data) + 1)
+
+	# Map the values to colors using the colormap
+	colorlist = cmap(values)
+
+	# Remap colors to dict entries
+	i = 0
+	for k in data:
+		colors[k] = colorlist[i]
+		i += 1
+
+	return data, minpoints
 
 def ReadData():
 	global colors
@@ -56,6 +113,12 @@ def ReadData():
 
 	# Map the values to colors using the colormap
 	colors = cmap(values)
+
+	# Remap colors to dict entries
+	i = 0
+	for k in data:
+		colors[k] = colorlist[i]
+		i += 1
 
 	return data, len(data[rowid])
 
@@ -146,14 +209,15 @@ def Draw(data, ax, mode = 0):
 		ax.plot(XAXIS, graph, color=colors[rowid])
 		if mode == 0: #DRAW BASELINES
 			if len(Baselines) > 0:
-				print("Draw baselines")
-				#ax.plot(range(len(graph)), Baselines[rowid],color=colors[rowid])
 				ax.plot(XAXIS, Baselines[rowid],color=colors[rowid]) 
+			
 			x = []
 			y = []
+			
 			for bp in BaselinePoints[rowid]:
 				x.append(bp[0])
 				y.append(bp[1])
+			
 			ax.scatter(x,y, color=colors[rowid])
 
 	if mode == 1: #DRAW PEAK PICKING
@@ -335,7 +399,8 @@ def ExportPeakVolumes(data):
 def Main():
 	global DataPointCount
 
-	data,DataPointCount = ReadData()
+	if IdentifyInputData() == 0: data,DataPointCount = ReadFolderData()
+	else: data,DataPointCount = ReadData()
 
 	for rowid in data: BaselinePoints[rowid] = []
 
