@@ -1,0 +1,134 @@
+/*** ^^A -*-C++-*- **********************************************/
+/*	multicmd		13.09.2001			*/
+/****************************************************************/
+/*	Short Description :					*/
+/*	Performs multiple commands on increasing expnos.	*/
+/****************************************************************/
+/*	Keywords :						*/
+/*	serial acquisitions, serial processing			*/
+/****************************************************************/
+/*	Description/Usage :					*/
+/*	This AU program performs multiple commands on		*/
+/*	increasing expnos. If datasets do not yet exist, the	*/
+/*	current dataset and its parameters are copied. If the	*/
+/*	data sets already exist, then the commands are		*/
+/*	executed as the datasets are.				*/
+/*	For the commands 'zg', 'go' or 'xaua' the total		*/
+/*	experiment time is estimated and printed out.		*/
+/****************************************************************/
+/*	Author(s) :						*/
+/*	Name		: Ulrich Braumann			*/
+/*	Organisation	: Bruker BioSpin GmbH			*/
+/*	Email		: ulrich.braumann@bruker.com		*/
+/****************************************************************/
+/*	Name		Date	Modification:			*/
+/*	eub	010810	derived from 'multizg'			*/
+/*	eub	051004	dataset handling changed, VIEWDATA	*/
+/*			12sec delay between acuisiton commands	*/
+/*	eub	060502	Delay only for acqu./ formated		*/
+/*	eub	060810	Commandlist possible			*/
+/*	eub	060816	ExptCalc changed, delay=0		*/
+/*	eub	070911	Abort on autospooling, missing dataset	*/
+/*	eub	071025	Processing command with autospooling	*/
+/*			possible.				*/
+/*	ge   20100127  UXNMR_SAFETY problem with spooler solved */
+/****************************************************************/
+/*
+$Id:$
+*/
+
+AUERR = multicmd(curdat);
+QUIT
+
+#include <inc/lcUtil>
+
+int multicmd(const char* curdat)
+{
+  char	Answer[PATH_MAX], Question[PATH_MAX], tmpfile[PATH_MAX];
+  char	TempStr[PATH_MAX],TempStr2[PATH_MAX];
+  char* cp;
+  int	i1 = 10;
+  char	TSCmd[8][128];
+  char  TSCmdLstDisp[256];
+  int	TSCmdNr = 0;
+  int	TSCmdNrMax = -1;
+  char CommandType[128] = "sendgui ";
+  int AcquAllowed = 0;
+  char cmd[128] = "test";
+  char tempCmd[128];
+
+  /* Help */
+  if (i_argc > 2  &&  strcmp(i_argv[2], "help") == 0)
+  {
+    Proc_err(DEF_ERR_OPT,
+	     "Executes up to 1-8 TOPSPIN commands on\n"
+	     "subsequent EXPNOs. For example\n"
+	     "simply 'zg'\n"
+	     "or 'rga' 'zg' 'ef' 'apk'\n"
+	     "or more complex like 'rpar PROTON proc'");
+      return -1;
+  }
+
+  /* check if started from experiment */
+  strcpy(tmpfile, ACQUPATH(0));
+  if (access(tmpfile, F_OK))
+  {
+    Proc_err(DEF_ERR_OPT,
+	     "== ABORT multicmd ==============\n"
+	     "Program aborted! Must be started from\n"
+	     "an NMR dataset. Change to the first dataset"
+	     "and try again.");
+    return -1;
+  }
+
+  /* Find out how many experiments */
+  if (i_argc > 2)
+    i1 = atoi(i_argv[2]);
+  else
+    GETINT("Enter number of experiments :", i1)
+
+  if (i1 <= 0)
+  {
+    Proc_err(DEF_ERR_OPT, "number of experiments must be > 0");
+    return -1;
+  }
+
+  strcpy(Answer,"/home/vjr699/");
+  strcpy(Question,"Enter path to export");
+  GETSTRING(Question,Answer);
+
+  /* clear whitespace? */
+  strdlfws(Answer);
+
+  if (Answer[0] == 0)
+    return 0;
+
+  sprintf(cmd,"%s%s%s", "sendgui totxt ", Answer, "/");
+  GETSTRING("cmd",cmd);
+
+  //cmd = strcat("totxt ",Answer);
+  TSCmdNrMax = 1; //one cmd that we will modify at execution time
+
+  /* Loop with execution of commands */
+  TIMES(i1)
+    if (TSCmdNrMax > 0)
+    {
+      Proc_err(ERROPT_AK_NO, "On dataset '%s' %d\nRunning command(s)\n%s", name, expno, TSCmdLstDisp);
+      
+    }
+
+    sprintf(tempCmd, "%s%d.txt", cmd, expno);
+
+    XCMD(tempCmd);
+
+    if (loopcount1+1 < i1)
+    {
+      IEXPNO
+      SETCURDATA
+    }
+
+  END
+
+  Proc_err(ERROPT_AK_NO, "--- multitotxt finished ---");
+  return 0;
+}
