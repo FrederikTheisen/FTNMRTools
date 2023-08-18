@@ -34,7 +34,7 @@ The script can read two file types:
 ...
 ```
 
-2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin
+2) Topspin 'totxt' exported files in a folder. 'multitotxt' can be executes by downloading the AU program from here and running that in Topspin. The output files are similar, but not identical, to the format described above.
 
 Topspin command line
 ```
