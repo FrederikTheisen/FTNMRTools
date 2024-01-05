@@ -17,7 +17,7 @@ if (len(args) < 2):
 
 if '-help' in args or '-h' in args:
     print("Baseline correction script, Frederik Theisen 2023")
-    print("Documentation: https://github.com/FrederikTheisen/FTNMRTools/tree/main")
+    print("Documentation: https://github.com/FrederikTheisen/FTNMRTools")
     print()
     print()
     print("Usage: python3 1DBaselineCorrection.py <path-to-totxtexport/folder-with-totxtexports>")
