@@ -5,6 +5,10 @@ from matplotlib.widgets import Button
 import matplotlib.cm as cm
 import os
 
+SAME_WIDTH_PEAK_MODE = True
+# For same width peak mode, peaks should be placed by clicking the center position
+# First peak will require a second click which will define the width
+
 args = sys.argv
 
 if (len(args) < 2):
@@ -22,6 +26,8 @@ polydegree = 2
 ppmrange = []
 XAXIS = []
 PEAKPOINTS = []
+PEAK_WIDTH_EXPECTED = False
+PEAK_WIDTH = None
 
 def IdentifyInputData():
 	if os.path.isdir(PATH): return 0
@@ -364,7 +370,25 @@ def SubtractBaseline(data):
 def AddPeakRangePoint(position, data):
 	axis_idx = GetAxisIndexFromPosition(position)
 
-	PEAKPOINTS.append(position)
+	if SAME_WIDTH_PEAK_MODE:
+		if PEAK_WIDTH is None: # No peak width defined, place peak marker
+			PEAK_WIDTH_EXPECTED = True
+			PEAKPOINTS.append(position)
+			return
+		else PEAK_WIDTH is not None and PEAK_WIDTH_EXPECTED: # Peak width setup, clear existing PEAKPOINTS
+			PEAK_WIDTH_EXPECTED = False
+			PEAK_WIDTH = abs(PEAKPOINTS[0] - position) # Calc peak width
+			position = PEAKPOINTS[0] # tmp save first click
+			PEAKPOINTS.clear() # clear points
+
+		peak_start = position - PEAK_WIDTH # setup peak
+		peak_end = position + PEAK_WIDTH
+
+		PEAKPOINTS.append(peak_start)
+		PEAKPOINTS.append(peak_end)
+			
+	else:
+		PEAKPOINTS.append(position)
 
 def ExportPeakVolumes(data):
 	volumes = {}
