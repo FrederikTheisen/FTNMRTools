@@ -112,7 +112,7 @@ def ReadData():
 	values = np.linspace(0, 1, len(data) + 1)
 
 	# Map the values to colors using the colormap
-	colors = cmap(values)
+	colorlist = cmap(values)
 
 	# Remap colors to dict entries
 	i = 0
