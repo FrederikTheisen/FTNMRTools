@@ -368,6 +368,7 @@ def SubtractBaseline(data):
 	return baselinecorrected
 
 def AddPeakRangePoint(position, data):
+	global PEAK_WIDTH
 	axis_idx = GetAxisIndexFromPosition(position)
 
 	if SAME_WIDTH_PEAK_MODE:
@@ -375,7 +376,7 @@ def AddPeakRangePoint(position, data):
 			PEAK_WIDTH_EXPECTED = True
 			PEAKPOINTS.append(position)
 			return
-		else PEAK_WIDTH is not None and PEAK_WIDTH_EXPECTED: # Peak width setup, clear existing PEAKPOINTS
+		elif PEAK_WIDTH is not None and PEAK_WIDTH_EXPECTED: # Peak width setup, clear existing PEAKPOINTS
 			PEAK_WIDTH_EXPECTED = False
 			PEAK_WIDTH = abs(PEAKPOINTS[0] - position) # Calc peak width
 			position = PEAKPOINTS[0] # tmp save first click
