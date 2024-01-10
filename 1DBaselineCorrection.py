@@ -20,7 +20,7 @@ if '-help' in args or '-h' in args:
     print("Documentation: https://github.com/FrederikTheisen/FTNMRTools")
     print()
     print()
-    print("Usage: python3 1DBaselineCorrection.py <path-to-totxtexport/folder-with-totxtexports>")
+    print("Usage: python3 1DBaselineCorrection.py <path-to-totxtexport/folder-with-totxtexports> <options>")
     print("Options:")
     print("-mode X  :   set mode, X = 0 (width mode [default]), 1 (boundary mode)")
     print("-pw X    :   set peak width, X is float")
@@ -49,8 +49,8 @@ if '-mode' in args:
     SAME_WIDTH_PEAK_MODE = int(args[idx + 1]) == 0
 
 def IdentifyInputData():
-    if os.path.isdir(PATH): return 0
-    else: return 1
+    if os.path.isdir(PATH): return 'dir'
+    else: return 'file'
 
 def ReadFolderData():
     global colors
@@ -146,19 +146,6 @@ def ReadData():
         i += 1
 
     return data, len(data[rowid])
-
-def PrintData(dat):
-    header = "ppm "
-    for rowid in dat:
-        header += str(rowid) + " "
-    with open("baselined.txt","w+") as f:
-        f.write(header + "\n")
-        for i in range(DataPointCount):
-            out = str(XAXIS[i]) + " "
-            for rowid in dat:
-                row = dat[rowid]
-                out += str(row[i]) + " "
-            f.write(out.strip() + "\n")
 
 def BaselineCorrect(data):
     #constants
@@ -410,12 +397,27 @@ def AddPeakRangePoint(position, data):
         peak_start = position - PEAK_WIDTH # setup peak
         peak_end = position + PEAK_WIDTH
 
-        PEAKPOINTS.append(peak_start)
         PEAKPOINTS.append(peak_end)
+        PEAKPOINTS.append(peak_start)
             
     else:
         print("peak border mode")
         PEAKPOINTS.append(position)
+
+### EXPORT FUNCTIONS ###
+
+def PrintData(dat):
+    header = "ppm "
+    for rowid in dat:
+        header += str(rowid) + " "
+    with open("baselined.txt","w+") as f:
+        f.write(header + "\n")
+        for i in range(DataPointCount):
+            out = str(XAXIS[i]) + " "
+            for rowid in dat:
+                row = dat[rowid]
+                out += str(row[i]) + " "
+            f.write(out.strip() + "\n")
 
 def ExportPeakVolumes(data):
     volumes = {}
@@ -446,11 +448,13 @@ def ExportPeakVolumes(data):
                 vs = volumes[rowid]
                 out += str(vs[i]) + " "
             f.write(out.strip() + "\n")
+
+### MAIN LOOP ###
     
 def Main():
     global DataPointCount
 
-    if IdentifyInputData() == 0: data,DataPointCount = ReadFolderData()
+    if IdentifyInputData() == 'dir': data,DataPointCount = ReadFolderData()
     else: data,DataPointCount = ReadData()
 
     for rowid in data: BaselinePoints[rowid] = []
