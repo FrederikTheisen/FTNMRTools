@@ -1,3 +1,29 @@
+"""
+1D Baseline Correction and Peak Integration Tool for NMR Spectra
+
+This script provides a graphical user interface for performing baseline correction and peak picking on 1D NMR spectra. 
+It allows users to manually select baseline points and define peaks for volume integration. The script requries files 
+exported using the TopSpin 'totxt' command. The script supports reading individual spectra files or processing multiple 
+spectra from a directory. Baseline correction can be performed using polynomial fitting with adjustable degree, and peak 
+volumes are calculated based on user-defined peak boundaries. The tool also offers a peak width mode for consistent peak 
+width across spectra and reference mode adjustments for peak alignment. Results can be exported to text files for further 
+analysis.
+
+Features:
+- Baseline correction with customizable polynomial degree.
+- Manual peak picking with options for consistent peak width and region mode.
+- Reference mode adjustment for peak alignment across spectra (does not work well).
+- Support for processing individual files or entire directories.
+- Exports baseline-corrected spectra and peak volumes to text files.
+
+Usage:
+Run the script with the path to the data file or directory as the first argument. Additional options for peak width, mode, 
+and reference mode can be specified via command-line arguments.
+
+Author: Frederik Theisen, 2023
+Repository: https://github.com/FrederikTheisen/FTNMRTools
+"""
+
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,7 +33,7 @@ import os
 
 SAME_WIDTH_PEAK_MODE = True
 # For same width peak mode, peaks should be placed by clicking the center position
-# First peak will require a second click which will define the width
+# First peak will require a second click which will define the width, unless a peak width is provided as option
 
 args = sys.argv
 
@@ -22,15 +48,15 @@ if '-help' in args or '-h' in args:
 	print()
 	print("Usage: python3 1DBaselineCorrection.py <path-to-totxtexport/folder-with-totxtexports> <options>")
 	print("Options:")
-	print("-mode X	  :	set mode, X = 0 (width mode [default]), 1 (boundary mode)")
-	print("-pw X	  :	set peak width, X is float")
+	print("-mode X	  :	set mode, X = 0 (width mode [default]), 1 (region mode)")
+	print("-width X	  :	set peak width, X is float")
 	print("-refmode	X :	set reference mode, X = 'min' or 'max' [default]")
 	exit()
 
 PATH = args[1]
 FILENAME = os.path.basename(PATH).split('.')[0]
 
-print("Reading File: " + FILENAME)
+print("Reading Path: " + FILENAME)
 
 BaselinePoints = {}
 DataPointCount = 10
@@ -49,6 +75,9 @@ OFFSET = {}
 
 if '-pw' in args:
 	idx = args.index('-pw')
+	PEAK_WIDTH = float(args[idx + 1])
+elif '-width' in args:
+	idx = args.index('-width')
 	PEAK_WIDTH = float(args[idx + 1])
 
 if '-mode' in args:
