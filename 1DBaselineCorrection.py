@@ -247,7 +247,7 @@ def PeakPicking(data):
 	clear_btn.on_clicked(lambda event: onpeakpickingclearbtnclick(event, data, ax)) # Connect the onbuttonclick function to the button
 	# Add a 'Finished' button to the plot
 	button_ax = plt.axes([1-btn_margin-btn_width,0,btn_width,.1])
-	fin_btn = Button(button_ax, 'Finished', color='lightgoldenrodyellow', hovercolor='0.975')
+	fin_btn = Button(button_ax, 'Export Peaks', color='lightgoldenrodyellow', hovercolor='0.975')
 	fin_btn.on_clicked(onpeakpickingfinishedclick) # Connect the onbuttonclick function to the button
 
 	# Connect the onclick function to the plot
