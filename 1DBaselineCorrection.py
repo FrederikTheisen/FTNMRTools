@@ -31,10 +31,6 @@ from matplotlib.widgets import Button
 import matplotlib.cm as cm
 import os
 
-SAME_WIDTH_PEAK_MODE = True
-# For same width peak mode, peaks should be placed by clicking the center position
-# First peak will require a second click which will define the width, unless a peak width is provided as option
-
 args = sys.argv
 
 if (len(args) < 2):
@@ -55,9 +51,7 @@ if '-help' in args or '-h' in args:
 
 PATH = args[1]
 FILENAME = os.path.basename(PATH).split('.')[0]
-
-print("Reading Path: " + FILENAME)
-
+SAME_WIDTH_PEAK_MODE = True
 BaselinePoints = {}
 DataPointCount = 10
 Baselines = {}
@@ -565,6 +559,8 @@ def ExportPeakVolumes(data):
 def Main():
 	global DataPointCount
 
+	print("Reading Path: " + FILENAME)
+
 	if IdentifyInputData() == 'dir': data,DataPointCount = ReadFolderData()
 	else: data,DataPointCount = ReadData()
 
@@ -582,5 +578,9 @@ def Main():
 	PeakPicking(corr)
 
 	ExportPeakVolumes(corr)
+
+	if SAME_WIDTH_PEAK_MODE: 
+		print("Consistent Peak Width Mode Command:")
+		print("-pw " + str(PEAK_WIDTH))
 
 Main()
