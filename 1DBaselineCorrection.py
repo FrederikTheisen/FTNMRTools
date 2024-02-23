@@ -63,16 +63,20 @@ XAXIS = []
 PEAKPOINTS = []
 PEAK_WIDTH_EXPECTED = False
 PEAK_WIDTH = None
+ARG_PEAK_WIDTH = None
 REF_MODE = 'max'
 IS_REFERENCING = False
 OFFSET = {}
 
 if '-pw' in args:
 	idx = args.index('-pw')
-	PEAK_WIDTH = float(args[idx + 1])
+	ARG_PEAK_WIDTH = float(args[idx + 1])
 elif '-width' in args:
 	idx = args.index('-width')
-	PEAK_WIDTH = float(args[idx + 1])
+	ARG_PEAK_WIDTH = float(args[idx + 1])
+
+if ARG_PEAK_WIDTH is not None:
+	PEAK_WIDTH = ARG_PEAK_WIDTH
 
 if '-mode' in args:
 	idx = args.index('-mode')
@@ -396,6 +400,7 @@ def onrefclick(event,ref_btn):
 def onresetrefbtnclick(event):
 	global OFFSET
 	OFFSET = {}
+	PEAK_WIDTH = ARG_PEAK_WIDTH
 
 def AddPointsAtPosition(position,data):
 	print(GetAxisIndexFromPosition(position))
