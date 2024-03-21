@@ -553,6 +553,15 @@ def ExportPeakVolumes(data):
 		header += str(rowid) + " "
 
 	with open(FILENAME + "_peaks.txt","w+") as f:
+		f.write("Peak integration information\n")
+		if SAME_WIDTH_PEAK_MODE:
+			f.write(f"SAME_WIDTH_PEAK_MODE enabled\nWidth = {PEAK_WIDTH}\n")
+		n = 0
+		for i in range(0,len(PEAKPOINTS) - 1,2):
+			f.write(f"Peak #{n}, start = {PEAKPOINTS[i]}ppm, end = {PEAKPOINTS[i+1]}ppm\n")
+			n += 1
+		f.write("\n")
+			
 		f.write(header + "\n")
 		for i in range(peakcount):
 			out = str(i) + " "
