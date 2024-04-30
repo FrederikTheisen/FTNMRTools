@@ -40,8 +40,8 @@ Usage: ./stPeakList.pl spectrum sparkylist. eg: stPeakList.pl test001.ft2 peaks_
 '>> peaks_nmrpipe' will put output into a new file called peaks_nmrpipe
 
 ### Extracting the peak information ###
-Run the makeIntTable.pl script
-usage: makeIntTable.pl
+Run the getIntTable.pl script
+usage: getIntTable.pl
 - The script runs the seriesTab script which will output a file called 'peaks.ser'
 - file should contain peak position information, assignment (eg: G343HN-G343N) followed by intensities (first should be 1.000, following should be less than 1)
 - Errors in the .ser file might be caused by errors in the sparky peak list
