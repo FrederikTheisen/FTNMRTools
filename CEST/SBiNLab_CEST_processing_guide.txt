@@ -40,16 +40,9 @@ Usage: ./stPeakList.pl spectrum sparkylist. eg: stPeakList.pl test001.ft2 peaks_
 '>> peaks_nmrpipe' will put output into a new file called peaks_nmrpipe
 
 ### Extracting the peak information ###
-open python and run (replace 85 with #B1 freqs + 1):
-for i in range(1,85): print("test" + str(i).zfill(3) + ".ft2)")
-paste result into file called "list2". The file should look like this:
-test001.ft2
-test002.ft2
-...
-put the list2 file in the 'data' folder 
-run seriesTab.com in same folder
-usage: seriesTab -in peaks_nmrpipe -out peaks.ser -list list2 -dx 3 -dy 3
-- seriesTab will output a file called 'peaks.ser'
+Run the makeIntTable.pl script
+usage: makeIntTable.pl
+- The script runs the seriesTab script which will output a file called 'peaks.ser'
 - file should contain peak position information, assignment (eg: G343HN-G343N) followed by intensities (first should be 1.000, following should be less than 1)
 - Errors in the .ser file might be caused by errors in the sparky peak list
 
@@ -59,7 +52,7 @@ eg for a B1 = 12.5 Hz: 12p5.ser or 12_5.ser
 Save file along with the fqXlist (probably fq1list or fq3list) file from the experiment folder
 In the end you should have a folder (referred to as the input folder later) with the following files (example):
 fq1list
-6_25.ser
+6p25.ser
 12_5.ser
 25.ser
 
@@ -92,13 +85,13 @@ The guide.sh file contains a guide for what to do next.
 - run two-state model fit
 - examine
 - Cluster residues with exchange using PB/KEX. Parameters can be collected using the 'gather.py' script. Modify as needed.
-- consider globally fitting clusters (this can take significant time (advanced model = several days))
-- lack of error indicates that parameters are covariant (thus error = very high)
+- consider globally fitting clusters (this can take significant time (advanced model = several days!))
+- lack of error indicates that parameters are covariant (thus error = very high). Consider constraining one or more paramters.
 
 #########################
 ### RING NMR Analysis ###
 #########################
 ### RING NMR is preinstalled on SBiN-Lab computers and provides user friendly GUI for analysis.
 ### Not yet implemented
-### RingNMR project setup script is currently not compatible with the .ser file format provided by the processing pipeline
-### When using RING-NMR, disable as much error estimation as possible until a final fit is necessary.
+### RingNMR project setup script is currently not compatible with the .ser file format provided by this processing pipeline
+### When using RING-NMR, disable as much error estimation as possible until a final fit is desired.
