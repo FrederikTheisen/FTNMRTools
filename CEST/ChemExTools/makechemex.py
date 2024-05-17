@@ -18,22 +18,22 @@ from os.path import isfile, join
 
 ### Instructions for preparing makechemex.py script
 ###### Get B0 from reference experiment
-###### OFFSET is primarily used to determine position of B1 fields when given in Hz
+###### OFFSET is primarily used to determine position of B1 fields when given in Hz.
 
 #SETTINGS
 EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options.
-PB = 0.042					#Initial guess percent bound
-KEX = 350					#Initial guess Kex
-TAU = 10 					#R2 initial guess related parameter
-T1TIME = 0.4 				#CEST delay time (for 15N CEST probably = d21)
+PB = 0.042			#Initial guess percent bound
+KEX = 350			#Initial guess Kex
+TAU = 10 			#R2 initial guess related parameter
+T1TIME = 0.4 			#CEST delay time (for 15N CEST probably = d21)
 OFFSET = 119.5			#B1 reference ppm, used to convert ppm to offset hz and used for chemex to convert offset hz to ppm
-B0 = 800.134				#Proton B0 field strength MHz
-DLABEL13C = True			#Is sample also 13C labelled
+B0 = 800.134			#Proton B0 field strength MHz
+DLABEL13C = True		#Is sample also 13C labelled
 
 #AUTOASSIGNED SETTINGS 		#Set to 'None' for auto
-INPUTTYPE = None 			#ppm or hz
-CESTATOM = None 			#CEST atom label
-CESTATOMB0 = None			#CEST atom larmor frq MHz, used to convert ppm B1 offsets to Hz. Only used if input is in ppm
+INPUTTYPE = None 		#ppm or hz
+CESTATOM = None 		#CEST atom label
+CESTATOMB0 = None		#CEST atom larmor frq MHz, used to convert ppm B1 offsets to Hz. Only used if input is in ppm
 
 
 #OUTPUT DIRECTORY STRUCTURE
