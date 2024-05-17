@@ -35,7 +35,6 @@ KEX = 350			#Initial guess Kex
 TAU = 10 			#R2 initial guess related parameter
 T1TIME = 0.4 			#CEST delay time (for 15N CEST probably = d21)
 OFFSET = 119.5			#B1 reference ppm, used to convert ppm to offset hz and used for chemex to convert offset hz to ppm
-MEASUREDOFFSET = 119.5		#Offset of B1 field determined from the calcOffset script
 B0 = 800.134			#Proton B0 field strength MHz
 DLABEL13C = True		#Is sample also 13C labelled
 
