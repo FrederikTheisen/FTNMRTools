@@ -6,8 +6,11 @@ from os.path import isfile, join
 
 ### Frederik Theisen 2022 ###
 ### Generates ChemEx project folder structure based on processed CEST data
-### Recommend to create an overall EXPERIMENT folder which contains the intensity files and the frqlist file in an INPUT folder
-###### peaks.ser files should be name B1.ser, where B1 is the B1 field and should be written as eg 12p5.ser
+### To run this script, you should prepare you files according to the instructions
+### You should also fill out the SETTINGS part of the script
+### Make an EXPERIMENT folder named according to the experiment: eg 15N
+### Inside the EXPERIMENT folder, make and INPUT folder which contains the intensity files and the frqlist file
+###### peaks.ser files should be name B1.ser, where B1 is the B1 field and should be written as eg 12p5.ser or 12_5.ser
 ### Place the makechemex.py script in the parent folder of the EXPERIMENT folder.
 ###### Example Folder Structure:
 ###### EXPERIMENT1
@@ -21,8 +24,7 @@ from os.path import isfile, join
 ############ 25.ser
 ############ frq3list
 ###### makechemex.py
-### Navigate terminal to the EXPERIMENT# folder and run the makechemex.py script using the INPUT folder as argument
-###### python3 ../makechemex.py ./INPUT
+### Navigate a terminal to the EXPERIMENT# folder and run the makechemex.py script using the INPUT folder as argument liek this: python3 ../makechemex.py ./INPUT
 
 ### Instructions for preparing makechemex.py script
 ### You should only change values in the SETTINGS part of the script
