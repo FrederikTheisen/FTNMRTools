@@ -64,8 +64,8 @@ def getoutputpath(folder):
 def getprojectfolder(folder):
 	return getoutputpath(PROJECTFOLDER) + "/" + folder
 
-def satfrqoffset(frq):
-	dppm = frq - OFFSET
+def satfrqoffset(ppm):
+	dppm = ppm - OFFSET
 	return dppm
 
 def ppmtohz(ppm):
