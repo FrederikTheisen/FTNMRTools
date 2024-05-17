@@ -62,12 +62,18 @@ For ChemEx processing you need to install ChemEx in a conda environment with Pyt
 ChemEx requirements may change and might not be updated here
 - Install conda (conda is currently installed on computer 03)
 - Create new environment:
--- conda create -n chemex python=3.9
-Activate conda environment and intall ChemEx:
-- conda activate chemex
-- pip install git+https://github.com/gbouvignies/chemex.git
-OR CHEMEX_FFT (Includes three-state peak picking and overlap detect model, install in new conda env 'chemex_fft')
-- pip install git+https://github.com/FrederikTheisen/chemex_FFT.git
+-- Follow the guide on https://github.com/gbouvignies/ChemEx
+--- conda create -n chemex
+--- conda activate chemex
+--- conda install python=3.11
+--- conda config --env --add channels conda-forge
+--- conda install chemex
+[OBSOLETE] -- conda create -n chemex python=3.11
+[OBSOLETE] Activate conda environment and intall ChemEx:
+[OBSOLETE] - conda activate chemex
+[OBSOLETE] - pip install git+https://github.com/gbouvignies/chemex.git
+[OBSOLETE] OR CHEMEX_FFT (Includes three-state peak picking and overlap detect model, install in new conda env 'chemex_fft')
+[OBSOLETE] - pip install git+https://github.com/FrederikTheisen/chemex_FFT.git
 
 ### Prepare your data for ChemEx ###
 - Navigate your terminal to a suitable folder (named according experiment eg. Med25_D2aP20_CEST_15N). Your data processing will happen here and you will run chemex from this folder.
