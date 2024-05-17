@@ -13,18 +13,24 @@ from os.path import isfile, join
 ###### peaks.ser files should be name B1.ser, where B1 is the B1 field and should be written as eg 12p5.ser or 12_5.ser
 ### Place the makechemex.py script in the parent folder of the EXPERIMENT folder.
 ###### Example Folder Structure:
-###### EXPERIMENT1
-######### INPUT
-############ 12p5.ser
-############ 6p25.ser
-############ 25.ser
-############ frq1list
-###### EXPERIMENT2
-######### INPUT
-############ 25.ser
-############ frq3list
-###### makechemex.py
-### Navigate a terminal to the EXPERIMENT# folder and run the makechemex.py script using the INPUT folder as argument liek this: python3 ../makechemex.py ./INPUT
+# /EXPERIMENT1/
+# //INPUT/
+# ///12p5.ser
+# ///6p25.ser
+# ///25.ser
+# ///frq1list
+# /EXPERIMENT2/
+# //INPUT/
+# ///25.ser
+# ///frq3list
+# /makechemex.py
+### Navigate a terminal to the EXPERIMENT# folder and run the makechemex.py script using the INPUT folder as argument like this: python3 ../makechemex.py ./INPUT
+
+### HOW TO RUN SCRIPT ###
+### In the terminal write the following: python3 makechemex.py <path-to-INPUT-folder>
+### You should replace <path-to-INPUT-folder> with the path to the INPUT folder
+### You can do this by writing "python3 makechemex.py " in the terminal and then dragging the INPUT folder onto the terminal a letting go, this will paste the path to the dragged folder
+### Click 'return'/'enter' to execute the line (the button that makes a new line in word)
 
 ### Instructions for preparing makechemex.py script
 ### You should only change values in the SETTINGS part of the script
