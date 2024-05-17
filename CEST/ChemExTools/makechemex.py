@@ -27,7 +27,7 @@ from os.path import isfile, join
 ### Instructions for preparing makechemex.py script
 ###### Get B0 from reference experiment
 ###### Get OFFSET from B1 dimension offset in acqupars
-###### MEASURED_OFFSET is obtained using calcOffset in the CEST experiment
+###### MEASURED_OFFSET is obtained by running calcOffset in the CEST experiment
 
 #SETTINGS
 EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options. Defaults are 'cest_15n' and 'cest_13c'.
