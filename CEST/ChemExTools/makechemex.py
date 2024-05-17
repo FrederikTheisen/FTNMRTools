@@ -5,15 +5,18 @@ from os import listdir
 from os.path import isfile, join
 
 ### Frederik Theisen 2022 ###
-### ChemEx should be installed in a conda environment with python 3.9
-### conda create -n chemex python=3.8
-### It is necessary to install the development version of ChemEx:
-### pip install git+https://github.com/gbouvignies/chemex.git
-###	Generates ChemEx project folder structure based on processed CEST data
-###	Usage: python3 makechemex.py <folder with peaks.ser and listfile>
+### Generates ChemEx project folder structure based on processed CEST data
+### Recommend to create an overall EXPERIMENT folder which contains the intensity files and the frqlist file in an INPUT folder
+### Place the makechemex.py script in the parent folder of the EXPERIMENT folder.
+###### Example Folder Structure:
+###### EXPERIMENT1
+###### EXPERIMENT2
+###### makechemex.py
+### Navigate terminal to the EXPERIMENT folder and run the makechemex.py script using the INPUT folder as argument
+### Usage: python3 ../makechemex.py ./INPUT
 ### peaks.ser files should be name B1.ser, where B1 is the B1 field and should be written as eg 12p5.ser
-###### Get B0 from reference experiment
-###### OFFSET is primarily used to determine position of B1 fields when given in Hz
+### Get B0 from reference experiment
+### OFFSET is primarily used to determine position of B1 fields when given in Hz
 
 #SETTINGS
 EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options.
