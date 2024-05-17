@@ -76,7 +76,7 @@ ChemEx requirements may change and might not be updated here
 [OBSOLETE] - pip install git+https://github.com/FrederikTheisen/chemex_FFT.git
 
 ### Prepare your data for ChemEx ###
-- Navigate your terminal to a suitable folder (named according experiment eg. Med25_D2aP20_CEST_15N). Your data processing will happen here and you will run chemex from this folder.
+- Navigate your terminal to a suitable folder (named according to experiment eg. Med25_D2aP20_CEST_15N). Your data processing will happen here and you will run chemex from this folder.
 - Download the makechemex.py script and put it in the suitable folder. 
 - Open the script and check that the settings in the top matches your requirements. Modify as needed.
 - Run the script with your input folder as argument:
