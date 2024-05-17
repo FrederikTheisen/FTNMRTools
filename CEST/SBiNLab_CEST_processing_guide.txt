@@ -60,7 +60,7 @@ fq1list
 ChemEx is a CLI (Command Line Interface) tool for analysis of NMR data. Written in python and can thus be adapted for specific needs.
 For ChemEx processing you need to install ChemEx in a conda environment with Python 3.9
 ChemEx requirements may change and might not be updated here
-- Install conda 
+- Install conda (conda is currently installed on computer 03)
 - Create new environment:
 -- conda create -n chemex python=3.9
 Activate conda environment and intall ChemEx:
@@ -70,11 +70,11 @@ OR CHEMEX_FFT (Includes three-state peak picking and overlap detect model, insta
 - pip install git+https://github.com/FrederikTheisen/chemex_FFT.git
 
 ### Prepare your data for ChemEx ###
-- Navigate your terminal to a suitable folder (experiment specific). Your data processing will happen here and you will run chemex from this folder.
+- Navigate your terminal to a suitable folder (named according experiment eg. Med25_D2aP20_CEST_15N). Your data processing will happen here and you will run chemex from this folder.
 - Download the makechemex.py script and put it in the suitable folder. 
 - Open the script and check that the settings in the top matches your requirements. Modify as needed.
 - Run the script with your input folder as argument:
--- python3 makechemex.py <input folder>
+-- python3 makechemex.py <path-to-input-folder>
 The makechemex.py script will setup an appropriate folder structure and create a script called 'guide.sh'. Avoid running the script.
 The guide.sh file contains a guide for what to do next.
 - Pick ground and minor states (if any minor states)
