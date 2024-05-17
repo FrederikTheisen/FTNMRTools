@@ -26,7 +26,8 @@ from os.path import isfile, join
 
 ### Instructions for preparing makechemex.py script
 ###### Get B0 from reference experiment
-###### OFFSET is primarily used to determine position of B1 fields when given in Hz.
+###### Get OFFSET from B1 dimension offset in acqupars
+###### MEASURED_OFFSET is obtained using calcOffset in the CEST experiment
 
 #SETTINGS
 EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options. Defaults are 'cest_15n' and 'cest_13c'.
@@ -34,7 +35,8 @@ PB = 0.042			#Initial guess percent bound
 KEX = 350			#Initial guess Kex
 TAU = 10 			#R2 initial guess related parameter
 T1TIME = 0.4 			#CEST delay time (for 15N CEST probably = d21)
-OFFSET = 119.5			#B1 reference ppm, used to convert ppm to offset hz and used for chemex to convert offset hz to ppm
+OFFSET = 119.5			#B1 reference ppm used to obtain B1 offset Hz 
+MEASURED_OFFSET = 119.12345	#Referenced B1 offset ppm used output correct chemical shifts
 B0 = 800.134			#Proton B0 field strength MHz
 DLABEL13C = True		#Is sample also 13C labelled
 
@@ -192,7 +194,7 @@ for b1 in experiments:
 		writeline(f, "[experiment]")
 		writeline(f, "name         = \"" + EXPERIMENTTYPE + "\"")
 		writeline(f, "time_t1      = " + str(T1TIME))
-		writeline(f, "carrier      = " + str(OFFSET))
+		writeline(f, "carrier      = " + str(MEASURED_OFFSET)) #Replaced OFFSET with MEASURED_OFFSET
 		writeline(f, "b1_frq       = " + str(b1))
 		writeline(f, "b1_inh_scale = inf") #B1 inhomogeneity expressed as a fraction of 'b1_frq'.
 		writeline(f, "")
