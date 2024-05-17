@@ -29,7 +29,7 @@ from os.path import isfile, join
 ###### OFFSET is primarily used to determine position of B1 fields when given in Hz.
 
 #SETTINGS
-EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options.
+EXPERIMENTTYPE = "cest_15n"	#Experiment type. Check ChemEx github for options. Defaults are 'cest_15n' and 'cest_13c'.
 PB = 0.042			#Initial guess percent bound
 KEX = 350			#Initial guess Kex
 TAU = 10 			#R2 initial guess related parameter
