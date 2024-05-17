@@ -11,9 +11,17 @@ from os.path import isfile, join
 ### Place the makechemex.py script in the parent folder of the EXPERIMENT folder.
 ###### Example Folder Structure:
 ###### EXPERIMENT1
+######### INPUT
+############ 12p5.ser
+############ 6p25.ser
+############ 25.ser
+############ frq1list
 ###### EXPERIMENT2
+######### INPUT
+############ 25.ser
+############ frq3list
 ###### makechemex.py
-### Navigate terminal to the EXPERIMENT folder and run the makechemex.py script using the INPUT folder as argument
+### Navigate terminal to the EXPERIMENT# folder and run the makechemex.py script using the INPUT folder as argument
 ###### python3 ../makechemex.py ./INPUT
 
 ### Instructions for preparing makechemex.py script
@@ -27,6 +35,7 @@ KEX = 350			#Initial guess Kex
 TAU = 10 			#R2 initial guess related parameter
 T1TIME = 0.4 			#CEST delay time (for 15N CEST probably = d21)
 OFFSET = 119.5			#B1 reference ppm, used to convert ppm to offset hz and used for chemex to convert offset hz to ppm
+MEASUREDOFFSET = 119.5		#Offset of B1 field determined from the calcOffset script
 B0 = 800.134			#Proton B0 field strength MHz
 DLABEL13C = True		#Is sample also 13C labelled
 
@@ -94,7 +103,7 @@ with open(getfile(listfile)) as lf:
 		if lines[0].strip() == "bf ppm": inputtype = 'ppm'
 		else: inputtype = 'hz'
 
-	print("FORMAT:       ")
+	print("FORMAT: " + str(inputtype))
 
 	for line in lines[1:]:
 		line = line.strip()
