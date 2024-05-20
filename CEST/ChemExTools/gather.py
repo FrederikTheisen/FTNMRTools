@@ -6,6 +6,9 @@ import math
 import tomli
 import matplotlib.pyplot as plt
 
+### SCRIPT TO COLLECT DATA FROM CHEMEX ANALYSIS ###
+
+
 PATH = sys.argv[1]
 
 def getpathforfolder(folder):
