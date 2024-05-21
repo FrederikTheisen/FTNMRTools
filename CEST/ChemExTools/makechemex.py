@@ -48,7 +48,7 @@ OFFSET = 119.5			#B1 reference ppm used to obtain B1 offset Hz
 MEASURED_OFFSET = 119.12345	#Referenced B1 offset ppm used output correct chemical shifts
 B0 = 800.134			#Proton B0 field strength MHz
 DLABEL13C = True		#Is sample also 13C labelled
-DUMMYERROR = 0 			#Data point dummy error (default dummy error is 0.1)
+DUMMYERROR = 0.1 			#Data point dummy error (default dummy error is 0.1)
 
 #AUTOASSIGNED SETTINGS 		#Set to 'None' for auto
 INPUTTYPE = None 		#ppm or hz
