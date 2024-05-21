@@ -48,6 +48,7 @@ OFFSET = 119.5			#B1 reference ppm used to obtain B1 offset Hz
 MEASURED_OFFSET = 119.12345	#Referenced B1 offset ppm used output correct chemical shifts
 B0 = 800.134			#Proton B0 field strength MHz
 DLABEL13C = True		#Is sample also 13C labelled
+DUMMYERROR = 0 		#Data point error (default dummy error is 0.1)
 
 #AUTOASSIGNED SETTINGS 		#Set to 'None' for auto
 INPUTTYPE = None 		#ppm or hz
@@ -163,28 +164,29 @@ for file in serfiles:
 					ass = dat[3].replace('.','') #Residue number set to N ppm
 					#if len(badassigns) <= badass_idx:
 					#	ass = input("Assign residue unique number ["+str(badass_idx)+"] (" + dat[6] + "): ")
-					#	badassigns.append(ass) 								#Store in array for auto assign in subsequent files
+					#	badassigns.append(ass) 	#Store in array for auto assign in subsequent files
 					#else: ass = badassigns[badass_idx]
 					#badass_idx += 1
 				resi = int(ass)
 				residue["filename"] = dat[6].split('-')[1]
 				residue["i"] = dat[8:]
 				while resi in residues:
-					print(resi)
+					print(f"WARNING: Duplicate Assignment Detected: {resi}")
 					resi = resi + 1000
 				tmpname = residue["filename"][1:]
 				while tmpname[0].isdigit(): tmpname = tmpname[1:]
 				residue["residue_name_id"] = residue_type + str(resi) + tmpname
 				residues[resi] = residue
 
-		for resi in residues:												#produce residue files
+		# Write residue data files
+		for resi in residues:	
 			residue = residues[resi]
 			if resi not in allresidues: allresidues.append(resi)
 			with open(expdir + "/" + residue["filename"] + ".out", "w") as f:
 				f.write("#Offset (Hz)\tIntensity\tUncertainty\n")
-				writeline(f,"  -1.000e+05   1  0.1")									#Necessary reference value.
+				writeline(f,f"  -1.000e+05   1  {DUMMYERROR}")	#Necessary reference value.
 				for i in range(satfrqcount):
-					f.write("  " + str(satfrqs[i]) + "\t" + str(residue["i"][i]) + "\t" + str(0.1) + "\n")	#data
+					f.write("  " + str(satfrqs[i]) + "\t" + str(residue["i"][i]) + "\t" + str(DUMMYERROR) + "\n")	#data
 	experiments[B1] = {"expdir": str(B1).replace(".","_"), "res":residues}
 
 
@@ -284,7 +286,7 @@ with open("./" + OUTPUTFOLDER + "/guide.sh","w") as f:
 	writeline(f,"#Command to view data and pick minor states")
 	writeline(f,"chemex pick_cest -e " + getprojectfolder(EXPERIMENTFOLDER) + "/*.toml -o " + getprojectfolder(PARAMETERFOLDER))
 	writeline(f,"#Go to the new sandbox directory in the parent dir and copy the [DW_AB] values to your parameters file.")
-	writeline(f,"#Rerun this program if you need to pick multiple states. Then manually rename the [DW_AX] variable name.")
+	writeline(f,"#Rerun this program if you need to pick multiple states. Then manually rename the [DW_Ax] variable name.")
 	writeline(f,"")
 	writeline(f,"#Fit all profiles using a no exchange model (used to evaluate if profiles have exchange or not)")
 	writeline(f,"chemex fit -e " + getprojectfolder(EXPERIMENTFOLDER) + "/*.toml"
