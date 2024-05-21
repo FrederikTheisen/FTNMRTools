@@ -105,7 +105,7 @@ print("B1 OFFSET:    ",OFFSET)
 satfrqs = []
 satfrqcount = 0
 
-inputtype = INPUTTYPE #set input type (if 'None', then program will try to guess)
+inputtype = INPUTTYPE #set input type (if 'None', then program will try to determine)
 
 with open(getfile(listfile)) as lf:
 	lines = lf.readlines()
