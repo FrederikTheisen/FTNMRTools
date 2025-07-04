@@ -316,18 +316,18 @@ def onclick(event, data, ax):
 	x_pos = event.xdata
 	print("Clicked at x = {}".format(x_pos))
 	if event.inaxes is not None and event.dblclick:
-	    # Get the x position of the click
-	    
-	    print(ppmrange)
-	    if x_pos > ppmrange[0] or x_pos < ppmrange[1]: 
-	    	print("ignore")
-	    	return #not a relevant click
+		# Get the x position of the click
+		
+		print(ppmrange)
+		if x_pos > ppmrange[0] or x_pos < ppmrange[1]: 
+			print("ignore")
+			return #not a relevant click
 
-	    AddPointsAtPosition(x_pos,data)
+		AddPointsAtPosition(x_pos,data)
 
-	    Baselines = FitBaselines()
+		Baselines = FitBaselines()
 
-	    Draw(data, ax)
+		Draw(data, ax)
 
 # Define a functions to handle button clicks
 # Baseline correction plot
