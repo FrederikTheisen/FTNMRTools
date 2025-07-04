@@ -208,8 +208,8 @@ end
 # Append final plot commands
 echo "set xlabel '{Residue}'" >> plot.gnu
 echo "set ylabel '{$DATA_TYPE}'" >> plot.gnu
-echo "plot  'results.out' using 1:2:3 wi er lw 2, 'results.out' using 1:2 wi lines lw 3" >> plot.gnu
-echo "plot  'results.out' using 1:2 wi impulses lw 3 lc rgb 'black' title 'Isolated peaks', 'results_peak_overlap.out' using 1:2 wi impulses lw 3 lc rgb 'red' title 'Overlapping'" >> plot.gnu
+echo "plot  '${DATA_OUT}_results.out' using 1:2:3 wi er lw 2, '${DATA_OUT}_results.out' using 1:2 wi lines lw 3" >> plot.gnu
+echo "plot  '${DATA_OUT}_results.out' using 1:2 wi impulses lw 3 lc rgb 'black' title 'Isolated peaks', '${DATA_OUT}_results_peak_overlap.out' using 1:2 wi impulses lw 3 lc rgb 'red' title 'Overlapping'" >> plot.gnu
 
 echo 'Done'
 
