@@ -17,11 +17,23 @@ class PlotOptions:
     plot_type: str = 'bar'
     tempunit: str = 'C'
     tempunit_string: str = '°C'
+    concentration_unit: str = 'mM'  # Default unit for concentration
     # Add more fields as needed
+
+    def get_conc_factor(self):
+        if self.concentration_unit == 'mM': return 1e3
+        elif self.concentration_unit in ['uM', 'µM']: return 1e6
+        elif self.concentration_unit == 'nM': return 1e9
+        elif self.concentration_unit == 'pM': return 1e12
+        else: return 1
+
+    def get_string_conc(self, conc):
+        conc = self.get_conc_factor() * conc
+        return f"{conc:.0f} {self.concentration_unit}"
 
 # Pattern to parse filenames: e.g. 50mM_5C_600MHz_T1_results_filtered.out, 0.5uM_5C_600MHz_T1rho_extra_results_filtered.out, or _5C_600MHz_T1_results_filtered.out
 FNAME_RE = re.compile(
-    r"(?P<conc>[^_]+)?_?(?P<temp>\d+[CK])_(?P<field>\d+)MHz_(?P<exp>[^_]+)(?:_(?P<extra>.+))?_results_filtered\.out"
+    r"(?P<conc>\d+(?:\.\d+)?(?:mM|uM|µM|nM|M))?.*?_?(?P<temp>\d+[CK])_(?P<field>\d+)MHz_(?P<exp>[^_]+)(?:_(?P<extra>.+))?_results_filtered\.out"
 )
 
 def filefield_to_concentration(s):
@@ -34,6 +46,7 @@ def filefield_to_concentration(s):
     match = re.match(r"([\d\.]+)([a-zA-Z]*)", s)
     if match:
         value, unit = match.groups()
+        print(f"Parsing concentration: value={value}, unit={unit}")
         try:
             value = float(value)
         except ValueError:
@@ -78,12 +91,27 @@ def filefield_to_temperature(s, output_unit='C'):
     elif output_unit == 'K':
         return 298.15
 
+def get_best_common_conc_unit(concs):
+    average = sum(concs) / len(concs)
+    magnitude = 10 ** (np.floor(np.log10(average)))
+    if magnitude >= 1e-3 and magnitude < 1:
+        return 'mM'
+    elif magnitude >= 1e-6 and magnitude < 1e-3:
+        return 'uM'
+    elif magnitude >= 1e-9 and magnitude < 1e-6:
+        return 'nM'
+    elif magnitude >= 1e-12 and magnitude < 1e-9:
+        return 'pM'
+    else:
+        return 'M'
+
 def collect_data(directory, options=None):
     """
     Walks through `directory`, finds all `*_results_filtered.out` files,
     parses metadata from filename, and loads the data into a single DataFrame.
     """
     rows = []
+    variable_concentrations = []
 
     print(f"Collecting data from directory: {directory}")
     for path in glob.glob(os.path.join(directory, "*_results_filtered.out")):
@@ -105,6 +133,7 @@ def collect_data(directory, options=None):
 
         # Concentration (could be any string, or missing)
         conc = info.get('conc')
+        print(conc)
         if conc is None or conc == '':
             conc = '0mM'
         df['concentration'] = filefield_to_concentration(conc)
@@ -115,13 +144,17 @@ def collect_data(directory, options=None):
         df['extra_label'] = info.get('extra') if info.get('extra') else ''
         rows.append(df)
 
+        variable_concentrations.append(filefield_to_concentration(conc))
+
     data = pd.concat(rows, ignore_index=True)
+    common_conc_unit = get_best_common_conc_unit(variable_concentrations)
 
     print(f"Collected data: {len(rows)}")
+    print(f"Common concentration: {common_conc_unit}")
     print()
     print()
 
-    return data
+    return data, common_conc_unit
 
 def get_protein_name(directory):
     """Extracts the protein name from the directory path."""
@@ -152,7 +185,6 @@ def plot_relaxation(data, options: PlotOptions):
         else:
             series_keys = ['concentration', 'extra_label']
         plot_grid_panels(subset, panel_keys, series_keys, options)
-
 
 def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     """
@@ -194,29 +226,34 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     elif ncols == 1:
         axes = axes[:, np.newaxis]
 
-    # Determine coloring
-    # If coloring by experiment, use tab10; else use viridis for concentration
-    color_keys = []
+    axes_ranges = [None] * nrows
+
+    for i, val0 in enumerate(panel_vals[0]):
+        print(f"Processing panel row {i+1}/{nrows} for {panel_keys[0]}={val0}")
+
+        if panel_keys[0] == 'experiment':
+            df = data[data[panel_keys[0]] == val0]
+            delta = df['rate'].max() - df['rate'].min()
+            axes_ranges[i] = round(10*(df['rate'].min() - 0.1*delta))/10, round(10*(df['rate'].max() + 0.1*delta))/10
+
+    print(f'Axes ranges: {axes_ranges}')
+
+    # Determine coloring: combine all series_keys into a tuple key for each series
     print(f"Coloring method: based on series_keys: {series_keys}")
-    if 'experiment' in series_keys:
-        color_keys = sorted(data['experiment'].unique())
-        print(f"Color keys (experiment): {color_keys}")
+    # Get all unique combinations of series_keys present in the data
+    unique_keys = sorted(
+        set(tuple(row[k] for k in series_keys) for _, row in data.iterrows())
+    )
+    print(f"Color keys (series_keys tuples): {unique_keys}")
+    # Use tab10 or tab20 colormap depending on number of series
+    if len(unique_keys) <= 10:
         cmap = plt.get_cmap('tab10')
-        key_to_color = {key: cmap(i % 10) for i, key in enumerate(color_keys)}
-    elif 'concentration' in series_keys:
-        color_keys = sorted(data['concentration'].unique())
-        print(f"Color keys (concentration): {color_keys}")
-        cmap = plt.get_cmap('viridis')
-        norm = mpl.colors.Normalize(vmin=min(color_keys), vmax=max(color_keys))
-        key_to_color = {var: cmap(norm(var)) for var in color_keys}
-    elif 'extra_label' in series_keys:
-        color_keys = sorted(data['extra_label'].unique())
-        print(f"Color keys (extra_label): {color_keys}")
-        cmap = plt.get_cmap('tab10')
-        key_to_color = {key: cmap(i % 10) for i, key in enumerate(color_keys)}
+    elif len(unique_keys) <= 20:
+        cmap = plt.get_cmap('tab20')
     else:
-        print("No coloring key found.")
-        key_to_color = {}
+        cmap = plt.get_cmap('hsv')
+    key_to_color = {key: cmap(i % cmap.N) for i, key in enumerate(unique_keys)}
+    print(f"Key to color mapping: {key_to_color}")
 
     print(f"Panel grid: {[(v0, v1) for v0 in panel_vals[0] for v1 in panel_vals[1]]}")
     print(f"Panel loop: nrows={nrows}, ncols={ncols}")
@@ -248,15 +285,15 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             print(f"  Panel data shape: {panel_df.shape}")
             # Group by series_keys
             for keys, df_series in panel_df.groupby(series_keys):
-                print(f"    Series keys: {keys}, n={len(df_series)}")
+                print(f"      n={len(df_series)}")
                 # Build label and color
-                if isinstance(keys, tuple):
-                    label = ' '.join([str(k) for k in keys if k != '' and k is not None])
-                    color_key = keys[0]
-                else:
-                    label = str(keys)
-                    color_key = keys
-                color = key_to_color.get(color_key, 'gray')
+                label = ''
+                for key,val in zip(series_keys, keys):
+                    print(f"      {key}: {val}")
+                    if key == 'concentration': label += f"{options.get_string_conc(val)} "
+                    else: label += f"{val} "
+
+                color = key_to_color.get(keys, 'gray')
                 print(f"      Color: {color}, Label: {label}")
                 if not df_series.empty:
                     if options.plot_type == 'bar':
@@ -273,16 +310,17 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
                 if label not in legend_labels:
                     legend_handles.append(Patch(color=color, label=label))
                     legend_labels.append(label)
+
+                if axes_ranges[i]:
+                    print(f"  [ROW] Setting axes limits for row {i+1}: {axes_ranges[i][0]} - {axes_ranges[i][1]}")
+                    ax.set_ylim(axes_ranges[i])
             
             # Panel titles and axis labels
             title = ''
             if i == 0: # Only set title for the first row
                 if options.experiment == None:
-                    # title += f"{val0}"
-                    print(panel_keys)
                     # Add temperature and field with units if present
                     key = panel_keys[1]
-                    print(key)
                     if key == 'temp' and (val1 is not None):
                         title += f"{val1} {options.tempunit_string}"
                     elif key == 'field_MHz' and (val1 is not None):
@@ -290,23 +328,15 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
                 else:
                     if val1 is not None:
                         # Add units for temp/field if present
-                        if 'temp' in panel_keys:
+                        key = panel_keys[1]
+                        if key == 'temp':
                             title = f"{val1} {options.tempunit_string}"
-                        elif 'field_MHz' in panel_keys:
+                        elif key == 'field_MHz':
                             title = f"{val1} MHz"
                         else:
                             title = f"{val1}"
                 print(f"  [COLUMN] Setting title: {title}")
             
-            # Add temperature and field to title if present (legacy fallback)
-            if 'temp' in panel_keys and 'field_MHz' in panel_keys:
-                temp_idx = panel_keys.index('temp')
-                field_idx = panel_keys.index('field_MHz')
-                temp_val = panel_vals[temp_idx][i] if temp_idx == 0 else val1 if temp_idx == 1 else None
-                field_val = panel_vals[field_idx][i] if field_idx == 0 else val1 if field_idx == 1 else None
-                if temp_val is not None and field_val is not None and title:
-                    if f"{temp_val}°C" not in title and f"{field_val} MHz" not in title:
-                        title += f" ({temp_val}°C, {field_val} MHz)"
             ax.set_title(title)
 
             if j == 0:
@@ -385,7 +415,9 @@ if __name__ == '__main__':
     )
 
     # Collect data from the specified directory
-    data = collect_data(args.directory, options)
+    data, conc_unit = collect_data(args.directory, options)
+
+    options.concentration_unit = conc_unit
 
     # Filter by temperature and field if specified
     if args.temp is not None:
