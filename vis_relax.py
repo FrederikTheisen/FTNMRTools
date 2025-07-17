@@ -123,7 +123,6 @@ def collect_data(directory, options=None):
 
     return data
 
-
 def get_protein_name(directory):
     """Extracts the protein name from the directory path."""
     return os.path.basename(os.path.abspath(directory))
@@ -156,21 +155,36 @@ def plot_relaxation(data, options: PlotOptions):
 
 
 def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
-    print(f"plot_grid_panels: panel_keys={panel_keys}, series_keys={series_keys}, protein_name={options.protein_name}, plot_type={options.plot_type}, experiment={options.experiment}")
-    print(f"Unique values for panel_keys:")
-    for k in panel_keys:
-        print(f"  {k}: {sorted(data[k].unique())}")
     """
     Helper function to plot grid panels for NMR relaxation data.
     panel_keys: list of column names to use for grid panels (e.g. ['temp', 'field_MHz'])
     series_keys: list of column names to use for series within each panel (e.g. ['experiment', 'concentration', 'extra_label'])
     """
+    print(f"plot_grid_panels: panel_keys={panel_keys}, series_keys={series_keys}, protein_name={options.protein_name}, plot_type={options.plot_type}, experiment={options.experiment}")
+    print(f"Unique values for panel_keys:")
+    fig_title = options.protein_name or ''
+    fig_title += "_" + options.experiment if options.experiment else ''
+    
+    for k in panel_keys:
+        print(f"  {k}: {sorted(data[k].unique())}")
+        if len(data[k].unique()) == 1:
+            if k == 'temp':
+                fig_title += f"_{data[k].unique()[0]}{options.tempunit}"
+            elif k == 'field_MHz':
+                fig_title += f"_{data[k].unique()[0]}MHz"
+
     # Get unique panels
     panels = data.groupby(panel_keys)
     panel_vals = [sorted(data[k].unique()) for k in panel_keys]
     nrows = len(panel_vals[0])
     ncols = len(panel_vals[1]) if len(panel_keys) > 1 else 1
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4*ncols, 3*nrows), sharex=False, sharey=False, num=(options.protein_name or '') + " " + (options.experiment or ''))
+    fig, axes = plt.subplots(
+        nrows, 
+        ncols, 
+        figsize=(4*ncols, 3*nrows), 
+        sharex=False, 
+        sharey=False, 
+        num=fig_title)
     
     # Ensure axes is always 2D
     if nrows == 1 and ncols == 1:
@@ -215,6 +229,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     for i, val0 in enumerate(panel_vals[0]):
         print(f"Processing panel row {i+1}/{nrows} for {panel_keys[0]}={val0}")
         for j in range(ncols):
+            print(f"Processing column {j+1}/{ncols} for {panel_keys[1]}={panel_vals[1][j] if ncols > 1 else 'N/A'}")
             val1 = panel_vals[1][j] if ncols > 1 else None
             print(f"Panel [{i},{j}]: {panel_keys[0]}={val0}, {panel_keys[1] if ncols > 1 else ''}={val1}")
             ax = axes[i, j]
@@ -263,12 +278,15 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             title = ''
             if i == 0: # Only set title for the first row
                 if options.experiment == None:
-                    title += f"{val0}"
+                    # title += f"{val0}"
+                    print(panel_keys)
                     # Add temperature and field with units if present
-                    if 'temp' in panel_keys and (val1 is not None):
-                        title += f" | {val1} {options.tempunit_string}"
-                    if 'field_MHz' in panel_keys and (val1 is not None):
-                        title += f" | {val1} MHz"
+                    key = panel_keys[1]
+                    print(key)
+                    if key == 'temp' and (val1 is not None):
+                        title += f"{val1} {options.tempunit_string}"
+                    elif key == 'field_MHz' and (val1 is not None):
+                        title += f"{val1} MHz"
                 else:
                     if val1 is not None:
                         # Add units for temp/field if present
@@ -278,7 +296,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
                             title = f"{val1} MHz"
                         else:
                             title = f"{val1}"
-                print(f"  Panel title: {title}")
+                print(f"  [COLUMN] Setting title: {title}")
             
             # Add temperature and field to title if present (legacy fallback)
             if 'temp' in panel_keys and 'field_MHz' in panel_keys:
@@ -292,7 +310,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             ax.set_title(title)
 
             if j == 0:
-                print(f"Setting ylabel for panel [{i},{j}]: {val0} {options.experiment}")
+                print(f"  [ROW] Setting ylabel for row [{i},{j}]: {val0} {options.experiment}")
                 if options.experiment == None:
                     # val0 should be experiment name, but if tuple, take first element
                     exp_label = val0[0] if isinstance(val0, tuple) else val0
