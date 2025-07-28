@@ -226,15 +226,15 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     elif ncols == 1:
         axes = axes[:, np.newaxis]
 
-    axes_ranges = [None] * nrows
+    exps = data['experiment'].unique()
+    axes_ranges = {}
 
-    for i, val0 in enumerate(panel_vals[0]):
+    for i, val0 in enumerate(exps):
         print(f"Processing panel row {i+1}/{nrows} for {panel_keys[0]}={val0}")
 
-        if panel_keys[0] == 'experiment':
-            df = data[data[panel_keys[0]] == val0]
-            delta = df['rate'].max() - df['rate'].min()
-            axes_ranges[i] = round(10*(df['rate'].min() - 0.1*delta))/10, round(10*(df['rate'].max() + 0.1*delta))/10
+        df = data[data['experiment'] == val0]
+        delta = df['rate'].max() - df['rate'].min()
+        axes_ranges[val0] = round(10*(df['rate'].min() - 0.1*delta))/10, round(10*(df['rate'].max() + 0.1*delta))/10
 
     print(f'Axes ranges: {axes_ranges}')
 
@@ -311,9 +311,11 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
                     legend_handles.append(Patch(color=color, label=label))
                     legend_labels.append(label)
 
-                if axes_ranges[i]:
-                    print(f"  [ROW] Setting axes limits for row {i+1}: {axes_ranges[i][0]} - {axes_ranges[i][1]}")
-                    ax.set_ylim(axes_ranges[i])
+                exp = (df_series['experiment'].iloc[0])
+                if axes_ranges[exp]:
+                    ylim = axes_ranges[exp]
+                    print(f"  [ROW] Setting axes limits for row {i+1}: {ylim[0]} - {ylim[1]}")
+                    ax.set_ylim(ylim)
             
             # Panel titles and axis labels
             title = ''
