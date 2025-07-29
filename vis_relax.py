@@ -193,10 +193,11 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     series_keys: list of column names to use for series within each panel (e.g. ['experiment', 'concentration', 'extra_label'])
     """
     print(f"plot_grid_panels: panel_keys={panel_keys}, series_keys={series_keys}, protein_name={options.protein_name}, plot_type={options.plot_type}, experiment={options.experiment}")
-    print(f"Unique values for panel_keys:")
+    
     fig_title = options.protein_name or ''
     fig_title += "_" + options.experiment if options.experiment else ''
     
+    print(f"Unique values for panel_keys:")
     for k in panel_keys:
         print(f"  {k}: {sorted(data[k].unique())}")
         if len(data[k].unique()) == 1:
@@ -205,9 +206,14 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             elif k == 'field_MHz':
                 fig_title += f"_{data[k].unique()[0]}MHz"
 
+            panel_keys.remove(k) # Single value keys are not needed to determine columns/rows
+
     # Get unique panels
     panels = data.groupby(panel_keys)
     panel_vals = [sorted(data[k].unique()) for k in panel_keys]
+    # panel_vals.extend([sorted(data[k].unique()) for k in panel_keys if len(data[k].unique()) == 1])
+
+    print(f"Panel values: {panel_vals}")
     nrows = len(panel_vals[0])
     ncols = len(panel_vals[1]) if len(panel_keys) > 1 else 1
     fig, axes = plt.subplots(
