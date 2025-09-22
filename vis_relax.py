@@ -18,6 +18,7 @@ class PlotOptions:
     tempunit: str = 'C'
     tempunit_string: str = '°C'
     concentration_unit: str = 'mM'  # Default unit for concentration
+    ignore_extra: bool = False
     # Add more fields as needed
 
     def get_conc_factor(self):
@@ -32,9 +33,7 @@ class PlotOptions:
         return f"{conc:.0f} {self.concentration_unit}"
 
 # Pattern to parse filenames: e.g. 50mM_5C_600MHz_T1_results_filtered.out, 0.5uM_5C_600MHz_T1rho_extra_results_filtered.out, or _5C_600MHz_T1_results_filtered.out
-FNAME_RE = re.compile(
-    r"(?P<conc>\d+(?:\.\d+)?(?:mM|uM|µM|nM|M))?.*?_?(?P<temp>\d+[CK])_(?P<field>\d+)MHz_(?P<exp>[^_]+)(?:_(?P<extra>.+))?_results_filtered\.out"
-)
+FNAME_RE = re.compile(r"(?P<conc>\d+(?:\.\d+)?(?:mM|uM|µM|nM|M))?.*?_?(?P<temp>\d+[CK])_(?P<field>\d+)MHz_(?P<exp>[^_]+)(?:_(?P<extra>.+))?_results_filtered\.out")
 
 def filefield_to_concentration(s):
     """
@@ -161,29 +160,28 @@ def get_protein_name(directory):
     return os.path.basename(os.path.abspath(directory))
 
 def plot_relaxation(data, options: PlotOptions):
-    print(f"plot_relaxation: experiment={options.experiment}, protein_name={options.protein_name}, plot_type={options.plot_type}, tempunit={options.tempunit}")
+    print(f"plot_relaxation:\n experiment={options.experiment},\n protein_name={options.protein_name},\n plot_type={options.plot_type},\n tempunit={options.tempunit},\n ignore_extra={options.ignore_extra}")
     print(f"Data shape: {data.shape}, columns: {list(data.columns)}")
     """
     Unified entry point for plotting NMR relaxation data.
     Determines panel/series keys based on experiment selection and delegates to grid plotting helper.
     """
-    if options.experiment == None:
+    def get_series_keys(df):
+        if len(df['concentration'].unique()) == 1:
+            return [] if options.ignore_extra else ['extra_label']
+        else:
+            return ['concentration'] if options.ignore_extra else ['concentration', 'extra_label']
+
+    if options.experiment is None:
         # Plot all experiment types as separate panels (rows), with temp/field as columns
         panel_keys = ['experiment', 'temp', 'field_MHz']
-        if len(data['concentration'].unique()) == 1:
-            series_keys = ['extra_label']
-        else:
-            series_keys = ['concentration', 'extra_label']
+        series_keys = get_series_keys(data)
         plot_grid_panels(data, panel_keys, series_keys, options)
     else:
         # Plot by variable/field/temperature for a single experiment
         subset = data[data['experiment'] == options.experiment]
         panel_keys = ['temp', 'field_MHz']
-        # If only one concentration, color by extra_label
-        if len(subset['concentration'].unique()) == 1:
-            series_keys = ['extra_label']
-        else:
-            series_keys = ['concentration', 'extra_label']
+        series_keys = get_series_keys(subset)
         plot_grid_panels(subset, panel_keys, series_keys, options)
 
 def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
@@ -261,7 +259,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     key_to_color = {key: cmap(i % cmap.N) for i, key in enumerate(unique_keys)}
     print(f"Key to color mapping: {key_to_color}")
 
-    print(f"Panel grid: {[(v0, v1) for v0 in panel_vals[0] for v1 in panel_vals[1]]}")
+    if ncols > 1: print(f"Panel grid: {[(v0, v1) for v0 in panel_vals[0] for v1 in panel_vals[1]]}")
     print(f"Panel loop: nrows={nrows}, ncols={ncols}")
 
     legend_handles = []
@@ -272,7 +270,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     for i, val0 in enumerate(panel_vals[0]):
         print(f"Processing panel row {i+1}/{nrows} for {panel_keys[0]}={val0}")
         for j in range(ncols):
-            print(f"Processing column {j+1}/{ncols} for {panel_keys[1]}={panel_vals[1][j] if ncols > 1 else 'N/A'}")
+            if ncols > 1: print(f"Processing column {j+1}/{ncols} for {panel_keys[1]}={panel_vals[1][j] if ncols > 1 else 'N/A'}")
             val1 = panel_vals[1][j] if ncols > 1 else None
             print(f"Panel [{i},{j}]: {panel_keys[0]}={val0}, {panel_keys[1] if ncols > 1 else ''}={val1}")
             ax = axes[i, j]
@@ -325,7 +323,7 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             
             # Panel titles and axis labels
             title = ''
-            if i == 0: # Only set title for the first row
+            if i == 0: # Only set title for the first row panels
                 if options.experiment == None:
                     # Add temperature and field with units if present
                     key = panel_keys[1]
@@ -347,14 +345,20 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             
             ax.set_title(title)
 
-            if j == 0:
-                print(f"  [ROW] Setting ylabel for row [{i},{j}]: {val0} {options.experiment}")
+            if j == 0: # Only set ylabel for the first column panels
+                print(f"  [ROW] Setting ylabel for row [{i},{j}]: {val0} {options.experiment} {panel_keys[0]}")
                 if options.experiment == None:
+                    print("   [ROW] ylabel should be experiment type")
                     # val0 should be experiment name, but if tuple, take first element
                     exp_label = val0[0] if isinstance(val0, tuple) else val0
                     ax.set_ylabel(f"{exp_label} (s$^{{-1}}$)")
                 else:
-                    ax.set_ylabel(f"{val0} {options.tempunit_string}" + (f"\n{options.experiment} (s$^{{-1}}$)" if options.experiment else ""))
+                    key = panel_keys[0]
+                    print(f"  [ROW] ylabel should be {key} value")
+                    if key == 'temp': title = f"{val0} {options.tempunit_string}"
+                    elif key == 'field_MHz': title = f"{val0} MHz"
+                    else: title = f"{val0}"
+                    ax.set_ylabel(f"{title}" + (f"\n{options.experiment} (s$^{{-1}}$)" if options.experiment else ""))
             
             if i == nrows - 1:
                 if protein_name:
@@ -406,6 +410,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '-tempunit', choices=['C', 'K'], default='C',
     )
+    parser.add_argument(
+        '-ignoreextra', action='store_true', help='Ignore extra label info for grouping/plotting'
+    )
     args = parser.parse_args()
 
     # Determine protein name from directory or command line argument
@@ -419,7 +426,8 @@ if __name__ == '__main__':
         protein_name=protein_name,
         plot_type=args.style,
         tempunit=args.tempunit,
-        tempunit_string=f"°{args.tempunit}" if args.tempunit == 'C' else args.tempunit
+        tempunit_string=f"°{args.tempunit}" if args.tempunit == 'C' else args.tempunit,
+        ignore_extra=args.ignoreextra
     )
 
     # Collect data from the specified directory
