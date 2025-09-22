@@ -35,31 +35,6 @@ class PlotOptions:
 # Pattern to parse filenames: e.g. 50mM_5C_600MHz_T1_results_filtered.out, 0.5uM_5C_600MHz_T1rho_extra_results_filtered.out, or _5C_600MHz_T1_results_filtered.out
 FNAME_RE = re.compile(r"(?P<conc>\d+(?:\.\d+)?(?:mM|uM|µM|nM|M))?.*?_?(?P<temp>\d+[CK])_(?P<field>\d+)MHz_(?P<exp>[^_]+)(?:_(?P<extra>.+))?_results_filtered\.out")
 
-def filefield_to_concentration(s):
-    """
-    Converts a string representation of concentration (e.g. '50mM', '0.5uM') to a float in Molar.
-    Handles various units: mM, uM, nM, M.
-    """
-    if s is None or s == '':
-        return 0.0
-    match = re.match(r"([\d\.]+)([a-zA-Z]*)", s)
-    if match:
-        value, unit = match.groups()
-        print(f"Parsing concentration: value={value}, unit={unit}")
-        try:
-            value = float(value)
-        except ValueError:
-            value = 0.0
-        if 'mM' in unit:
-            return value / 1e3
-        elif 'uM' in unit or 'µM' in unit:
-            return value / 1e6
-        elif 'nM' in unit:
-            return value / 1e9
-        elif 'M' in unit:
-            return value
-    return 0.0
-
 def filefield_to_temperature(s, output_unit='C'):
     """
     Converts a string representation of temperature to degrees Celsius.
@@ -89,6 +64,31 @@ def filefield_to_temperature(s, output_unit='C'):
         return 25 # Default to 25C
     elif output_unit == 'K':
         return 298.15
+
+def filefield_to_concentration(s):
+    """
+    Converts a string representation of concentration (e.g. '50mM', '0.5uM') to a float in Molar.
+    Handles various units: mM, uM, nM, M.
+    """
+    if s is None or s == '':
+        return 0.0
+    match = re.match(r"([\d\.]+)([a-zA-Z]*)", s)
+    if match:
+        value, unit = match.groups()
+        print(f"Parsing concentration: value={value}, unit={unit}")
+        try:
+            value = float(value)
+        except ValueError:
+            value = 0.0
+        if 'mM' in unit:
+            return value / 1e3
+        elif 'uM' in unit or 'µM' in unit:
+            return value / 1e6
+        elif 'nM' in unit:
+            return value / 1e9
+        elif 'M' in unit:
+            return value
+    return 0.0
 
 def get_best_common_conc_unit(concs):
     average = sum(concs) / len(concs)
