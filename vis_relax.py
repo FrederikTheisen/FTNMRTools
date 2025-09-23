@@ -103,7 +103,7 @@ def get_best_common_conc_unit(concs):
         return 'pM'
     else:
         return 'M'
-
+    
 def collect_data(directory, options=None):
     """
     Walks through `directory`, finds all `*_results_filtered.out` files,
@@ -111,6 +111,7 @@ def collect_data(directory, options=None):
     """
     rows = []
     variable_concentrations = []
+    lines = 0
 
     print(f"Collecting data from directory: {directory}")
     for path in glob.glob(os.path.join(directory, "*_results_filtered.out")):
@@ -142,13 +143,17 @@ def collect_data(directory, options=None):
         # Store extra field for later labeling
         df['extra_label'] = info.get('extra') if info.get('extra') else ''
         rows.append(df)
+        lines += len(df)
 
         variable_concentrations.append(filefield_to_concentration(conc))
+
+        print(f"Data length: {len(rows)} {lines}")
+
 
     data = pd.concat(rows, ignore_index=True)
     common_conc_unit = get_best_common_conc_unit(variable_concentrations)
 
-    print(f"Collected data: {len(rows)}")
+    print(f"Collected data: {len(rows)} {len(data)}")
     print(f"Common concentration: {common_conc_unit}")
     print()
     print()
@@ -172,17 +177,31 @@ def plot_relaxation(data, options: PlotOptions):
         else:
             return ['concentration'] if options.ignore_extra else ['concentration', 'extra_label']
 
+    # --- Averaging duplicate data if no extra_label ---
+    def average_duplicates(df):
+        # Only average if ignore_extra is True or all extra_label are empty
+        if options.ignore_extra or (df['extra_label'] == '').all():
+            group_cols = ['experiment', 'concentration', 'temp', 'field_MHz', 'residue']
+            agg_df = df.groupby(group_cols, as_index=False).agg({
+                'rate': 'mean',
+                'error': lambda x: np.sqrt(np.sum(np.square(x))) / len(x) if len(x) > 1 else x.iloc[0],
+                'extra_label': 'first'
+            })
+            return agg_df
+        else:
+            return df
+
     if options.experiment is None:
-        # Plot all experiment types as separate panels (rows), with temp/field as columns
         panel_keys = ['experiment', 'temp', 'field_MHz']
         series_keys = get_series_keys(data)
-        plot_grid_panels(data, panel_keys, series_keys, options)
+        data_avg = average_duplicates(data)
+        plot_grid_panels(data_avg, panel_keys, series_keys, options)
     else:
-        # Plot by variable/field/temperature for a single experiment
         subset = data[data['experiment'] == options.experiment]
         panel_keys = ['temp', 'field_MHz']
         series_keys = get_series_keys(subset)
-        plot_grid_panels(subset, panel_keys, series_keys, options)
+        subset_avg = average_duplicates(subset)
+        plot_grid_panels(subset_avg, panel_keys, series_keys, options)
 
 def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     """
@@ -381,7 +400,6 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     ax.legend(handles=legend_handles)
     plt.tight_layout()
     plt.show()
-
 
 if __name__ == '__main__':
     import argparse
