@@ -90,6 +90,13 @@ def filefield_to_concentration(s):
             return value
     return 0.0
 
+def get_experiment_unit(exptype):
+    if exptype in ['T1', 'T2', 'T1rho', 'R1', 'R2']:
+        return '(s$^{-1}$)'
+    elif exptype in ['HetNOE', 'NOE']:
+        return ''
+    else: return ''
+
 def get_best_common_conc_unit(concs):
     average = sum(concs) / len(concs)
     magnitude = 10 ** (np.floor(np.log10(average)))
@@ -255,9 +262,12 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     for i, val0 in enumerate(exps):
         print(f"Processing panel row {i+1}/{nrows} for {panel_keys[0]}={val0}")
 
-        df = data[data['experiment'] == val0]
-        delta = df['rate'].max() - df['rate'].min()
-        axes_ranges[val0] = round(10*(df['rate'].min() - 0.1*delta))/10, round(10*(df['rate'].max() + 0.1*delta))/10
+        if val0 == 'HetNOE': # Fixed yaxis range for HetNOE
+            axes_ranges[val0] = (-1.1, 1.2)
+        else:
+            df = data[data['experiment'] == val0]
+            delta = df['rate'].max() - df['rate'].min()
+            axes_ranges[val0] = round(10*(df['rate'].min() - 0.1*delta))/10, round(10*(df['rate'].max() + 0.1*delta))/10
 
     print(f'Axes ranges: {axes_ranges}')
 
@@ -366,18 +376,18 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
 
             if j == 0: # Only set ylabel for the first column panels
                 print(f"  [ROW] Setting ylabel for row [{i},{j}]: {val0} {options.experiment} {panel_keys[0]}")
-                if options.experiment == None:
-                    print("   [ROW] ylabel should be experiment type")
+                if options.experiment == None: # Rows are experiment types
                     # val0 should be experiment name, but if tuple, take first element
                     exp_label = val0[0] if isinstance(val0, tuple) else val0
-                    ax.set_ylabel(f"{exp_label} (s$^{{-1}}$)")
-                else:
+                    print(f"  [ROW] ylabel should be experiment type: {exp_label}")
+                    ax.set_ylabel(f"{exp_label} {get_experiment_unit(exp_label)}")
+                else: # Plotting only one epxeriment type, rows are temp/field and experiment type
                     key = panel_keys[0]
                     print(f"  [ROW] ylabel should be {key} value")
                     if key == 'temp': title = f"{val0} {options.tempunit_string}"
                     elif key == 'field_MHz': title = f"{val0} MHz"
                     else: title = f"{val0}"
-                    ax.set_ylabel(f"{title}" + (f"\n{options.experiment} (s$^{{-1}}$)" if options.experiment else ""))
+                    ax.set_ylabel(f"{title}" + (f"\n{options.experiment} {get_experiment_unit(options.experiment)}" if options.experiment else ""))
             
             if i == nrows - 1:
                 if protein_name:
@@ -398,6 +408,9 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
     # Legend in top-right
     ax = axes[0, -1]
     ax.legend(handles=legend_handles)
+
+    print(f"X-axis range: {ax.get_xlim()}")
+
     plt.tight_layout()
     plt.show()
 
