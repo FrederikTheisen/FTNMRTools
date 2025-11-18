@@ -115,15 +115,18 @@ def calcChemicalShift(peaks, weigting = True):
     debug_print(' '.join(shifts))
 
     if not weigting:
+        cs_e = 0
         for peak in peaks:
             cs += peak['val']
             cs_n += 1
-        cs = cs / cs_n
 
-        ss = 0
-        for peak in peaks:
-            ss += (peak['val'] - cs)**2
-        cs_e = math.sqrt(ss) / cs_n
+        if cs_n > 1:
+            cs = cs / cs_n
+
+            ss = 0
+            for peak in peaks:
+                ss += (peak['val'] - cs)**2
+            cs_e = math.sqrt(ss) / cs_n
 
     else:
         w = 0
