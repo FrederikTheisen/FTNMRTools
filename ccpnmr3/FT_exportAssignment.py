@@ -311,7 +311,7 @@ def exportTALOSFormat(data, outFilePath):
 
     with open(outFilePath, 'w') as f:
         f.write(f'REMARK CCPNMR {NMRCHAIN}:{ASSIGNMENT_SPECTRA_COLLECTION} Chemical Shift Table Export\n\n')
-        f.write("DATA FIRST_RESID 1\n\n")
+        f.write(f'DATA FIRST_RESID {sorted(data.keys())[0]}\n\n')
 
         # Write the sequence in 10-letter blocks
         f.write("DATA SEQUENCE ")
