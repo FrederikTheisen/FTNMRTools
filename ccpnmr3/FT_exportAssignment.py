@@ -307,7 +307,7 @@ def exportTALOSFormat(data, outFilePath):
         sequence.append(one_letter)
         
         for atm in rdat['atoms']:
-            residues_with_shifts.append((resnum, one_letter, ccp2talos[atm], rdat['atoms'][atm]['cs']))
+            if rdat['atoms'][atm]['n'] > 0: residues_with_shifts.append((resnum, one_letter, ccp2talos[atm], rdat['atoms'][atm]['cs']))
 
     with open(outFilePath, 'w') as f:
         f.write(f'REMARK CCPNMR {NMRCHAIN}:{ASSIGNMENT_SPECTRA_COLLECTION} Chemical Shift Table Export\n\n')
