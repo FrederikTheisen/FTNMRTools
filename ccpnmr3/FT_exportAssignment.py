@@ -115,15 +115,18 @@ def calcChemicalShift(peaks, weigting = True):
     debug_print(' '.join(shifts))
 
     if not weigting:
+        cs_e = 0
         for peak in peaks:
             cs += peak['val']
             cs_n += 1
-        cs = cs / cs_n
 
-        ss = 0
-        for peak in peaks:
-            ss += (peak['val'] - cs)**2
-        cs_e = math.sqrt(ss) / cs_n
+        if cs_n > 1:
+            cs = cs / cs_n
+
+            ss = 0
+            for peak in peaks:
+                ss += (peak['val'] - cs)**2
+            cs_e = math.sqrt(ss) / cs_n
 
     else:
         w = 0
@@ -304,11 +307,11 @@ def exportTALOSFormat(data, outFilePath):
         sequence.append(one_letter)
         
         for atm in rdat['atoms']:
-            residues_with_shifts.append((resnum, one_letter, ccp2talos[atm], rdat['atoms'][atm]['cs']))
+            if rdat['atoms'][atm]['n'] > 0: residues_with_shifts.append((resnum, one_letter, ccp2talos[atm], rdat['atoms'][atm]['cs']))
 
     with open(outFilePath, 'w') as f:
         f.write(f'REMARK CCPNMR {NMRCHAIN}:{ASSIGNMENT_SPECTRA_COLLECTION} Chemical Shift Table Export\n\n')
-        f.write("DATA FIRST_RESID 1\n\n")
+        f.write(f'DATA FIRST_RESID {sorted(data.keys())[0]}\n\n')
 
         # Write the sequence in 10-letter blocks
         f.write("DATA SEQUENCE ")
