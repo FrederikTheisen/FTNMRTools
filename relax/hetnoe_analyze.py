@@ -8,8 +8,7 @@ from collections import defaultdict
 def to_bool(s):
     if s is None:
         return False
-    s = s.strip().lower()
-    return s in ("1", "true", "t", "yes", "y")
+    return s.strip() == "True"
 
 int_re = re.compile(r'(\d+)')
 
@@ -29,8 +28,12 @@ def parse_sparky_list(path):
     """
     data = {}
     with open(path, 'r', encoding='utf-8') as f:
+        print(f"# Parsing Sparky list: {path}")
+        idx_int = 3
         for ln in f:
             line = ln.strip()
+            if 'intensity' in line:
+                idx_int = line.split().index('intensity')
             if not line or line.startswith('#'):
                 continue
             parts = line.split()
@@ -41,9 +44,9 @@ def parse_sparky_list(path):
             try:
                 w1 = float(parts[1])
                 w2 = float(parts[2])
-                intensity = float(parts[3])
+                intensity = float(parts[idx_int])
             except ValueError:
-                # header or malformed -> skip
+                print(f'LINE ERROR: {line}')
                 continue
             overlap_bool = False
             overlap_info = ""
@@ -101,33 +104,30 @@ def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
     sigma_R = abs(sigma / B_ref) * math.sqrt(1.0 + R*R)
     return (R, sigma_R)
 
-def write_out(path, rows):
+def write_out(path, rows, simple=True):
     """
     rows: list of dicts with keys:
       resid, I_ref, I_noe, ratio, ratio_sigma, overlap_ref, overlap_noe
     """
     with open(path, 'w', encoding='utf-8') as out:
-        out.write("# resid  I_ref  I_noe  ratio(NOe/Ref)  sigma_ratio  overlap_ref  overlap_noe\n")
+        if not simple: out.write("resid I_ref I_noe ratio error overlap_ref overlap_noe\n")
         for r in sorted(rows, key=lambda x: x["resid"]):
-            out.write(f'{r["resid"]:>5d}  '
-                      f'{r["I_ref"]: .6g}  {r["I_noe"]: .6g}  '
-                      f'{r["ratio"]: .6g}  {r["ratio_sigma"]: .6g}  '
-                      f'{int(r["overlap_ref"])}  {int(r["overlap_noe"])}\n')
+            if not simple: out.write(f'{r["resid"]:d} {r["I_ref"]:.5f} {r["I_noe"]: .6g} {r["ratio"]: .6g} {r["error"]: .6g} {int(r["overlap_ref"])} {int(r["overlap_noe"])}\n')
+            else: out.write(f'{r["resid"]:d} {r["ratio"]:.5f} {r["error"]:.5f}\n')
+
 
 def main():
     ap = argparse.ArgumentParser(description="Compute HetNOE intensity ratios (NOE/REF) from two Sparky peak lists.")
-    ap.add_argument("ref_list", help="Reference (noe OFF) Sparky .list file (used for output naming).")
-    ap.add_argument("noe_list", help="NOE (noe ON) Sparky .list file.")
-    ap.add_argument("--noise", type=float, required=True,
-                    help="Noise SD to use for both spectra (same sigma for REF and NOE).")
-    ap.add_argument("--abs", dest="use_abs", action="store_true",
-                    help="Use absolute intensities when making ratios (default: off).")
+    ap.add_argument("-ref", help="Reference (noe OFF) Sparky .list file (used for output naming).", required=True)
+    ap.add_argument("-noe", help="NOE (noe ON) Sparky .list file.", required=True)
+    ap.add_argument("-noise", type=float, required=False,
+                    help="Noise SD to use for both spectra (same sigma for REF and NOE).", default=0.0)
     ap.add_argument("--allow-zero-ref", action="store_true",
                     help="If REF intensity is zero, use a tiny epsilon instead of returning NaN.")
     args = ap.parse_args()
 
-    ref = parse_sparky_list(args.ref_list)
-    noe = parse_sparky_list(args.noe_list)
+    ref = parse_sparky_list(args.ref)
+    noe = parse_sparky_list(args.noe)
 
     # Intersect residues (they're expected to match; we enforce intersection)
     common = sorted(set(ref.keys()) & set(noe.keys()))
@@ -141,21 +141,17 @@ def main():
     for resid in common:
         I_ref = ref[resid]["intensity"]
         I_noe = noe[resid]["intensity"]
-        if args.use_abs:
-            A = abs(I_noe)
-            B = abs(I_ref)
-        else:
-            A = I_noe
-            B = I_ref
 
-        ratio, sigma_ratio = compute_ratio_and_error(A, B, args.noise, allow_zero_ref=args.allow_zero_ref)
+        ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, args.noise, allow_zero_ref=args.allow_zero_ref)
+
+        print(ratio,sigma_ratio)
 
         row = {
             "resid": resid,
             "I_ref": I_ref,
             "I_noe": I_noe,
             "ratio": ratio,
-            "ratio_sigma": sigma_ratio,
+            "error": sigma_ratio,
             "overlap_ref": ref[resid]["overlap"],
             "overlap_noe": noe[resid]["overlap"]
         }
@@ -163,7 +159,7 @@ def main():
         if (not ref[resid]["overlap"]) and (not noe[resid]["overlap"]):
             rows_filtered.append(row)
 
-    out_prefix = build_output_prefix_from_ref(args.ref_list)
+    out_prefix = build_output_prefix_from_ref(args.ref)
     out_all = Path(f"{out_prefix}_results.out")
     out_filtered = Path(f"{out_prefix}_results_filtered.out")
 
