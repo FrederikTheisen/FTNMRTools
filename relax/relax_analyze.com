@@ -14,7 +14,15 @@ set DATA_FILE = ./m.ft3
 set DATA_FMT = nmrpipe
 
 # The kind of relaxation data.
-set DATA_TYPE = r2 #r1, r2, noe
+set DATA_TYPE = r1 #r1, r2, noe
+
+# Add parent folder line to the top of all final output text files.
+set CWD = `pwd`
+set CWD_PARENT = `basename "$CWD"`
+set CWD = `dirname "$CWD"`
+set CWD_PARENT_PARENT = `basename "$CWD"`
+set RUN_TAG = "${CWD_PARENT_PARENT}/${CWD_PARENT}"
+echo $RUN_TAG
 
 
 echo '#################'
@@ -59,12 +67,14 @@ cat $RLX_DFIT_HEADER $DATA_XTR_OUT > $RLX_DFIT_IN
 
 # Branch out according to data type.
 if ($DATA_TYPE == 'r1') then
+   set plot_max = 2.0
    rlx_dfit  -mode exp2 -rms_noise \
       -data $RLX_DFIT_IN \
       -d_esd $RLX_DFIT_ESD \
       -r_init  1.0 \
       -out $RLX_DFIT_OUT
 else if ($DATA_TYPE == 'r2') then
+   set plot_max = 0.3
    rlx_dfit  -mode exp2 -rms_noise \
       -data $RLX_DFIT_IN \
       -d_esd $RLX_DFIT_ESD \
@@ -166,7 +176,11 @@ while ( $i <= $n_res )
     set overlap_state = `grep -w "^$label" overlap_map.tmp | awk '{print $2}'`
 
     if ( "$overlap_state" == "True" ) then 
-    set label = "$label*" 
+    	set label = "$label*"
+    else if ( "$overlap_state" == "False") then
+    	set label = "$label"
+    else 
+    	set label = "###$label###"
     endif
     
     unset noglob
@@ -200,7 +214,7 @@ while ( $i <= $n_res )
     echo "a=1" >> plot.gnu
     echo "b=4" >> plot.gnu
     echo "fit f(x) 'intensity.out' index $idx using 1:2 via a, b" >> plot.gnu
-    echo "plot [0:2.0] [-0.2:1.2] 'intensity.out' index $idx using 1:2 pt 7 t '$label', f(x) lw 3" >> plot.gnu
+    echo "plot [0: $plot_max] [-0.1:1.1] 'intensity.out' index $idx using 1:2 pt 7 t '$label', f(x) lw 3" >> plot.gnu
 
     @ i = $i + 1
 end
@@ -215,6 +229,20 @@ echo 'Done'
 
 /usr/bin/gnuplot plot.gnu
 
+# Prepend provenance tag to final output text files
+set FINAL_OUTFILES = ( \
+    "${DATA_OUT}_results.out" \
+    "${DATA_OUT}_results_peak_overlap.out" \
+    "${DATA_OUT}_results_filtered.out" \
+    "intensity.out" \
+    "plot.gnu" \
+)
+
+foreach f ($FINAL_OUTFILES)
+    if (-e $f) then
+        (echo "# $RUN_TAG"; cat $f) >! ${f}.tmp_header
+        mv -f ${f}.tmp_header $f
+    endif
+end
+
 rm *.tmp
-
-
