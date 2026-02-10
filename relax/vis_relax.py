@@ -426,12 +426,22 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
                     elif key == 'field_MHz': title = f"{val0} MHz"
                     else: title = f"{val0}"
                     ax.set_ylabel(f"{title}" + (f"\n{options.experiment} {get_experiment_unit(options.experiment)}" if options.experiment else ""))
+            else:
+                # Keep only first-column y labels/tick labels for a tighter multi-panel layout
+                ax.set_ylabel('')
+                ax.tick_params(axis='y', labelleft=False)
             
             if i == nrows - 1:
                 if protein_name:
                     ax.set_xlabel(f"{protein_name} Residue Number")
                 else:
                     ax.set_xlabel('Residue Number')
+            else:
+                # Keep x labels/tick labels only on the bottom row
+                ax.set_xlabel('')
+                ax.tick_params(axis='x', labelbottom=False)
+
+            ax.grid(True, which='both', linestyle='--', linewidth=0.5)
         
         print(f"Finished processing panel row {i+1}/{nrows}")
         print()
@@ -443,13 +453,20 @@ def plot_grid_panels(data, panel_keys, series_keys, options: PlotOptions):
             if i >= len(panel_vals[0]) or (ncols > 1 and j >= len(panel_vals[1])):
                 axes[i, j].axis('off')
 
-    # Legend in top-right
-    ax = axes[0, -1]
-    ax.legend(handles=legend_handles)
+    # Use fixed figure margins and fixed legend placement for predictable spacing.
+    fig.subplots_adjust(left=0.08, right=0.98, bottom=0.08, top=0.96, wspace=0.08, hspace=0.10)
+    if legend_handles:
+        ax = axes[0,-1]
+        ax.legend(handles = legend_handles)
+        #fig.legend(
+        ##    handles=legend_handles,
+        #    labels=legend_labels,
+        #    loc='center left',
+        ##    bbox_to_anchor=(0.84, 0.5),
+        #    frameon=False
+        #)
 
-    print(f"X-axis range: {ax.get_xlim()}")
-
-    plt.tight_layout()
+    print(f"X-axis range: {axes[0, 0].get_xlim()}")
     if options.save and options.save_path:
         save_fname = f"{fig_title}.pdf"
         save_path = os.path.join(options.save_path, save_fname)
