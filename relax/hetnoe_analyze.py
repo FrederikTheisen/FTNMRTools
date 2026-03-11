@@ -50,8 +50,8 @@ def parse_sparky_list(path):
                 continue
             overlap_bool = False
             overlap_info = ""
-            if len(parts) >= 5:
-                overlap_bool = to_bool(parts[4])
+            if len(parts) > idx_int:
+                overlap_bool = to_bool(parts[idx_int+1])
             if len(parts) >= 6:
                 overlap_info = " ".join(parts[5:])
 
@@ -92,7 +92,8 @@ def build_output_prefix_from_ref(ref_file):
 
 def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
     """
-    R = A/B; sigma_R = sqrt((sigma/B)^2 + (A*sigma/B^2)^2)
+    R = A/B
+    sigma_R = sqrt((sigma/B)^2 + (A*sigma/B^2)^2)
     If B ~ 0, return (nan, nan) unless allow_zero_ref=True (then tiny epsilon guard).
     """
     if B_ref == 0.0:
