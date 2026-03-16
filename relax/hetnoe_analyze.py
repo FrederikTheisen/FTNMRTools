@@ -30,10 +30,13 @@ def parse_sparky_list(path):
     with open(path, 'r', encoding='utf-8') as f:
         print(f"# Parsing Sparky list: {path}")
         idx_int = 3
+        idx_overlap = 4
         for ln in f:
             line = ln.strip()
             if 'intensity' in line:
                 idx_int = line.split().index('intensity')
+            if 'overlap' in line:
+                idx_overlap = line.split().index('overlap')
             if not line or line.startswith('#'):
                 continue
             parts = line.split()
@@ -50,10 +53,10 @@ def parse_sparky_list(path):
                 continue
             overlap_bool = False
             overlap_info = ""
-            if len(parts) > idx_int:
-                overlap_bool = to_bool(parts[idx_int+1])
-            if len(parts) >= 6:
-                overlap_info = " ".join(parts[5:])
+            if len(parts) > idx_overlap:
+                overlap_bool = to_bool(parts[idx_overlap])
+            if len(parts) > idx_overlap:
+                overlap_info = " ".join(parts[idx_overlap:])
 
             try:
                 resid = residue_from_assignment(assignment)
@@ -145,7 +148,8 @@ def main():
 
         ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, args.noise, allow_zero_ref=args.allow_zero_ref)
 
-        print(ratio,sigma_ratio)
+        overlap_note = "overlap" if ref[resid]["overlap"] or noe[resid]["overlap"] else ""
+        print(f"""{resid}\t{ratio:+.2f} ± {sigma_ratio:.2f} {overlap_note}""")
 
         row = {
             "resid": resid,
