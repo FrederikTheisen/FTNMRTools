@@ -8,37 +8,96 @@ from pathlib import Path
 from collections import defaultdict
 
 def read_peak_file(path):
-    """Return unchanged table bytes and optional metadata from the comment footer."""
+    """Read compact comments or a legacy JSON footer, preserving table bytes."""
     data = Path(path).read_bytes()
     begin = b'# CCPN_METADATA_BEGIN\n'
-    if begin not in data:
-        if b'CCPN_METADATA_BEGIN' in data or b'CCPN_METADATA_END' in data:
-            raise ValueError(f'{path}: malformed metadata footer')
+    if begin in data:
+        if data.count(begin) != 1:
+            raise ValueError(f'{path}: multiple metadata blocks')
+        table, footer = data.split(begin, 1)
+        lines = footer.decode('utf-8').splitlines()
+        if not table.endswith(b'\n') or not lines or lines[-1] != '# CCPN_METADATA_END':
+            raise ValueError(f'{path}: incomplete metadata footer')
+        if not all(line.startswith('# ') for line in lines[:-1]):
+            raise ValueError(f'{path}: invalid metadata comment line')
+        return table, json.loads('\n'.join(line[2:] for line in lines[:-1]))
+    if b'CCPN_METADATA_BEGIN' in data or b'CCPN_METADATA_END' in data:
+        raise ValueError(f'{path}: malformed metadata footer')
+
+    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region'}
+    fields = {}
+    table_lines = []
+    in_footer = False
+    for line in data.splitlines(keepends=True):
+        if line.lstrip().startswith(b'#'):
+            key, separator, value = line.lstrip()[1:].decode('utf-8').strip().partition(':')
+            if separator and key in names:
+                in_footer = True
+                if key in fields:
+                    raise ValueError(f'{path}: duplicate metadata field {key}')
+                fields[key] = value.strip()
+                continue
+        if in_footer:
+            if line.strip() and not line.lstrip().startswith(b'#'):
+                raise ValueError(f'{path}: peak rows must precede metadata')
+        else:
+            table_lines.append(line)
+    if not fields:
         return data, None
-    if data.count(begin) != 1:
-        raise ValueError(f'{path}: multiple metadata blocks')
-    table, footer = data.split(begin, 1)
-    lines = footer.decode('utf-8').splitlines()
-    if not table.endswith(b'\n') or not lines or lines[-1] != '# CCPN_METADATA_END':
-        raise ValueError(f'{path}: incomplete metadata footer')
-    if not all(line.startswith('# ') for line in lines[:-1]):
-        raise ValueError(f'{path}: invalid metadata comment line')
-    metadata = json.loads('\n'.join(line[2:] for line in lines[:-1]))
-    return table, metadata
+    if not {'noise_sd', 'noise_method', 'spectrum_scale'}.issubset(fields):
+        raise ValueError(f'{path}: incomplete compact noise metadata')
+    sigma, scale = float(fields['noise_sd']), float(fields['spectrum_scale'])
+    if not math.isfinite(sigma) or sigma <= 0:
+        raise ValueError(f'{path}: noise SD must be positive and finite')
+    if not math.isfinite(scale) or scale == 0:
+        raise ValueError(f'{path}: spectrum scale must be finite and nonzero')
+    if not fields['noise_method']:
+        raise ValueError(f'{path}: noise method is missing')
+    noise = {'status': 'estimated', 'noise_sigma': sigma, 'method': fields['noise_method']}
+    if 'noise_region' in fields:
+        region = json.loads(fields['noise_region'])
+        if not isinstance(region, dict) or not region:
+            raise ValueError(f'{path}: noise_region must contain axis bounds')
+        for bounds in region.values():
+            if (not isinstance(bounds, list) or len(bounds) != 2 or
+                    not all(isinstance(value, (int, float)) and math.isfinite(value) for value in bounds) or
+                    bounds[0] >= bounds[1]):
+                raise ValueError(f'{path}: invalid noise_region bounds')
+        noise['region_ppm'] = region
+    # This internal representation keeps analysis code independent of file format.
+    # No schema, status or other bookkeeping is written to compact peak lists.
+    return b''.join(table_lines), {'schema': 'ccpn_peak_export_metadata', 'schema_version': 3,
+                                  'spectrum_scale': scale, 'noise': noise}
+
+
+def read_noise_metadata(path):
+    table, metadata = read_peak_file(path)
+    if metadata is None:
+        sidecar = Path(str(path) + '.metadata.json')
+        if not sidecar.is_file():
+            return None
+        metadata = json.loads(sidecar.read_text())
+    version = metadata.get('schema_version')
+    if metadata.get('schema') != 'ccpn_peak_export_metadata' or version not in (1, 2, 3):
+        raise ValueError(f'{path}: unsupported noise metadata schema')
+    if version in (1, 2):
+        payload = Path(path).read_bytes() if version == 1 else table
+        key = 'export_sha256' if version == 1 else 'peak_table_sha256'
+        if hashlib.sha256(payload).hexdigest() != metadata.get(key):
+            raise ValueError(f'{path}: peak-table hash mismatch; re-export before using noise metadata')
+    sigma = float(metadata['noise']['noise_sigma'])
+    if metadata['noise'].get('status') != 'estimated' or not math.isfinite(sigma) or sigma <= 0:
+        raise ValueError(f'{path}: invalid noise SD')
+    if 'spectrum_scale' in metadata:
+        scale = float(metadata['spectrum_scale'])
+        if not math.isfinite(scale) or scale == 0:
+            raise ValueError(f'{path}: invalid spectrum scale')
+    return metadata
 
 
 def read_embedded_noise_sigma(path):
-    table, metadata = read_peak_file(path)
-    if metadata is None:
-        return None
-    if metadata.get('schema') != 'ccpn_peak_export_metadata' or metadata.get('schema_version') != 2:
-        raise ValueError(f'{path}: unsupported embedded metadata schema')
-    if hashlib.sha256(table).hexdigest() != metadata.get('peak_table_sha256'):
-        raise ValueError(f'{path}: peak-table hash mismatch; re-export before using noise metadata')
-    sigma = float(metadata['noise']['noise_sigma'])
-    if metadata['noise'].get('status') != 'estimated' or not math.isfinite(sigma) or sigma <= 0:
-        raise ValueError(f'{path}: invalid embedded noise SD')
-    return sigma
+    metadata = read_noise_metadata(path)
+    return None if metadata is None else float(metadata['noise']['noise_sigma'])
 
 def to_bool(s):
     if s is None:
@@ -164,7 +223,7 @@ def main():
     ap.add_argument("-ref", help="Reference (noe OFF) Sparky .list file (used for output naming).", required=True)
     ap.add_argument("-noe", help="NOE (noe ON) Sparky .list file.", required=True)
     ap.add_argument("-noise", type=float, required=False,
-                    help="Override noise SD for both spectra; otherwise read embedded noise metadata when present.", default=None)
+                    help="Override noise SD for both spectra; otherwise read compact or legacy noise metadata when present.", default=None)
     ap.add_argument("--allow-zero-ref", action="store_true",
                     help="If REF intensity is zero, use a tiny epsilon instead of returning NaN.")
     args = ap.parse_args()
@@ -177,10 +236,16 @@ def main():
             ap.error('-noise must be finite and nonnegative')
         sigma_ref = sigma_noe = args.noise
     else:
-        sigma_ref = read_embedded_noise_sigma(args.ref)
-        sigma_noe = read_embedded_noise_sigma(args.noe)
+        ref_metadata = read_noise_metadata(args.ref)
+        noe_metadata = read_noise_metadata(args.noe)
+        sigma_ref = None if ref_metadata is None else float(ref_metadata['noise']['noise_sigma'])
+        sigma_noe = None if noe_metadata is None else float(noe_metadata['noise']['noise_sigma'])
+        if (ref_metadata is not None and noe_metadata is not None and
+                'spectrum_scale' in ref_metadata and 'spectrum_scale' in noe_metadata and
+                not math.isclose(float(ref_metadata['spectrum_scale']), float(noe_metadata['spectrum_scale']), rel_tol=1e-12)):
+            ap.error('Reference and NOE spectrum scales differ; review relative normalization')
         if (sigma_ref is None) != (sigma_noe is None):
-            ap.error('Both lists need embedded noise metadata, or supply -noise explicitly')
+            ap.error('Both lists need noise metadata, or supply -noise explicitly')
         if sigma_ref is None:
             sigma_ref = sigma_noe = 0.0  # Preserve legacy plain-list behaviour.
     print(f"# Noise SD: REF={sigma_ref:g}; NOE={sigma_noe:g} (independent noise-only errors)")

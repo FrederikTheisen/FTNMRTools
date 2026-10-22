@@ -32,9 +32,7 @@ OVERLAP_DISTANCE_THRESHOLD = 0.02
 ATOM_CS_WEIGHTS = {'H':1, 'N':0.154, 'C':0.3}
 
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
-import hashlib
 import io
 import json
 import os
@@ -235,27 +233,23 @@ def estimate_spectrum_noise(spectrum):
                         "For nD data this is pooled spectrum noise, not a separate estimate per plane."],
     }
 
+def format_noise_metadata(noise, spectrum_scale):
+    """Return only reader-facing noise fields, in exported intensity units."""
+    sigma, scale = float(noise['noise_sigma']), float(spectrum_scale)
+    if not np.isfinite(sigma) or sigma <= 0 or not np.isfinite(scale) or scale == 0:
+        raise ValueError('Noise SD and spectrum scale must be finite and nonzero; SD must be positive')
+    lines = [f'# noise_sd: {sigma!r}', '# noise_method: MAD', f'# spectrum_scale: {scale!r}']
+    if NOISE_REGION is not None:
+        lines.append('# noise_region: ' + json.dumps(NOISE_REGION, separators=(',', ':'), allow_nan=False))
+    return '\n'.join(lines) + '\n'
+
+
 def write_peak_export(peakList, noise, table_text):
-    """Write the peak table and a commented JSON footer as one atomic file."""
+    """Write the peak table and compact noise comments as one atomic file."""
     output = Path(OUTPUTPATH).expanduser().absolute()
     content = table_text
     if noise is not None:
-        spectrum = peakList.spectrum
-        metadata = {
-            "schema": "ccpn_peak_export_metadata", "schema_version": 2,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "export_file": output.name,
-            "peak_table_sha256": hashlib.sha256(table_text.encode('utf-8')).hexdigest(),
-            "peak_list_pid": peakList.pid, "peak_count": len(peakList.peaks),
-            "spectrum_pid": spectrum.pid, "spectrum_path": str(spectrum.filePath),
-            "spectrum_scale": float(spectrum.scale),
-            "axis_codes": list(spectrum.axisCodes), "point_counts": list(spectrum.pointCounts),
-            "heights_recalculated_at_positions": bool(RECALCULATE_HEIGHTS),
-            "height_sampling": "CCPN spectrum.getHeight(peak.position)" if RECALCULATE_HEIGHTS else "stored peak.height",
-            "noise": noise,
-        }
-        comment = '\n'.join('# ' + line for line in json.dumps(metadata, indent=2, allow_nan=False).splitlines())
-        content += '# CCPN_METADATA_BEGIN\n' + comment + '\n# CCPN_METADATA_END\n'
+        content += format_noise_metadata(noise, peakList.spectrum.scale)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=output.parent,
