@@ -23,9 +23,8 @@ Higher-dimensional noise is pooled, rather than estimated separately per plane.
 hetnoe_analyze.py reads each spectrum's noise SD automatically and propagates
 independent REF and NOE errors. Automatic metadata use requires matching
 spectrum scales. The existing -noise option overrides both with a shared SD.
-Legacy JSON footers and sidecars remain readable and their hashes are checked.
-For plain files with neither metadata nor -noise, the old zero-noise default
-remains. Incomplete or invalid compact metadata stops automatic use.
+For plain files with neither metadata nor -noise, the zero-noise default
+applies. Incomplete or invalid compact metadata stops automatic use.
 
 relax_analyze.com strips comment lines for data_xtr and its overlap map;
 per-plane vEstNoise.txt inputs remain in use for relaxation fits. Importers
