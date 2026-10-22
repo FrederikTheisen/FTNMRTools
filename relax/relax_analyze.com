@@ -50,11 +50,18 @@ set DATA_OUT = $DATA_NAME[1]
 #################################################################
 
 echo 'Extracting data from spectrum...'
+# Strip comment metadata before passing the table to legacy data_xtr.
+set CLEAN_PEAKS = `mktemp /tmp/ftnmr_peaks.XXXXXX`
+if ($status != 0) exit 1
+awk '/^[[:space:]]*#/ {next} {print}' $SPARKY_PEAKS >! "$CLEAN_PEAKS"
 data_xtr   -data  $DATA_FILE \
      -dfmt  $DATA_FMT \
-     -peak  $SPARKY_PEAKS \
+     -peak  "$CLEAN_PEAKS" \
      -pfmt  $PEAK_FMT \
      >  $DATA_XTR_OUT
+set EXTRACTION_STATUS = $status
+rm -f "$CLEAN_PEAKS"
+if ($EXTRACTION_STATUS != 0) exit $EXTRACTION_STATUS
 
 #echo  'Sort the output.'
 #sort $DATA_XTR_OUT > $DATA_XTR_SORT_OUT
@@ -121,7 +128,7 @@ awk '{ match($1, /[A-Z]([0-9]+)[A-Z]-/, arr); print arr[1], $2, $3 }' pre_result
 set idx = -1
 set idx = `awk 'NR == 1 {for(i=1;i<=NF;i++) { if($i=="overlap") { print i } } }' $SPARKY_PEAKS`
 echo 'overlap column idx: '$idx
-awk 'NR > 1 {print $1, $'$idx'}' $SPARKY_PEAKS > overlap_map.tmp
+awk '/^[[:space:]]*#/ {next} NR > 1 {print $1, $'$idx'}' $SPARKY_PEAKS > overlap_map.tmp
 
 # Make second results file with overlapping peaks data
 awk 'FNR==NR {keep[FNR]=$2; next} keep[FNR]=="True"' overlap_map.tmp "${DATA_OUT}_results.out" > "${DATA_OUT}_results_peak_overlap.out"

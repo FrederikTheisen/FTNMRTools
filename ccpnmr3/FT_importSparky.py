@@ -107,7 +107,7 @@ def read_sparky_file(filepath):
         
         # Process each line
         for line in f:
-            if not line.strip():
+            if not line.strip() or line.lstrip().startswith('#'):
                 continue
             
             parts = line.split()

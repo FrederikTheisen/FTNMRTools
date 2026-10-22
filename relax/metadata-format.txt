@@ -1,0 +1,37 @@
+Embedded peak-list metadata
+
+The first line remains the usual tab-separated column header. Peak rows keep
+the same columns and positions. Noise metadata follows the final peak as:
+
+# CCPN_METADATA_BEGIN
+# {
+#   "schema": "ccpn_peak_export_metadata",
+#   "schema_version": 2,
+#   "peak_table_sha256": "SHA-256 of all bytes before the begin marker",
+#   "noise": {"status": "estimated", "noise_sigma": 1234.5}
+# }
+# CCPN_METADATA_END
+
+The exporter includes the complete noise method, sampling region, units,
+spectrum scale and source path, peak-list PID, counts and timestamp.
+All metadata lines are comments. No separate metadata file is written.
+The peak-table hash excludes the footer to avoid a self-referential checksum.
+
+hetnoe_analyze.py automatically reads each file's embedded noise SD and uses
+independent REF and NOE SDs for approximate noise-only ratio errors.
+The existing -noise option overrides both with a common SD. Legacy plain
+lists remain readable; if neither has metadata the historical default is zero
+noise. If only one list has metadata, supply -noise or re-export both.
+Malformed metadata or a changed peak-table hash stops automatic noise use.
+
+relax_analyze.com strips comment lines into a temporary table for data_xtr
+and excludes comments when constructing its overlap map. Existing per-plane
+vEstNoise.txt inputs remain in use for relaxation fits.
+FT_importSparky.py ignores comment lines during peak import.
+Other peak-list readers must also ignore comment lines beginning with #.
+
+The existing hetnoe_analyze.py duplicate-residue policy is unchanged: it keeps
+the row with the largest absolute intensity for each residue. This is separate
+from the ANP32A 85-row analysis, which retains both E174 assignments.
+Background-grid noise is an approximate height-uncertainty proxy; overlap,
+placement and systematic uncertainty are not included.

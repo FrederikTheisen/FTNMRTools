@@ -1,9 +1,44 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
+import json
 import math
 import re
 from pathlib import Path
 from collections import defaultdict
+
+def read_peak_file(path):
+    """Return unchanged table bytes and optional metadata from the comment footer."""
+    data = Path(path).read_bytes()
+    begin = b'# CCPN_METADATA_BEGIN\n'
+    if begin not in data:
+        if b'CCPN_METADATA_BEGIN' in data or b'CCPN_METADATA_END' in data:
+            raise ValueError(f'{path}: malformed metadata footer')
+        return data, None
+    if data.count(begin) != 1:
+        raise ValueError(f'{path}: multiple metadata blocks')
+    table, footer = data.split(begin, 1)
+    lines = footer.decode('utf-8').splitlines()
+    if not table.endswith(b'\n') or not lines or lines[-1] != '# CCPN_METADATA_END':
+        raise ValueError(f'{path}: incomplete metadata footer')
+    if not all(line.startswith('# ') for line in lines[:-1]):
+        raise ValueError(f'{path}: invalid metadata comment line')
+    metadata = json.loads('\n'.join(line[2:] for line in lines[:-1]))
+    return table, metadata
+
+
+def read_embedded_noise_sigma(path):
+    table, metadata = read_peak_file(path)
+    if metadata is None:
+        return None
+    if metadata.get('schema') != 'ccpn_peak_export_metadata' or metadata.get('schema_version') != 2:
+        raise ValueError(f'{path}: unsupported embedded metadata schema')
+    if hashlib.sha256(table).hexdigest() != metadata.get('peak_table_sha256'):
+        raise ValueError(f'{path}: peak-table hash mismatch; re-export before using noise metadata')
+    sigma = float(metadata['noise']['noise_sigma'])
+    if metadata['noise'].get('status') != 'estimated' or not math.isfinite(sigma) or sigma <= 0:
+        raise ValueError(f'{path}: invalid embedded noise SD')
+    return sigma
 
 def to_bool(s):
     if s is None:
@@ -33,13 +68,15 @@ def parse_sparky_list(path):
         idx_overlap = 4
         for ln in f:
             line = ln.strip()
-            if 'intensity' in line:
-                idx_int = line.split().index('intensity')
-            if 'overlap' in line:
-                idx_overlap = line.split().index('overlap')
             if not line or line.startswith('#'):
                 continue
             parts = line.split()
+            if parts[0].lower() == 'assignment':
+                if 'intensity' in parts:
+                    idx_int = parts.index('intensity')
+                if 'overlap' in parts:
+                    idx_overlap = parts.index('overlap')
+                continue
             if len(parts) < 4:
                 # skip malformed lines
                 continue
@@ -93,10 +130,11 @@ def build_output_prefix_from_ref(ref_file):
         prefix = Path(ref_file).stem
     return f"{prefix}_HetNOE"
 
-def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
+def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False, sigma_ref=None):
     """
     R = A/B
-    sigma_R = sqrt((sigma/B)^2 + (A*sigma/B^2)^2)
+    sigma_R = sqrt((sigma_NOE/B)^2 + (A*sigma_REF/B^2)^2).
+    sigma is the NOE SD; sigma_ref defaults to the same value for legacy calls.
     If B ~ 0, return (nan, nan) unless allow_zero_ref=True (then tiny epsilon guard).
     """
     if B_ref == 0.0:
@@ -105,7 +143,8 @@ def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
         else:
             return (float('nan'), float('nan'))
     R = A_noe / B_ref
-    sigma_R = abs(sigma / B_ref) * math.sqrt(1.0 + R*R)
+    ref_sd = sigma if sigma_ref is None else sigma_ref
+    sigma_R = math.hypot(sigma / B_ref, R * ref_sd / B_ref)
     return (R, sigma_R)
 
 def write_out(path, rows, simple=True):
@@ -125,13 +164,26 @@ def main():
     ap.add_argument("-ref", help="Reference (noe OFF) Sparky .list file (used for output naming).", required=True)
     ap.add_argument("-noe", help="NOE (noe ON) Sparky .list file.", required=True)
     ap.add_argument("-noise", type=float, required=False,
-                    help="Noise SD to use for both spectra (same sigma for REF and NOE).", default=0.0)
+                    help="Override noise SD for both spectra; otherwise read embedded noise metadata when present.", default=None)
     ap.add_argument("--allow-zero-ref", action="store_true",
                     help="If REF intensity is zero, use a tiny epsilon instead of returning NaN.")
     args = ap.parse_args()
 
     ref = parse_sparky_list(args.ref)
     noe = parse_sparky_list(args.noe)
+
+    if args.noise is not None:
+        if not math.isfinite(args.noise) or args.noise < 0:
+            ap.error('-noise must be finite and nonnegative')
+        sigma_ref = sigma_noe = args.noise
+    else:
+        sigma_ref = read_embedded_noise_sigma(args.ref)
+        sigma_noe = read_embedded_noise_sigma(args.noe)
+        if (sigma_ref is None) != (sigma_noe is None):
+            ap.error('Both lists need embedded noise metadata, or supply -noise explicitly')
+        if sigma_ref is None:
+            sigma_ref = sigma_noe = 0.0  # Preserve legacy plain-list behaviour.
+    print(f"# Noise SD: REF={sigma_ref:g}; NOE={sigma_noe:g} (independent noise-only errors)")
 
     # Intersect residues (they're expected to match; we enforce intersection)
     common = sorted(set(ref.keys()) & set(noe.keys()))
@@ -146,7 +198,7 @@ def main():
         I_ref = ref[resid]["intensity"]
         I_noe = noe[resid]["intensity"]
 
-        ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, args.noise, allow_zero_ref=args.allow_zero_ref)
+        ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, sigma_noe, allow_zero_ref=args.allow_zero_ref, sigma_ref=sigma_ref)
 
         overlap_note = "overlap" if ref[resid]["overlap"] or noe[resid]["overlap"] else ""
         print(f"""{resid}\t{ratio:+.2f} ± {sigma_ratio:.2f} {overlap_note}""")
