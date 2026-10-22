@@ -36,6 +36,7 @@ from pathlib import Path
 import io
 import json
 import os
+import re
 import tempfile
 from ccpn.core.lib.ContextManagers import undoBlockWithoutSideBar, notificationEchoBlocking
 import numpy as np
@@ -233,23 +234,41 @@ def estimate_spectrum_noise(spectrum):
                         "For nD data this is pooled spectrum noise, not a separate estimate per plane."],
     }
 
-def format_noise_metadata(noise, spectrum_scale):
-    """Return only reader-facing noise fields, in exported intensity units."""
+def get_source_folder(spectrum):
+    """Find the acquisition collection, rather than its experiment or pdata number."""
+    path = Path(spectrum.path)
+    # Bruker experiments can hold native pdata or processed NMRPipe files.
+    for directory in (path, *path.parents):
+        if directory.name.isdecimal() and (directory / 'acqus').is_file():
+            return directory.parent.name
+    # Also support processed files moved within a dated collection.
+    for directory in path.parents:
+        if re.match(r'^(?:\d{8}|\d{4}-\d{2}-\d{2})(?:[_-]|$)', directory.name):
+            return directory.name
+    raise ValueError(f'Cannot identify the acquisition collection folder from {path}')
+
+
+def format_noise_metadata(noise, spectrum_scale, source_folder):
+    """Return the source folder and essential noise fields in exported intensity units."""
     sigma, scale = float(noise['noise_sigma']), float(spectrum_scale)
     if not np.isfinite(sigma) or sigma <= 0 or not np.isfinite(scale) or scale == 0:
         raise ValueError('Noise SD and spectrum scale must be finite and nonzero; SD must be positive')
-    lines = [f'# noise_sd: {sigma!r}', '# noise_method: MAD', f'# spectrum_scale: {scale!r}']
+    if (not isinstance(source_folder, str) or not source_folder.strip() or
+            source_folder in ('.', '..') or any(c in source_folder for c in '/\\\r\n\t')):
+        raise ValueError('source_folder must be a single folder name')
+    lines = [f'# noise_sd: {sigma!r}', '# noise_method: MAD', f'# spectrum_scale: {scale!r}',
+             f'# source_folder: {source_folder}']
     if NOISE_REGION is not None:
         lines.append('# noise_region: ' + json.dumps(NOISE_REGION, separators=(',', ':'), allow_nan=False))
     return '\n'.join(lines) + '\n'
 
 
-def write_peak_export(peakList, noise, table_text):
+def write_peak_export(peakList, noise, table_text, source_folder):
     """Write the peak table and compact noise comments as one atomic file."""
     output = Path(OUTPUTPATH).expanduser().absolute()
     content = table_text
     if noise is not None:
-        content += format_noise_metadata(noise, peakList.spectrum.scale)
+        content += format_noise_metadata(noise, peakList.spectrum.scale, source_folder)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=output.parent,
@@ -279,6 +298,7 @@ def runMacro():
         print(f"No peaks found in {PEAKLIST}; nothing exported.")
         return
     noise = estimate_spectrum_noise(peakList.spectrum) if WRITE_NOISE_METADATA else None
+    source_folder = get_source_folder(peakList.spectrum) if noise is not None else None
     if RECALCULATE_HEIGHTS:
         recalculate_heights_at_positions(peakList)
 
@@ -365,7 +385,7 @@ def runMacro():
 
         table_text = f.getvalue()
 
-    write_peak_export(peakList, noise, table_text)
+    write_peak_export(peakList, noise, table_text, source_folder)
 
     print("Sparky peak list exported successfully to:", OUTPUTPATH)
 

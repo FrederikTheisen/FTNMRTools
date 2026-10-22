@@ -9,7 +9,7 @@ from collections import defaultdict
 def read_peak_file(path):
     """Read compact noise comments, preserving the peak table bytes."""
     data = Path(path).read_bytes()
-    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region'}
+    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region', 'source_folder'}
     fields = {}
     table_lines = []
     in_footer = False
@@ -38,6 +38,10 @@ def read_peak_file(path):
         raise ValueError(f'{path}: spectrum scale must be finite and nonzero')
     if not fields['noise_method']:
         raise ValueError(f'{path}: noise method is missing')
+    if 'source_folder' in fields:
+        folder = fields['source_folder']
+        if not folder or folder in ('.', '..') or any(c in folder for c in '/\\\r\n\t'):
+            raise ValueError(f'{path}: source_folder must be a single folder name')
     fields.update(noise_sd=sigma, spectrum_scale=scale)
     if 'noise_region' in fields:
         region = json.loads(fields['noise_region'])
