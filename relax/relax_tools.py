@@ -907,44 +907,51 @@ def write_analysis_csv(path, report):
 
 
 NUMBERS_BASE_FIELDS = [
-    'analysis_id', 'report_version', 'source_collection', 'source_experiment',
-    'experiment_type', 'peak_list', 'fit_model', 'fit_origin', 'dataset_conclusion',
-    'primary_peak_count', 'holm_rejection_count', 'peak_index', 'peak_id', 'assignment',
-    'residue', 'w1', 'w2', 'w3', 'overlap', 'duplicate_assignment', 'valid_fit',
-    'primary_eligible', 'exclusion_reason', 'rate_s-1', 'rate_error_s-1', 'i0', 'i0_error',
-    'chi2_input', 'reduced_chi2_input', 'dof', 'p_holm', 'uncertainty_rescaled',
-    'flags', 'warnings', 'fit_basis', 'selection_reason', 'excluded_shortest_delay_s',
-    'excluded_planes_1based', 'all_points_rate_s-1', 'all_points_error_s-1',
+    'assignment', 'residue', 'rate_s-1', 'rate_error_s-1', 'overlap', 'valid_fit',
+    'peak_id', 'w1', 'w2', 'w3', 'duplicate_assignment', 'i0', 'i0_error',
+    'chi2_input', 'reduced_chi2_input', 'p_holm', 'primary_eligible',
+    'exclusion_reason', 'uncertainty_rescaled', 'flags', 'warnings',
+    'all_points_rate_s-1', 'all_points_error_s-1',
     'without_shortest_rate_s-1', 'without_shortest_error_s-1', 'rate_change_percent']
 
 
 def write_numbers_csv(path, report):
-    """Write one complete analysis row per peak, including every measured plane."""
+    """Write peak values as columns and shared experiment values as # footers."""
     context = report['context']
     mode = context['experiment_type']
     selection = report['selection']
     audit = selection['audit'] if selection is not None else {}
     value_name='noe_ratio' if mode == 'noe' else 'rate_s-1'
     error_name='noe_ratio_error' if mode == 'noe' else 'rate_error_s-1'
+    comparison_fields = {'all_points_rate_s-1', 'all_points_error_s-1',
+                         'without_shortest_rate_s-1', 'without_shortest_error_s-1',
+                         'rate_change_percent'}
+    omitted = set() if audit.get('candidate_attempted') else comparison_fields
+    if mode == 'noe':
+        omitted |= {'i0', 'i0_error', 'chi2_input', 'reduced_chi2_input', 'p_holm',
+                    'primary_eligible', 'exclusion_reason'}
+    shared_coordinates = {}
+    for i in (1, 2, 3):
+        values = {p['coordinates'][i-1] if len(p['coordinates']) >= i else ''
+                  for p in report['rows']}
+        if len(values) == 1:
+            value = values.pop()
+            omitted.add(f'w{i}')
+            if value != '': shared_coordinates[f'w{i}'] = value
     fields = [value_name if f == 'rate_s-1' else error_name if f == 'rate_error_s-1' else f
-              for f in NUMBERS_BASE_FIELDS]
-    fields += [f'plane_{i:02d}_{suffix}' for i in range(1, len(report['times']) + 1)
-               for suffix in ('delay_s', 'intensity', 'noise_sd', 'used_in_fit')]
+              for f in NUMBERS_BASE_FIELDS if f not in omitted]
+    fields += [f'plane_{i:02d}_intensity' for i in range(1, len(report['times']) + 1)]
     base_rows = {row['peak_id']: row for row in analysis_csv_rows(report)
                  if row['plane_index'] == 1}
     with Path(path).open('w', newline='') as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        # Quote text so # inside fitter warnings remains data for CSV readers
+        # configured to ignore the footer comments (for example pandas).
+        writer = csv.DictWriter(handle, fieldnames=fields, quoting=csv.QUOTE_NONNUMERIC)
         writer.writeheader()
-        for peak_index, peak in enumerate(report['rows'], 1):
+        for peak in report['rows']:
             source = base_rows[peak['peak_id']]
             row = dict(
-                analysis_id=context['analysis_id'], report_version=context['report_version'],
-                source_collection=context['source_collection'],
-                source_experiment=context['source_experiment'], experiment_type=mode,
-                peak_list=context['peak_list'], fit_model=context['fit_model'],
-                fit_origin=context['fit_origin'], dataset_conclusion=report['conclusion'],
-                primary_peak_count=report['primary_count'], holm_rejection_count=report['rejected'],
-                peak_index=peak_index, peak_id=peak['peak_id'], assignment=peak['assignment'],
+                peak_id=peak['peak_id'], assignment=peak['assignment'],
                 residue=peak['residue'], w1=peak['coordinates'][0],
                 w2=peak['coordinates'][1] if len(peak['coordinates']) > 1 else '',
                 w3=peak['coordinates'][2] if len(peak['coordinates']) > 2 else '',
@@ -953,13 +960,10 @@ def write_numbers_csv(path, report):
                 exclusion_reason=peak['exclusion_reason'], i0=peak['values'][2] if mode != 'noe' else '',
                 i0_error=peak['values'][3] if mode != 'noe' else '',
                 chi2_input=peak['chi2_input'], reduced_chi2_input=peak['reduced_chi2_input'],
-                dof=peak['dof'], p_holm=peak['p_holm'],
+                p_holm=peak['p_holm'],
                 uncertainty_rescaled='uncertainty_rescaled' in peak['flags'],
-                flags=';'.join(peak['flags']), warnings=peak['warnings'],
-                fit_basis=audit.get('fit_basis', 'all_points'),
-                selection_reason=audit.get('reason', ''),
-                excluded_shortest_delay_s=audit.get('excluded_delay_s', ''),
-                excluded_planes_1based=';'.join(map(str, audit.get('excluded_planes_1based', []))),
+                flags=';'.join(f for f in peak['flags'] if f != 'shortest_delay_excluded'),
+                warnings=peak['warnings'],
                 rate_change_percent=source.get('rate_change_percent', ''))
             row[value_name] = peak['values'][0]
             row[error_name] = peak['values'][1]
@@ -969,12 +973,32 @@ def write_numbers_csv(path, report):
                 row['all_points_error_s-1'] = full['values'][1] if full else ''
                 row['without_shortest_rate_s-1'] = candidate['values'][0] if candidate else ''
                 row['without_shortest_error_s-1'] = candidate['values'][1] if candidate else ''
-            for index, (time, point, used) in enumerate(zip(report['times'], peak['points'], report['used']), 1):
-                row.update({f'plane_{index:02d}_delay_s': time,
-                            f'plane_{index:02d}_intensity': point['intensity'],
-                            f'plane_{index:02d}_noise_sd': point['noise'],
-                            f'plane_{index:02d}_used_in_fit': used})
-            writer.writerow(row)
+            for index, point in enumerate(peak['points'], 1):
+                row[f'plane_{index:02d}_intensity'] = point['intensity']
+            writer.writerow({field: row[field] for field in fields})
+        metadata = dict(source_folder=context['source_collection'],
+                        expno=context['source_experiment'], experiment_type=mode,
+                        peak_list=context['peak_list'], fit_model=context['fit_model'],
+                        fit_origin=context['fit_origin'])
+        if mode != 'noe':
+            metadata.update(fit_basis=audit.get('fit_basis', 'all_points'))
+            if audit:
+                metadata['selection_reason'] = audit['reason']
+                if audit.get('excluded_delay_s') is not None:
+                    metadata['excluded_shortest_delay_s'] = audit['excluded_delay_s']
+            metadata.update(dof=sum(report['used'])-2,
+                            dataset_conclusion=report['conclusion'],
+                            primary_peak_count=report['primary_count'],
+                            holm_rejection_count=report['rejected'])
+        metadata.update(shared_coordinates)
+        metadata['plane_codes' if mode == 'noe' else 'plane_delays_s'] = report['times']
+        metadata['plane_noise_sd'] = report['noises']
+        metadata['plane_used_in_fit'] = report['used']
+        for key, value in metadata.items():
+            text = ', '.join(map(str, value)) if isinstance(value, list) else str(value)
+            # Keep footer records on one physical line, even for unusual paths.
+            text = text.replace('\r', '\\r').replace('\n', '\\n')
+            handle.write(f'# {key}: {text}\n')
 
 
 def write_support_archive(path, prefix, stage, native_source, native_names, internal_names):

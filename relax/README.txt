@@ -84,11 +84,25 @@ The analyzer publishes three user-facing files:
     <prefix>_support.zip
 
 The PDF contains the plots and dataset assessment. The numbers CSV has one row
-per peak, including assignments, coordinates, overlap/validity/warning flags,
-selected rates and errors, fit statistics, any all-points versus
-shortest-delay-excluded comparison, and every acquisition plane's delay,
-intensity, input noise and fit-use flag. Repeated delays stay in acquisition
-order. The support ZIP groups the detailed report table, diagnostics, saved
+per peak, with assignment, residue, selected rate/error and overlap first,
+followed by coordinates, fit quality, warnings and measured plane intensities.
+Both all-points and shortest-delay-excluded rates/errors are included when a
+candidate fit was attempted. NOE uses ratio/error columns and omits decay-only
+fields. Shared provenance, fit selection, assessment counts, degrees of freedom
+and constant coordinate axes appear once in # metadata lines after the table.
+Analysis IDs and reporting versions are omitted from this numbers file.
+
+Plane delays, input noise SDs and the fit-use mask are three comma-separated
+metadata vectors, in the same acquisition order as plane_01_intensity, etc.:
+    # plane_delays_s: 0.001, 0.1, 0.025, 0.025
+    # plane_noise_sd: 1.2, 1.3, 1.1, 1.4
+    # plane_used_in_fit: False, True, True, True
+NOE stores plane_codes instead of plane_delays_s. Repeated delays are preserved.
+For pandas, use read_csv(filename, comment='#'). With the standard-library csv
+reader, skip records whose first field starts with '# ' after CSV parsing;
+filtering physical lines first can damage quoted multiline warnings.
+
+The support ZIP groups the detailed report table, diagnostics, saved
 fitter inputs and outputs, and plotting records. Native fitter files are
 preserved byte-for-byte inside that archive instead of being scattered beside
 the PDF and numbers table.
