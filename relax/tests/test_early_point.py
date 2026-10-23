@@ -189,6 +189,16 @@ class PipelineTests(unittest.TestCase):
         with (self.root/'sample_fit_diagnostics.tsv').open() as fp:rows=list(csv.DictReader(fp,delimiter='\t'))
         self.assertTrue(all(r['fit_basis']=='exclude_shortest' for r in rows))
         self.assertTrue(all(r['all_points_value'] and r['candidate_value'] for r in rows))
+        with (self.root/'sample_peak_summary.csv').open(newline='') as fp:
+            compact=list(csv.DictReader(fp))
+        self.assertEqual(len(compact),24)
+        self.assertEqual(len({r['peak_id'] for r in compact}),24)
+        self.assertEqual(compact[0]['selected_fit_basis'],'exclude_shortest')
+        self.assertEqual(compact[0]['excluded_shortest_delay_s'],'0.001')
+        self.assertEqual(compact[0]['excluded_planes_1based'],'2')
+        self.assertTrue(compact[0]['all_points_rate_s-1'])
+        self.assertTrue(compact[0]['without_shortest_rate_s-1'])
+        self.assertEqual(compact[0]['rate_s-1'],compact[0]['without_shortest_rate_s-1'])
         loaded=tools.load_analysis_csv(self.root/'sample_analysis.csv')
         self.assertEqual(loaded['extracted'],self.b[1])
         self.assertEqual(loaded['context']['_early_point_selection']['audit'],audit)
@@ -234,9 +244,45 @@ class PipelineTests(unittest.TestCase):
     def test_saved_archive_tampering_rejected(self):
         self.run_analysis()
         path=self.root/'rlx_dfit_all_points.out'
-        path.write_text(path.read_text()+'# changed\n')
-        with self.assertRaisesRegex(ValueError,'fingerprint mismatch'):
+        lines=path.read_text().splitlines();fields=lines[0].split();fields[3]=str(float(fields[3])+1)
+        lines[0]=' '.join(fields);path.write_text('\n'.join(lines)+'\n')
+        with self.assertRaisesRegex(ValueError,'Archived native fit disagrees'):
             tools.load_saved_analysis(self.root,'sample','r1rho')
+    def test_legacy_selected_schema_migrates_without_hashes_or_refitting(self):
+        self.run_analysis()
+        csv_path=self.root/'sample_analysis.csv';diagnostic=self.root/'sample_fit_diagnostics.tsv'
+        with csv_path.open(newline='') as fp:rows=list(csv.DictReader(fp))
+        legacy=dict(schema_version='2',analysis_id='a2-obsolete-id',fit_revision='sha256:old',
+                    report_revision='sha256:old',fit_input_sha256='old',fit_output_sha256='old',
+                    noise_sha256='old',assessment_method='old long method paragraph')
+        audit=json.loads(rows[0]['early_point_audit_json'])
+        audit['archive_sha256']={name:'obsolete digest' for name in tools.early_archive_names()}
+        legacy['early_point_audit_json']=json.dumps(audit,sort_keys=True,separators=(',',':'))
+        for row in rows:row.update(legacy)
+        with csv_path.open('w',newline='') as fp:
+            writer=csv.DictWriter(fp,fieldnames=tools.LEGACY_EARLY_CSV_FIELDS,extrasaction='ignore')
+            writer.writeheader();writer.writerows(rows)
+        with diagnostic.open(newline='') as fp:
+            reader=csv.DictReader(fp,delimiter='\t');fields=reader.fieldnames;mapping=list(reader)
+        before=fields.index('schema_version');after=fields.index('fit_basis')
+        fields=fields[:before]+tools.LEGACY_TRACE_FIELDS+['early_point_audit_json']+fields[after:]
+        for row in mapping:row.update(legacy)
+        with diagnostic.open('w',newline='') as fp:
+            writer=csv.DictWriter(fp,fieldnames=fields,delimiter='\t',extrasaction='ignore')
+            writer.writeheader();writer.writerows(mapping)
+        with mock.patch.object(tools,'checked_run',side_effect=AssertionError('No refitting')):
+            bundle=tools.load_saved_analysis(self.root,'sample','r1rho')
+            c=bundle['context'];tools.prepare_reports(self.root,bundle['peaks'],bundle['extracted'],bundle['fit_text'],
+                bundle['times'],bundle['noises'],'r1rho','sample',c['pdf_name'],
+                c['source_collection']+'/'+c['source_experiment'],context=c,warning_map=bundle['warning_map'])
+        new=tools.load_analysis_csv(csv_path)
+        self.assertEqual(new['extracted'],self.b[1])
+        self.assertEqual(new['context']['_early_point_selection']['audit']['excluded_planes_1based'],[2])
+        self.assertNotIn('sha256',csv_path.read_text())
+        self.assertNotIn('sha256',diagnostic.read_text())
+        self.assertNotIn('sha256',(self.root/'sample_early_point_summary.json').read_text())
+        repeated=tools.load_saved_analysis(self.root,'sample','r1rho')
+        self.assertEqual(repeated['context']['analysis_id'],new['context']['analysis_id'])
     def test_selection_audit_and_full_fit_tampering_rejected(self):
         self.run_analysis();path=self.root/'sample_analysis.csv';original=path.read_bytes()
         for kind in ['audit','full_fit']:

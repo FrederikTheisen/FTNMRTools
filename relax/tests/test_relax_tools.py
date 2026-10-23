@@ -487,9 +487,12 @@ class ScriptIntegrationTests(unittest.TestCase):
         self.assertEqual([l.split()[0] for l in results],['151','174','174'])
         self.assertEqual((self.source/'pre_results.tmp').read_text(),'OLD 9 9\n')
         self.assertTrue((self.source/'sample_fit_diagnostics.tsv').is_file())
-        before=(self.source/'sample_results.out').read_bytes()
+        with (self.source/'sample_analysis.csv').open() as handle:
+            prior_id=next(csv.DictReader(handle))['analysis_id']
         result=self.run_script('relax_analyze_v2.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertEqual((self.source/'sample_results.out').read_bytes(),before)
+        self.assertEqual(tools.meaningful_lines(self.source/'sample_results.out'),results)
+        with (self.source/'sample_analysis.csv').open() as handle:
+            self.assertNotEqual(next(csv.DictReader(handle))['analysis_id'],prior_id)
     def test_analysis_failure_and_interruption_preserve_old_results(self):
         (self.source/'sample_results.out').write_text('old results\n')
         (self.source/'rlx_dfit.out').write_text('old raw fit\n')
