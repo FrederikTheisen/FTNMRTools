@@ -56,7 +56,11 @@ Analysis and peak identity
 --------------------------
 
 Set SPARKY_PEAKS to one filename or a pattern matching exactly one list.
-DATA_TYPE accepts r1, r2 or noe; PEAK_FMT accepts sparky3d or sparky2d.
+The v2 analyzer infers R1, R1rho (T1rho), R2 or NOE from the peak-list filename;
+include exactly one of those type tokens in the name. PEAK_FMT accepts
+sparky3d or sparky2d. A legacy --mode argument is accepted only as a check
+against the filename inference. The original relax_analyze.com remains an
+independent legacy script with its own DATA_TYPE setting.
 The default output prefix retains the original filename-before-first-dot
 rule. Set OUTPUT_PREFIX explicitly for filenames containing other dots.
 
@@ -67,10 +71,11 @@ unique temporary tag accepted by data_xtr. Matching uses these tags, not
 row order or assignment alone. Duplicate labels at different coordinates
 remain separate; an identical assignment AND coordinate row is rejected.
 
-R1 and R2 keep rlx_dfit -mode exp2 -rms_noise and their original starting
-rates. The fitter still controls parameter estimation and uncertainty
-rescaling. NOE keeps -mode noe -rms_noise; supply the type header required
-by that fitter mode, rather than treating its type codes as decay times.
+R1, R1rho and R2 use rlx_dfit -mode exp2 -rms_noise. Filename inference picks
+the starting rate: 1.0 for R1/R1rho and 10.0 for R2. The fitter still controls
+parameter estimation and uncertainty rescaling. NOE keeps -mode noe -rms_noise;
+supply the type header required by that fitter mode, rather than treating its
+type codes as decay times.
 No exponential fit or decay residual is generated for NOE.
 
 The analyzer publishes three user-facing files:

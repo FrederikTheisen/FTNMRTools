@@ -1147,8 +1147,18 @@ def close_saved(a,b):
 def load_saved_analysis(source, prefix, mode, peak_list_name=None):
     source = Path(source)
     safe_output_name(prefix)
-    if mode not in ('r1','r1rho','r2','noe'):
-        raise ValueError('Saved-result refresh requires --experiment-type')
+    if peak_list_name is None:
+        outputs=[line for line in (source/'plot.gnu').read_text().splitlines() if line.startswith('set output ')]
+        if len(outputs)!=1:raise ValueError('Cannot identify saved peak-list name; provide --peak-list-name')
+        pdf_name=shlex.split(outputs[0])[2]
+        suffix='_intensity.pdf'
+        if not pdf_name.endswith(suffix):raise ValueError('Cannot identify saved peak-list name; provide --peak-list-name')
+        peak_list_name=pdf_name[:-len(suffix)]
+    safe_output_name(peak_list_name)
+    inferred_mode = infer_experiment_type(peak_list_name)
+    if mode and mode != inferred_mode:
+        raise ValueError(f'--experiment-type {mode} conflicts with peak-list name; inferred {inferred_mode}')
+    mode = inferred_mode
     diagnostic = source / (prefix+'_fit_diagnostics.tsv')
     with diagnostic.open(newline='') as handle:
         mappings = list(csv.DictReader(handle,delimiter='\t'))
@@ -1214,14 +1224,6 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
             else:expected=[t,y,sd,math.nan,math.nan,math.nan]
             if len(actual)!=len(expected) or any(not close_saved(a,b) for a,b in zip(actual,expected)):
                 raise ValueError('Saved intensity/noise table disagrees with fitter inputs/parameters')
-    if peak_list_name is None:
-        outputs=[line for line in (source/'plot.gnu').read_text().splitlines() if line.startswith('set output ')]
-        if len(outputs)!=1:raise ValueError('Provide --peak-list-name for saved report refresh')
-        pdf_name=shlex.split(outputs[0])[2]
-        suffix='_intensity.pdf'
-        if not pdf_name.endswith(suffix):raise ValueError('Provide --peak-list-name for saved report refresh')
-        peak_list_name=pdf_name[:-len(suffix)]
-    safe_output_name(peak_list_name)
     context=report_context(mode,prefix,peak_list_name+'_intensity.pdf',source.parent.name+'/'+source.name,
                            peak_list=peak_list_name)
     if 'schema_version' in mappings[0]:
@@ -1684,20 +1686,42 @@ def checked_run(command, cwd, stdout=None):
     subprocess.run(list(map(str, command)), cwd=cwd, stdout=stdout, check=True)
 
 
+def infer_experiment_type(peak_list_name):
+    """Infer the relaxation experiment from a peak-list filename token."""
+    name = Path(peak_list_name).name.lower()
+    # Match the specific T1rho spelling before the shorter T1 token. Separators
+    # are filename punctuation; alphanumeric adjacency prevents accidental
+    # matches inside sample names or unrelated numbers.
+    patterns = (
+        ('r1rho', r'(?<![a-z0-9])(?:t1rho|r1rho)(?![a-z0-9])'),
+        ('noe', r'(?<![a-z0-9])(?:het[-_ ]?)?noe(?![a-z0-9])'),
+        ('r1', r'(?<![a-z0-9])(?:t1|r1)(?![a-z0-9])'),
+        ('r2', r'(?<![a-z0-9])(?:t2|r2)(?![a-z0-9])'),
+    )
+    found = [mode for mode, pattern in patterns if re.search(pattern, name)]
+    if len(found) != 1:
+        raise ValueError('Cannot infer one experiment type from peak-list name '
+                         f'{Path(peak_list_name).name!r}; include one of T1, T1rho, T2 or NOE')
+    return found[0]
+
+
 def analyze(args):
     source = Path.cwd().resolve()
     matches = sorted(Path(p).resolve() for p in glob.glob(args.peaks) if Path(p).is_file())
     if len(matches) != 1:
         raise ValueError('Select exactly one peak list; set SPARKY_PEAKS to its filename')
     peak_path = matches[0]
+    mode = infer_experiment_type(peak_path.name)
+    if args.mode and args.mode != mode:
+        raise ValueError(f'--mode {args.mode} conflicts with peak-list name; inferred {mode}')
     data_path, header_path, noise_path = (Path(p).resolve() for p in (args.data, args.header, args.noise))
-    times = counted_vector(header_path, nonnegative=args.mode != 'noe')
+    times = counted_vector(header_path, nonnegative=mode != 'noe')
     noises = counted_vector(noise_path, positive=True)
     if len(times) != len(noises):
         raise ValueError('Delay and noise counts differ')
     if args.format == 'nmrpipe' and plane_count(data_path) != len(times):
         raise ValueError('Spectrum plane, delay and noise counts differ')
-    if args.mode != 'noe' and len(set(times)) < 2:
+    if mode != 'noe' and len(set(times)) < 2:
         raise ValueError('Exponential fitting needs at least two distinct time points')
     peaks = read_peaks(peak_path, args.peak_format)
     prefix = args.prefix or peak_path.name.split('.')[0]
@@ -1721,18 +1745,18 @@ def analyze(args):
         shutil.copyfile(noise_path, stage / 'vEstNoise.txt')
         early_selection=None
         artifact_names=[]
-        if args.mode == 'noe':
+        if mode == 'noe':
             checked_run(['rlx_dfit','-mode','noe','-rms_noise','-data','rlx_dfit.inp',
                          '-d_esd','vEstNoise.txt','-out','rlx_dfit.out'],stage)
             nonempty(stage/'rlx_dfit.out')
         else:
             early_selection, artifact_names=fit_with_early_test(stage,peaks,extracted,times,noises,
-                                                               args.mode,args.early_point_policy)
-        if not any(row['valid'] for row in fitted_rows(peaks,(stage/'rlx_dfit.out').read_text(),args.mode)):
+                                                               mode,args.early_point_policy)
+        if not any(row['valid'] for row in fitted_rows(peaks,(stage/'rlx_dfit.out').read_text(),mode)):
             raise ValueError('No valid fitted peaks; previous results retained')
         names = prepare_reports(stage, peaks, extracted, (stage / 'rlx_dfit.out').read_text(),
-                                times, noises, args.mode, prefix, pdf_name, run_tag,
-                                context=report_context(args.mode, prefix, pdf_name, run_tag,
+                                times, noises, mode, prefix, pdf_name, run_tag,
+                                context=report_context(mode, prefix, pdf_name, run_tag,
                                     peak_list=peak_path.name, fit_origin='analysis'),
                                 early_selection=early_selection)
         restored = ''.join(p['assignment'] + ' ' + ' '.join(f'{v:.17g}' for v in extracted[p['peak_id']]) + '\n' for p in peaks)
@@ -1765,7 +1789,8 @@ def main(argv=None):
     p = commands.add_parser('run-proc'); p.add_argument('--script', required=True); p.add_argument('--source', required=True)
     p = commands.add_parser('analyze')
     p.add_argument('--peaks', required=True); p.add_argument('--data', required=True)
-    p.add_argument('--format', default='nmrpipe'); p.add_argument('--mode', choices=('r1', 'r1rho', 'r2', 'noe'), required=True)
+    p.add_argument('--format', default='nmrpipe'); p.add_argument('--mode', choices=('r1', 'r1rho', 'r2', 'noe'),
+                    help='deprecated consistency check; type is inferred from the peak-list filename')
     p.add_argument('--peak-format', choices=('sparky2d', 'sparky3d'), default='sparky3d')
     p.add_argument('--header', required=True); p.add_argument('--noise', required=True); p.add_argument('--prefix', default='')
     p.add_argument('--early-point-policy', choices=('auto','report','off'),default='auto')
