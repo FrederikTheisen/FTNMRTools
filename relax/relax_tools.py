@@ -432,6 +432,10 @@ def gnuplot_string(text):
 # Versioned, portable reporting. All calculations below use saved measurements
 # and reported fit parameters; none of these functions estimates fit parameters.
 REPORT_SCHEMA = '1'
+EARLY_SCHEMA = '2'
+EARLY_DEFAULTS = dict(min_peaks=20, min_remaining_delays=5, residual_floor=.005,
+                      noise_multiple=3., sign_fraction=.8, score_reduction=.5,
+                      max_median_rate_change=.2)
 ASSESSMENT = dict(alpha=.05, coherence_min_peaks=10, coherence_sign_fraction=.8,
                   coherence_median_sd=2.)
 CONCLUSIONS = {
@@ -455,6 +459,189 @@ CSV_FIELDS = TRACE_FIELDS + [
     'coherent_planes', 'alpha', 'coherence_min_peaks', 'coherence_sign_fraction',
     'coherence_median_sd', 'plane_median_sd', 'plane_q1_sd', 'plane_q3_sd',
     'plane_sign_fraction', 'plane_bias', 'delay_median_sd', 'delay_q1_sd', 'delay_q3_sd']
+EARLY_TRACE_FIELDS = TRACE_FIELDS + ['early_point_audit_json']
+FIT_VALUE_FIELDS = ('value', 'error', 'i0', 'i0_error', 'chi2', 'chi2_threshold')
+EARLY_CSV_FIELDS = CSV_FIELDS + ['early_point_audit_json', 'used_in_fit', 'fit_basis',
+    'selection_reason', 'rate_change_percent'] + [
+    group+'_'+field for group in ('all_points', 'candidate') for field in FIT_VALUE_FIELDS] + [
+    'all_points_warnings', 'candidate_warnings']
+
+
+def early_groups(times, noises, extracted, cohort, fitted, normalization):
+    """One weighted repeat mean per residue and delay; a fixed all-fit I0 scale."""
+    result = []
+    for delay in sorted(set(times)):
+        indices = [i for i, time in enumerate(times) if time == delay]
+        weights = [1. / noises[i]**2 for i in indices]
+        total = math.fsum(weights)
+        means, errors = [], []
+        for tag in cohort:
+            amplitude = normalization[tag]
+            mean = math.fsum(extracted[tag][i]*w for i,w in zip(indices,weights))/total
+            rate, _, i0 = fitted[tag]['values'][:3]
+            prediction = i0*math.exp(-rate*delay)
+            means.append((mean-prediction)/amplitude)
+            errors.append(1./math.sqrt(total)/amplitude)
+        median = statistics.median(means)
+        result.append(dict(delay_s=delay, planes_1based=[i+1 for i in indices], median=median,
+                           normalized_noise=statistics.median(errors),
+                           sign_fraction=sum(v*median > 0 for v in means)/len(means)))
+    return result
+
+
+def evaluate_early_point(peaks, extracted, full_rows, times, noises, policy='auto',
+                         candidate_rows=None, config=None):
+    """Deterministic selection heuristic. Never fits or discards measurements."""
+    if policy not in ('auto','report','off'):
+        raise ValueError('Invalid early-point policy')
+    cfg = dict(EARLY_DEFAULTS if config is None else config)
+    if set(cfg) != set(EARLY_DEFAULTS) or any(not math.isfinite(v) for v in cfg.values()):
+        raise ValueError('Invalid early-point thresholds')
+    if (cfg['min_peaks'] < 1 or int(cfg['min_peaks']) != cfg['min_peaks'] or
+        cfg['min_remaining_delays'] < 3 or int(cfg['min_remaining_delays']) != cfg['min_remaining_delays'] or
+        cfg['residual_floor'] <= 0 or cfg['noise_multiple'] <= 0 or
+        not .5 <= cfg['sign_fraction'] <= 1 or not 0 < cfg['score_reduction'] <= 1 or
+        cfg['max_median_rate_change'] <= 0):
+        raise ValueError('Invalid early-point thresholds')
+    full = {r['peak_id']: r for r in full_rows}
+    if set(full) != {p['peak_id'] for p in peaks}:
+        raise ValueError('Full-fit identifiers differ from peaks')
+    counts = Counter(p['residue'] for p in peaks)
+    cohort = [r['peak_id'] for r in full_rows if r['valid'] and not r['overlap'] and
+              not r['duplicate_assignment'] and counts[r['residue']] == 1 and
+              r['values'][0] > 0 and r['values'][2] > 0]
+    shortest = min(times)
+    proposed = [i+1 for i,t in enumerate(times) if t == shortest]
+    remaining = [i for i,t in enumerate(times) if t != shortest]
+    audit = dict(version=1, policy=policy, thresholds=cfg, fit_basis='all_points',
+                 reason='disabled' if policy == 'off' else 'pending', candidate_attempted=False,
+                 candidate_passed=False, cohort_peak_ids=cohort, cohort_size=len(cohort),
+                 candidate_delay_s=shortest, candidate_planes_1based=proposed,
+                 excluded_delay_s=None, excluded_planes_1based=[], original_count=len(times),
+                 fit_count=len(times), remaining_distinct_delays=len({times[i] for i in remaining}),
+                 full_bins=[], candidate_bins=[], before_score=None, after_score=None,
+                 score_reduction_fraction=None, median_absolute_rate_change_fraction=None)
+    if policy == 'off': return audit
+    if len(cohort) < cfg['min_peaks']:
+        audit['reason'] = 'insufficient_cohort'; return audit
+    if audit['remaining_distinct_delays'] < cfg['min_remaining_delays']:
+        audit['reason'] = 'insufficient_remaining_delays'; return audit
+    normalization = {tag: full[tag]['values'][2] for tag in cohort}
+    bins = early_groups(times,noises,extracted,cohort,full,normalization)
+    for group in bins:
+        group['limit'] = max(cfg['residual_floor'],cfg['noise_multiple']*group['normalized_noise'])
+    audit['full_bins'] = bins
+    first = bins[0]
+    if abs(first['median']) <= first['limit']:
+        audit['reason'] = 'shortest_residual_within_limit'; return audit
+    if first['sign_fraction'] < cfg['sign_fraction']:
+        audit['reason'] = 'insufficient_sign_agreement'; return audit
+    if candidate_rows is None:
+        audit['reason'] = 'candidate_required'; return audit
+    audit['candidate_attempted'] = True
+    candidate = {r['peak_id']:r for r in candidate_rows}
+    if set(candidate) != set(full):
+        raise ValueError('Candidate-fit identifiers differ from full fit')
+    if any(not candidate[tag]['valid'] or candidate[tag]['values'][0] <= 0 or
+           candidate[tag]['values'][2] <= 0 for tag in cohort):
+        audit['reason'] = 'invalid_candidate_cohort_fit'; return audit
+    # Only retained observations enter either score. The original cohort,
+    # noise and normalization remain fixed across both comparisons.
+    later = early_groups([times[i] for i in remaining], [noises[i] for i in remaining],
+                         {tag:[y[i] for i in remaining] for tag,y in extracted.items()},
+                         cohort,candidate,normalization)
+    limits = {b['delay_s']:b['limit'] for b in bins}
+    for group in later:
+        group['limit'] = limits[group['delay_s']]
+        group['planes_1based'] = [i+1 for i,t in enumerate(times) if t == group['delay_s']]
+    before = [b for b in bins if b['delay_s'] != shortest]
+    score0 = math.sqrt(math.fsum((b['median']/b['limit'])**2 for b in before)/len(before))
+    score1 = math.sqrt(math.fsum((b['median']/b['limit'])**2 for b in later)/len(later))
+    change = statistics.median(abs(candidate[tag]['values'][0]/full[tag]['values'][0]-1) for tag in cohort)
+    reduction = 1-score1/score0 if score0 else 0.
+    audit.update(candidate_bins=later, before_score=score0, after_score=score1,
+                 score_reduction_fraction=reduction, median_absolute_rate_change_fraction=change)
+    if reduction < cfg['score_reduction']:
+        audit['reason'] = 'insufficient_structure_improvement'
+    elif any(abs(b['median']) > b['limit'] for b in later):
+        audit['reason'] = 'remaining_systematic_residual'
+    elif change > cfg['max_median_rate_change']:
+        audit['reason'] = 'rate_change_exceeds_limit'
+    else:
+        audit['candidate_passed'] = True
+        audit['reason'] = 'selected_shortest_exclusion' if policy == 'auto' else 'report_only_candidate_passed'
+        if policy == 'auto':
+            audit.update(fit_basis='exclude_shortest', excluded_delay_s=shortest,
+                         excluded_planes_1based=proposed, fit_count=len(remaining))
+    return audit
+
+
+def selection_rows(selection, peaks, mode):
+    full = fitted_rows(peaks,selection['all_fit_text'],mode,selection.get('all_warning_map'))
+    candidate = (fitted_rows(peaks,selection['candidate_fit_text'],mode,selection.get('candidate_warning_map'))
+                 if selection.get('candidate_fit_text') is not None else None)
+    return full, candidate
+
+
+def validate_selection(selection, peaks, extracted, times, noises, mode, chosen_rows):
+    full, candidate = selection_rows(selection,peaks,mode)
+    saved = selection['audit']
+    calculated = evaluate_early_point(peaks,extracted,full,times,noises,saved['policy'],candidate,saved['thresholds'])
+    if 'archive_sha256' in saved: calculated['archive_sha256'] = saved['archive_sha256']
+    if calculated != saved:
+        raise ValueError('Early-point decision disagrees with saved measurements/fits')
+    expected = candidate if saved['fit_basis'] == 'exclude_shortest' else full
+    for actual,wanted in zip(chosen_rows,expected):
+        if actual['peak_id'] != wanted['peak_id'] or actual['warnings'] != wanted['warnings'] or any(
+                not close_saved(a,b) for a,b in zip(actual['values'],wanted['values'])):
+            raise ValueError('Selected fitted parameters disagree with early-point decision')
+    for i,row in enumerate(chosen_rows):
+        row['all_points_fit'] = full[i]
+        row['candidate_fit'] = candidate[i] if candidate is not None else None
+    return saved
+
+
+def write_fit_input(path, peaks, extracted, times, indices):
+    Path(path).write_text(str(len(indices))+' '+' '.join(f'{times[i]:.17g}' for i in indices)+'\n'+
+        ''.join(p['peak_id']+' '+' '.join(f'{extracted[p["peak_id"]][i]:.17g}' for i in indices)+'\n' for p in peaks))
+
+
+def fit_with_early_test(stage, peaks, extracted, times, noises, mode, policy='auto'):
+    """Run the native fitter once or twice, and retain its exact artifacts."""
+    stage = Path(stage)
+    def run(stem, indices):
+        write_fit_input(stage/(stem+'.inp'),peaks,extracted,times,indices)
+        noise_name = stem+'_noise.txt'
+        (stage/noise_name).write_text(str(len(indices))+' '+' '.join(f'{noises[i]:.17g}' for i in indices)+'\n')
+        command = ['rlx_dfit','-mode','exp2','-rms_noise','-data',stem+'.inp',
+                   '-d_esd',noise_name,'-r_init','1.0' if mode in ('r1','r1rho') else '10.0','-out',stem+'.out']
+        checked_run(command,stage)
+        nonempty(stage/(stem+'.out'))
+        text = (stage/(stem+'.out')).read_text()
+        return text, fitted_rows(peaks,text,mode)
+    full_text, full = run('rlx_dfit_all_points',list(range(len(times))))
+    if not any(r['valid'] for r in full):
+        raise ValueError('No valid fitted peaks; previous results retained')
+    audit = evaluate_early_point(peaks,extracted,full,times,noises,policy)
+    candidate_text = None
+    stems = ['rlx_dfit_all_points']
+    if audit['reason'] == 'candidate_required':
+        candidate_text, candidate = run('rlx_dfit_without_shortest',[i for i,t in enumerate(times) if t != min(times)])
+        stems.append('rlx_dfit_without_shortest')
+        audit = evaluate_early_point(peaks,extracted,full,times,noises,policy,candidate)
+    else:
+        # Replace any prior generation's candidate artifacts with explicit
+        # non-results, so stale candidate files cannot appear current.
+        for suffix in ('.inp','.out','_noise.txt'):
+            (stage/('rlx_dfit_without_shortest'+suffix)).write_text('# Candidate not attempted: '+audit['reason']+'\n')
+        stems.append('rlx_dfit_without_shortest')
+    selected = 'rlx_dfit_without_shortest' if audit['fit_basis']=='exclude_shortest' else 'rlx_dfit_all_points'
+    for suffix in ('.inp','.out','_noise.txt'):
+        shutil.copyfile(stage/(selected+suffix),stage/('rlx_dfit'+suffix))
+    names = [stem+suffix for stem in stems for suffix in ('.inp','.out','_noise.txt')]+['rlx_dfit_noise.txt']
+    audit['archive_sha256'] = {name:file_sha256(stage/name) for name in names}
+    selection = dict(audit=audit,all_fit_text=full_text,candidate_fit_text=candidate_text)
+    return selection, names
 
 
 def file_sha256(path):
@@ -551,11 +738,21 @@ def report_context(mode, prefix, pdf_name, run_tag, **extra):
     return context
 
 
-def build_assessment(rows, extracted, times, noises, context):
+def build_assessment(rows, extracted, times, noises, context, selection=None):
     n = len(times)
     if not n or len(noises) != n or any(not math.isfinite(v) or v <= 0 for v in noises):
         raise ValueError('Invalid measurement/noise counts')
     mode = context['experiment_type']
+    audit = None
+    used = [True]*n
+    if selection is not None:
+        if mode == 'noe': raise ValueError('NOE cannot have a delay-exclusion decision')
+        audit = validate_selection(selection, [dict(r) for r in rows], extracted, times, noises, mode, rows)
+        used = [i+1 not in audit['excluded_planes_1based'] for i in range(n)]
+        context = dict(context, schema_version=EARLY_SCHEMA,
+                       early_point_audit_json=json.dumps(audit,sort_keys=True,separators=(',',':')))
+        if audit['fit_basis'] == 'exclude_shortest':
+            for row in rows: row['flags'].append('shortest_delay_excluded')
     if mode not in ('r1', 'r1rho', 'r2', 'noe') or any(not math.isfinite(t) for t in times):
         raise ValueError('Invalid report experiment type or plane values')
     if mode != 'noe' and any(t < 0 for t in times):
@@ -564,14 +761,15 @@ def build_assessment(rows, extracted, times, noises, context):
         raise ValueError('Report measurements and peak identities differ')
     groups = {}
     for i, time in enumerate(times):
-        groups.setdefault(time, []).append(i)
+        groups.setdefault(time, [])
+        if used[i]: groups[time].append(i)
     primary = []
     for row in rows:
         y = extracted[row['peak_id']]
         if len(y) != n or any(not math.isfinite(v) for v in y):
             raise ValueError('Invalid saved intensity count or value')
         row.update(points=[], chi2_input=None, reduced_chi2_input=None, p_input=None,
-                   p_holm=None, dof=n-2 if mode != 'noe' else None, repeat_chi2=None,
+                   p_holm=None, dof=sum(used)-2 if mode != 'noe' else None, repeat_chi2=None,
                    repeat_dof=0 if mode != 'noe' else None, repeat_pair_z=None, repeat_groups={})
         for t, intensity, sd in zip(times, y, noises):
             prediction = residual = z = None
@@ -607,18 +805,18 @@ def build_assessment(rows, extracted, times, noises, context):
             if row['valid']:
                 # Explicit accurate summation is reproducible across Python 3.10
                 # and 3.12, whose built-in floating-point sum algorithms differ.
-                chi2 = math.fsum(point['z']**2 for point in row['points'])
+                chi2 = math.fsum(point['z']**2 for point,use in zip(row['points'],used) if use)
                 if not math.isfinite(chi2):
                     raise ValueError('Nonfinite original-noise chi-square')
                 row['chi2_input'] = chi2
-                if n > 2:
-                    row['reduced_chi2_input'] = chi2 / (n-2)
-                    row['p_input'] = chi_square_sf(chi2, n-2)
+                if sum(used) > 2:
+                    row['reduced_chi2_input'] = chi2 / (sum(used)-2)
+                    row['p_input'] = chi_square_sf(chi2, sum(used)-2)
         reasons = []
         if mode == 'noe': reasons.append('not_decay_analysis')
         if not row['valid']: reasons.append('invalid_fit')
         if row['overlap']: reasons.append('overlap')
-        if mode != 'noe' and n <= 2: reasons.append('no_positive_residual_dof')
+        if mode != 'noe' and sum(used) <= 2: reasons.append('no_positive_residual_dof')
         row['primary_eligible'] = not reasons
         row['exclusion_reason'] = ';'.join(reasons)
         if not reasons: primary.append(row)
@@ -627,7 +825,7 @@ def build_assessment(rows, extracted, times, noises, context):
         row['p_holm'] = adjusted[row['peak_id']]
         if row['p_holm'] < ASSESSMENT['alpha']:
             row['flags'].append('original_noise_lack_of_fit')
-    planes = [residual_summary([r['points'][i]['z'] for r in primary]) for i in range(n)]
+    planes = [residual_summary([r['points'][i]['z'] for r in primary] if used[i] else []) for i in range(n)]
     delays = {t: residual_summary([r['points'][i]['z'] for r in primary for i in indices])
               for t, indices in groups.items()}
     coherent = [i+1 for i, summary in enumerate(planes) if summary['bias']]
@@ -642,11 +840,16 @@ def build_assessment(rows, extracted, times, noises, context):
                                 coordinates=r['coordinates'], residue=r['residue'],
                                 overlap=r['overlap'], values=list(map(float,r['values'])), warnings=r['warnings'],
                                 intensities=list(map(float,extracted[r['peak_id']]))) for r in rows])
-    context = dict(context, analysis_id='a1-' + hashlib.sha256(
+    if selection is not None:
+        identity['early_point'] = dict(audit=audit, full=[
+            dict(peak_id=r['peak_id'],values=r['all_points_fit']['values'],warnings=r['all_points_fit']['warnings'],
+                 candidate_values=r['candidate_fit']['values'] if r['candidate_fit'] else None,
+                 candidate_warnings=r['candidate_fit']['warnings'] if r['candidate_fit'] else None) for r in rows])
+    context = dict(context, analysis_id=('a2-' if selection is not None else 'a1-') + hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20])
     return dict(context=context, rows=rows, times=list(map(float,times)), noises=list(map(float,noises)), planes=planes,
                 delays=delays, conclusion=conclusion, primary_count=len(primary),
-                rejected=rejected, coherent=coherent)
+                rejected=rejected, coherent=coherent, selection=selection, used=used)
 
 
 def analysis_csv_rows(report):
@@ -669,10 +872,22 @@ def analysis_csv_rows(report):
                       **{key: row[key] for key in ('chi2_input','reduced_chi2_input','dof','p_input',
                          'p_holm','primary_eligible','exclusion_reason','repeat_chi2','repeat_dof','repeat_pair_z')})
         fields.update({f'w{i}': c for i, c in enumerate(row['coordinates'], 1)})
+        if report['selection'] is not None:
+            audit=report['selection']['audit']
+            fields.update(fit_basis=audit['fit_basis'],selection_reason=audit['reason'])
+            for group,key in [('all_points','all_points_fit'),('candidate','candidate_fit')]:
+                fit=row[key]
+                fields.update({group+'_'+key:fit['values'][j] if fit else None
+                               for j,key in enumerate(FIT_VALUE_FIELDS)})
+                fields[group+'_warnings']=fit['warnings'] if fit else ''
+            full=row['all_points_fit']['values'][0]
+            cand=row['candidate_fit']['values'][0] if row['candidate_fit'] else None
+            fields['rate_change_percent']=(100*(cand/full-1) if cand is not None and
+                math.isfinite(full) and math.isfinite(cand) and full != 0 else None)
         for i, (time, point) in enumerate(zip(report['times'], row['points'])):
             plane, delay = report['planes'][i], report['delays'][time]
             repeat = row['repeat_groups'].get(time,{})
-            yield dict(fields, plane_index=i+1, delay_s=time if mode != 'noe' else None,
+            yield dict(fields, used_in_fit=report['used'][i], plane_index=i+1, delay_s=time if mode != 'noe' else None,
                        plane_code=time if mode == 'noe' else None, intensity=point['intensity'],
                        noise_sd=point['noise'], prediction=point['prediction'], residual=point['residual'],
                        residual_noise_sd=point['z'], plane_median_sd=plane['median'],
@@ -681,16 +896,18 @@ def analysis_csv_rows(report):
                        repeat_delay_chi2=repeat.get('chi2'), repeat_delay_dof=repeat.get('dof'),
                        repeat_delay_pair_z=repeat.get('pair_z'),
                        assessment_method=('Exponential suitability not applicable; NOE ratio analysis; supplied intensities, noise and ratio uncertainties unchanged' if mode=='noe' else
+                           'I(t)=I0 exp(-R t); independent Gaussian input noise; chi2 df=N_used-2; excluded points are displayed but omitted from GOF; approximate nonlinear GOF conditional on fit selection; Holm alpha=0.05; descriptive shared-plane screen >=10 peaks, >=80% same sign, |median residual/SD|>2; few repeats limit inference; rejection or uncertainty rescaling does not establish biexponentiality' if report['selection'] is not None else
                            'I(t)=I0 exp(-R t); independent Gaussian input noise; chi2 df=N-2; approximate nonlinear GOF; Holm alpha=0.05; descriptive shared-plane screen >=10 peaks, >=80% same sign, |median residual/SD|>2; few repeats limit inference; rejection or uncertainty rescaling does not establish biexponentiality'),
                        delay_median_sd=delay['median'], delay_q1_sd=delay['q1'], delay_q3_sd=delay['q3'])
 
 
 def write_analysis_csv(path, report):
     with Path(path).open('w', newline='') as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        fields = EARLY_CSV_FIELDS if report['selection'] is not None else CSV_FIELDS
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in analysis_csv_rows(report):
-            writer.writerow({field: row.get(field) for field in CSV_FIELDS})
+            writer.writerow({field: row.get(field) for field in fields})
 
 
 def strict_bool(value):
@@ -708,20 +925,23 @@ def safe_output_name(name):
 def load_analysis_csv(path):
     with Path(path).open(newline='') as handle:
         reader = csv.DictReader(handle)
-        if reader.fieldnames != CSV_FIELDS:
+        if reader.fieldnames not in (CSV_FIELDS, EARLY_CSV_FIELDS):
             raise ValueError('Unsupported or incomplete analysis CSV schema')
+        schema_fields = reader.fieldnames
+        early = schema_fields == EARLY_CSV_FIELDS
         records = list(reader)
     if not records or any(None in row or None in row.values() for row in records):
         raise ValueError('Empty or incomplete analysis CSV')
-    context = {key: records[0][key] for key in TRACE_FIELDS}
-    if context['schema_version'] != REPORT_SCHEMA:
+    traces = EARLY_TRACE_FIELDS if early else TRACE_FIELDS
+    context = {key: records[0][key] for key in traces}
+    if context['schema_version'] != (EARLY_SCHEMA if early else REPORT_SCHEMA):
         raise ValueError('Unsupported analysis CSV schema version')
     safe_output_name(context['output_prefix']); safe_output_name(context['pdf_name'])
     if context['fit_model'] != ('noe' if context['experiment_type'] == 'noe' else 'exp2'):
         raise ValueError('CSV model/experiment type mismatch')
     grouped = {}
     for record in records:
-        if any(record[field] != context[field] for field in TRACE_FIELDS):
+        if any(record[field] != context[field] for field in traces):
             raise ValueError('Inconsistent repeated CSV provenance')
         index = int(record['peak_index']); plane = int(record['plane_index'])
         if index < 1 or plane < 1:
@@ -734,16 +954,18 @@ def load_analysis_csv(path):
         raise ValueError('Missing CSV peak index')
     peaks, extracted, fit_lines, times, noises, seen_ids, seen_entries = [], {}, [], None, None, set(), set()
     warning_map = {}
+    extra_fit_lines = {'all_points':[], 'candidate':[]}
+    extra_warnings = {'all_points':{}, 'candidate':{}}
     varying = {'plane_index','delay_s','plane_code','intensity','noise_sd','prediction','residual',
                'residual_noise_sd','plane_median_sd','plane_q1_sd','plane_q3_sd',
                'plane_sign_fraction','plane_bias','delay_median_sd','delay_q1_sd','delay_q3_sd',
-               'repeat_delay_chi2','repeat_delay_dof','repeat_delay_pair_z'}
+               'repeat_delay_chi2','repeat_delay_dof','repeat_delay_pair_z', 'used_in_fit'}
     for index, slots in sorted(grouped.items()):
         if sorted(slots) != list(range(1,len(slots)+1)):
             raise ValueError('Missing CSV measurement plane')
         first = slots[1]
         for record in slots.values():
-            if any(record[key] != first[key] for key in CSV_FIELDS if key not in varying):
+            if any(record[key] != first[key] for key in schema_fields if key not in varying):
                 raise ValueError('Inconsistent repeated CSV fit or peak information')
         tag = first['peak_id']
         coords = [first[f'w{i}'] for i in (1,2,3) if first[f'w{i}'] != '']
@@ -769,6 +991,14 @@ def load_analysis_csv(path):
         fitted = [float(first[key]) for key in fields]
         warning_map[tag] = first['warnings']
         fit_lines.append(tag+' '+' '.join(map(str,fitted)))
+        if early:
+            for group in extra_fit_lines:
+                parts=[first[group+'_'+key] for key in FIT_VALUE_FIELDS]
+                if any(parts) and not all(parts):
+                    raise ValueError('Incomplete saved early-point fitted parameters')
+                if all(parts):
+                    extra_fit_lines[group].append(tag+' '+' '.join(str(float(v)) for v in parts))
+                    extra_warnings[group][tag]=first[group+'_warnings']
     counts = Counter(p['assignment'] for p in peaks)
     if any(p['duplicate_assignment'] != (counts[p['assignment']]>1) for p in peaks):
         raise ValueError('CSV duplicate-assignment flags disagree with identities')
@@ -776,14 +1006,26 @@ def load_analysis_csv(path):
                   times=list(map(float,times)), noises=list(map(float,noises)), context=context, warning_map=warning_map)
     # Recompute all diagnostics and verify the result identity and every exported
     # value. This prevents silently accepting edited or inconsistent derived fields.
+    selection = None
+    if early:
+        audit=json.loads(context['early_point_audit_json'])
+        if len(extra_fit_lines['all_points']) != len(peaks):
+            raise ValueError('Missing all-point reference fits')
+        if bool(extra_fit_lines['candidate']) != audit['candidate_attempted']:
+            raise ValueError('Saved candidate presence disagrees with audit')
+        selection=dict(audit=audit,all_fit_text='\n'.join(extra_fit_lines['all_points'])+'\n',
+                       candidate_fit_text=('\n'.join(extra_fit_lines['candidate'])+'\n' if extra_fit_lines['candidate'] else None),
+                       all_warning_map=extra_warnings['all_points'],
+                       candidate_warning_map=extra_warnings['candidate'] if extra_fit_lines['candidate'] else None)
+        bundle['context']['_early_point_selection']=selection
     rows = fitted_rows(peaks,bundle['fit_text'],context['experiment_type'],warning_map)
-    computed = build_assessment(rows,extracted,times,noises,context)
+    computed = build_assessment(rows,extracted,times,noises,context,selection)
     if computed['context']['analysis_id'] != context['analysis_id']:
         raise ValueError('CSV analysis identity does not match its contents')
     expected = {(str(r['peak_index']),str(r['plane_index'])): r for r in analysis_csv_rows(computed)}
     for record in records:
         wanted = expected[(record['peak_index'],record['plane_index'])]
-        for key in CSV_FIELDS:
+        for key in (EARLY_CSV_FIELDS if early else CSV_FIELDS):
             if key == 'report_revision': continue
             actual = record[key]; value = wanted.get(key)
             canonical = '' if value is None else str(value)
@@ -810,6 +1052,8 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
     with diagnostic.open(newline='') as handle:
         mappings = list(csv.DictReader(handle,delimiter='\t'))
     if not mappings: raise ValueError('Empty saved diagnostics mapping')
+    if mappings[0].get('early_point_audit_json'):
+        return load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings)
     peaks, seen, counts = [], set(), Counter(r['assignment'] for r in mappings)
     entries = set()
     for row in mappings:
@@ -897,6 +1141,70 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
     return dict(peaks=peaks,extracted=extracted,fit_text=fit_text,times=times,noises=noises,context=context)
 
 
+def load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings):
+    """Validate native selected artifacts against the portable, full-observation CSV."""
+    bundle=load_analysis_csv(source/(prefix+'_analysis.csv'))
+    context=bundle['context'];selection=context['_early_point_selection'];audit=selection['audit']
+    if context['experiment_type'] == 'noe' or mode == 'noe':
+        raise ValueError('Selected decay cannot be relabelled as NOE')
+    for row in mappings:
+        if any(row.get(key) != context[key] for key in EARLY_TRACE_FIELDS):
+            raise ValueError('Saved diagnostics provenance disagrees with CSV')
+    if [r['peak_id'] for r in mappings] != [p['peak_id'] for p in bundle['peaks']]:
+        raise ValueError('Saved diagnostics peak identities disagree with CSV')
+    records,_=parse_fit(bundle['fit_text'],mode)
+    for row in mappings:
+        values=records[row['peak_id']]
+        if any(not close_saved(float(row[key]),value) for key,value in zip(
+                ['value','error','i0','i0_error','chi2','chi2_threshold'],values)):
+            raise ValueError('Saved diagnostics parameters disagree with CSV')
+        peak=next(p for p in bundle['peaks'] if p['peak_id']==row['peak_id'])
+        if (row['assignment'] != peak['assignment'] or int(row['residue']) != peak['residue'] or
+            strict_bool(row['overlap']) != peak['overlap'] or
+            strict_bool(row['duplicate_assignment']) != peak['duplicate_assignment'] or
+            [row[f'w{i}'] for i in (1,2,3) if row.get(f'w{i}')] != peak['coordinates']):
+            raise ValueError('Saved diagnostics peak mapping disagrees with CSV')
+    for name,digest in audit.get('archive_sha256',{}).items():
+        safe_output_name(name)
+        if file_sha256(source/name) != digest:
+            raise ValueError('Saved early-point archive fingerprint mismatch: '+name)
+    for name,key in [('rlx_dfit.inp','fit_input_sha256'),('rlx_dfit.out','fit_output_sha256'),
+                     ('vEstNoise.txt','noise_sha256')]:
+        if file_sha256(source/name) != context[key]:
+            raise ValueError('Saved selected-fit fingerprint mismatch: '+name)
+    if counted_vector(source/'relax_header.txt') != bundle['times'] or counted_vector(
+            source/'vEstNoise.txt',positive=True) != bundle['noises']:
+        raise ValueError('Original processing vectors disagree with portable data')
+    used=[i for i in range(len(bundle['times'])) if i+1 not in audit['excluded_planes_1based']]
+    inp=meaningful_lines(source/'rlx_dfit.inp')
+    head=inp[0].split()
+    if int(head[0]) != len(used) or list(map(float,head[1:])) != [bundle['times'][i] for i in used]:
+        raise ValueError('Selected native delay vector disagrees with mask')
+    actual=parse_extracted('\n'.join(inp[1:]),bundle['peaks'],len(used))
+    if any(actual[tag] != [bundle['extracted'][tag][i] for i in used] for tag in actual):
+        raise ValueError('Selected native measurements disagree with mask')
+    if counted_vector(source/'rlx_dfit_noise.txt',positive=True) != [bundle['noises'][i] for i in used]:
+        raise ValueError('Selected native noise vector disagrees with mask')
+    # Reconstruct the plotting table from saved values only, and compare bytes.
+    # This detects mixed generations without refitting or touching the source.
+    with tempfile.TemporaryDirectory(prefix='relax-verify-') as temp:
+        stage=Path(temp)
+        prepare_reports(stage,bundle['peaks'],bundle['extracted'],bundle['fit_text'],bundle['times'],
+                        bundle['noises'],mode,prefix,context['pdf_name'],
+                        context['source_collection']+'/'+context['source_experiment'],context=context,
+                        warning_map=bundle['warning_map'])
+        def numeric_blocks(path):
+            return [list(map(float,l.split())) for l in Path(path).read_text().splitlines()
+                    if l.strip() and not l.lstrip().startswith('#')]
+        a,b=numeric_blocks(stage/'intensity.out'),numeric_blocks(source/'intensity.out')
+        if len(a)!=len(b) or any(len(x)!=len(y) or any(not close_saved(u,v) for u,v in zip(x,y)) for x,y in zip(a,b)):
+            raise ValueError('Saved plotting table disagrees with selected fit')
+    if peak_list_name and peak_list_name != context['peak_list']:
+        raise ValueError('Saved peak-list name disagrees with portable data')
+    context['experiment_type']=mode
+    return bundle
+
+
 def refresh_report(args):
     if args.csv:
         input_path=Path(args.csv).resolve()
@@ -910,6 +1218,9 @@ def refresh_report(args):
         bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
         watched=[source/name for name in ('rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt',
                   'intensity.out',args.saved_prefix+'_fit_diagnostics.tsv')]
+        if bundle['context'].get('_early_point_selection'):
+            watched += [source/(args.saved_prefix+'_analysis.csv')]
+            watched += [source/name for name in bundle['context']['_early_point_selection']['audit'].get('archive_sha256',{})]
     destination=Path(args.output_dir).resolve() if args.output_dir else source
     if not destination.is_dir():raise ValueError('Report output directory must already exist')
     # Re-read under the same lock used by fitting/publication to avoid mixed runs.
@@ -953,6 +1264,39 @@ def fit_annotation(row, mode):
     return result
 
 
+def early_report_intro(selection):
+    audit=selection['audit']
+    lines=[f"Policy: {audit['policy']}; selected basis: {audit['fit_basis']}",
+           'Decision: '+audit['reason'],
+           f"Fixed cohort: {audit['cohort_size']} unique, unflagged, positive fits",
+           f"Shortest delay: {audit['candidate_delay_s']:.8g} s; original planes: {audit['candidate_planes_1based']}",
+           f"Observations retained: {audit['fit_count']} / {audit['original_count']}",
+           f"Score on the same retained delays: {display_number(audit['before_score'])} -> {display_number(audit['after_score'])}",
+           f"Fractional score reduction: {display_number(audit['score_reduction_fraction'])}",
+           f"Median absolute fractional rate change: {display_number(audit['median_absolute_rate_change_fraction'])}",
+           'A selection heuristic, not a diagnosis of the physical cause.',
+           'Original input noise and all-point I0 normalize both comparisons.',
+           'Goodness-of-fit probabilities after selection are conditional diagnostics.',
+           'All observations are retained; excluded markers remain visible.']
+    if audit['full_bins']:
+        first=audit['full_bins'][0]
+        lines += [f"Shortest-delay median/limit: {first['median']:.5g} / {first['limit']:.5g} of I0; same-sign fraction {first['sign_fraction']:.3g}",
+                  'Filled blue markers are retained; open orange markers are excluded.']
+    lines += textwrap.wrap('Thresholds: '+json.dumps(audit['thresholds'],sort_keys=True),100)
+    commands=text_page('Shortest-delay selection audit',lines)
+    if audit['candidate_bins']:
+        before={b['delay_s']:b for b in audit['full_bins']}
+        commands+=list(AUTO_PLOT_MARGINS)+['set title "Shared residuals on the same retained delays"',
+             'set xlabel "Delay (s)"','set ylabel "Median residual / fixed all-point I0 (%)"',
+             'set autoscale','set key top right',
+             'plot "-" using 1:2 with linespoints title "All-point fit", "-" using 1:2 with linespoints title "Shortest-delay candidate", "-" using 1:2 with lines dt 2 title "+limit", "-" using 1:2 with lines dt 2 title "-limit"']
+        bins=audit['candidate_bins']
+        for values in ([before[b['delay_s']]['median'] for b in bins],
+                       [b['median'] for b in bins],[b['limit'] for b in bins],[-b['limit'] for b in bins]):
+            commands += [f"{b['delay_s']:.17g} {v*100:.17g}" for b,v in zip(bins,values)]+['e']
+    return commands
+
+
 def text_page(title, lines):
     """One PDF page; label 9000 is a persistent trace footer on every page."""
     commands = list(AUTO_PLOT_MARGINS) + ['unset border', 'unset xtics', 'unset ytics', 'unset grid',
@@ -984,11 +1328,16 @@ def report_intro(report):
         lines += textwrap.wrap(key + ': ' + (c[key] or 'not recorded'),100)
     lines += ['No extraction, processing or refitting is performed by report regeneration.',
               'CSV carries full precision, measurements, uncertainties, identities, warnings and methods settings.']
+    if report.get('selection'):
+        audit=report['selection']['audit']
+        lines.insert(1,f"Fit basis: {audit['fit_basis']}; fitted observations {audit['fit_count']} / {audit['original_count']}")
+        if not all(report['used']): lines[0] += ' (retained observations; conditional on selection)'
     commands += text_page(name + ' | analysis summary',lines)
     if mode != 'noe':
         methods = [
             'Saved model: I(t) = I0 exp(-R t). Parameters and reported uncertainties are unchanged.',
-            'Original-noise chi2 = sum(((I - prediction)/input SD)^2); residual df = N - 2.',
+            ('Original-noise chi2 sums retained observations only; residual df = N_used - 2.' if report.get('selection') else
+             'Original-noise chi2 = sum(((I - prediction)/input SD)^2); residual df = N - 2.'),
             'Approximate upper-tail chi2 p-values; Holm family adjustment at alpha = 0.05.',
             'Primary coverage: valid, non-overlapping fits with positive residual df.',
             'Overlap, invalid fits and other exclusions are listed on results pages and in the CSV.',
@@ -1018,6 +1367,7 @@ def report_intro(report):
             commands += [f"{r['residue']} {r['reduced_chi2_input']:.17g}" for r in eligible] + ['e']
             for kind in ('plane','delay'):
                 summaries = ([(i+1,s) for i,s in enumerate(report['planes'])] if kind=='plane' else sorted(report['delays'].items()))
+                summaries = [(x,s) for x,s in summaries if s['median'] is not None]
                 commands += ['set title ' + gnuplot_string('Shared residual summaries by acquisition plane' if kind=='plane' else 'Shared residual summaries by delay'),
                              'set xlabel ' + gnuplot_string('Acquisition plane (original order)' if kind=='plane' else 'Delay (s); repeated delays pooled'),
                              'set ylabel "Residual / input SD (median and IQR)"', 'set autoscale', 'set key top right',
@@ -1089,16 +1439,27 @@ def fitted_rows(peaks, fit_text, mode, warning_map=None):
     return rows
 
 
-def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, prefix, pdf_name, run_tag, context=None, warning_map=None):
+def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, prefix, pdf_name, run_tag, context=None, warning_map=None, early_selection=None):
     rows = fitted_rows(peaks, fit_text, mode, warning_map)
     context = dict(context) if context is not None else report_context(mode, prefix, pdf_name, run_tag)
+    early_selection = early_selection or context.pop('_early_point_selection',None)
     context['report_revision'] = code_revision()
-    report = build_assessment(rows, extracted, times, noises, context)
+    report = build_assessment(rows, extracted, times, noises, context,early_selection)
     context = report['context']
-    tag_header = f'# {run_tag}\n' + ''.join(f'# {key}: {context[key]}\n' for key in TRACE_FIELDS if key in context)
+    traces=EARLY_TRACE_FIELDS if early_selection is not None else TRACE_FIELDS
+    tag_header = f'# {run_tag}\n' + ''.join(f'# {key}: {context[key]}\n' for key in traces if key in context)
+    if early_selection is not None:
+        audit=early_selection['audit']
+        tag_header+=''.join(f'# {key}: {audit[key]}\n' for key in ('policy','fit_basis','reason',
+            'excluded_delay_s','excluded_planes_1based','original_count','fit_count'))
     csv_name = prefix + '_analysis.csv'
     write_analysis_csv(stage / csv_name, report)
     names = [csv_name]
+    if early_selection is not None:
+        summary_name=prefix+'_early_point_summary.json'
+        (stage/summary_name).write_text(json.dumps(dict(context=context,selection=early_selection['audit']),
+                                                  sort_keys=True,indent=2,allow_nan=False)+'\n')
+        names.append(summary_name)
     for suffix, include in (('results.out', lambda r: True),
                             ('results_peak_overlap.out', lambda r: r['overlap']),
                             ('results_filtered.out', lambda r: not r['overlap'] and r['valid'])):
@@ -1108,7 +1469,12 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
         names.append(name)
     diagnostics = f'{prefix}_fit_diagnostics.tsv'
     fields = ['peak_id', 'assignment', 'w1', 'w2', 'w3', 'residue', 'value', 'error', 'i0', 'i0_error',
-              'chi2', 'chi2_threshold', 'overlap', 'duplicate_assignment', 'valid_fit', 'flags', 'warnings'] + TRACE_FIELDS
+              'chi2', 'chi2_threshold', 'overlap', 'duplicate_assignment', 'valid_fit', 'flags', 'warnings'] + traces
+    extra_fields = ['fit_basis','selection_reason','rate_change_percent']+[
+        group+'_'+field for group in ('all_points','candidate') for field in FIT_VALUE_FIELDS]+[
+        'all_points_warnings','candidate_warnings'] if early_selection is not None else []
+    fields += extra_fields
+    csv_extra={r['peak_id']:r for r in analysis_csv_rows(report) if r['plane_index']==1}
     with (stage / diagnostics).open('w', newline='') as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t')
         writer.writeheader()
@@ -1119,12 +1485,14 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
             info.update(value=v[0], error=v[1], i0=v[2] if mode != 'noe' else '',
                         i0_error=v[3] if mode != 'noe' else '', chi2=v[4] if mode != 'noe' else '',
                         chi2_threshold=v[5] if mode != 'noe' else '', valid_fit=row['valid'], flags=';'.join(row['flags']))
-            info.update(context)
+            info.update({key:context[key] for key in traces})
+            info.update({key:csv_extra[row['peak_id']][key] for key in extra_fields})
             writer.writerow(info)
     names.append(diagnostics)
     plot = [tag_header.rstrip(), 'set terminal pdfcairo noenhanced color size 6,5 font "Sans,9"',
             'set output ' + gnuplot_string(pdf_name), 'set grid', 'set key off', 'set autoscale']
     plot += report_intro(report)
+    if early_selection is not None: plot += early_report_intro(early_selection)
     plot += ['unset title', 'set key off', 'set autoscale']
     blocks = []
     for index, row in enumerate(rows):
@@ -1135,7 +1503,7 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
         else:
             rate, _, i0 = row['values'][:3]
             normalized = math.isfinite(i0) and i0 != 0 and row['valid']
-            for t, y, sd in zip(times, values, noises):
+            for plane, (t, y, sd) in enumerate(zip(times, values, noises)):
                 if normalized:
                     try:
                         prediction = i0 * math.exp(-rate * t)
@@ -1147,8 +1515,14 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
                                  f'{prediction/i0:.17g} {(y-prediction)/i0:.17g} {(y-prediction)/sd:.17g}')
                 else:
                     block.append(f'{t:.17g} {y:.17g} {sd:.17g} NaN NaN NaN')
+                if early_selection is not None:
+                    block[-1] += ' '+str(int(report['used'][plane]))
             label = row['assignment'] + ' [' + row['peak_id'] + ']'
             label += '\n' + fit_annotation(row, mode)
+            if early_selection is not None:
+                label += '\nFit basis: '+early_selection['audit']['fit_basis']
+                if not all(report['used']):
+                    label += f"; excluded {early_selection['audit']['excluded_delay_s']:.6g} s (open orange)"
             if row['flags']:
                 label += '\n' + textwrap.fill(', '.join(row['flags']), width=76)
             span = max(times) - min(times) or max(abs(max(times)), .01)
@@ -1156,12 +1530,20 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
             plot += [f'set xrange [{lo:.17g}:{hi:.17g}]', 'set multiplot title ' + gnuplot_string(label) + ' font "Sans,8"']
             plot += ['set autoscale y'] + decay_panel_layout(top=.82, bottom=.11)
             plot.append('set ylabel ' + gnuplot_string('Intensity / fitted I0' if normalized else 'Raw intensity (invalid fit/I0)'))
-            command = f'plot "intensity.out" index {index} using 1:2:3 with yerrorbars pt 7'
+            if early_selection is not None and not all(report['used']):
+                command = (f'plot "intensity.out" index {index} using 1:($7==1?$2:1/0):3 with yerrorbars pt 7 lc rgb "#285879", '
+                           f'"intensity.out" index {index} using 1:($7==0?$2:1/0):3 with yerrorbars pt 6 lc rgb "#c17b19"')
+            else:
+                command = f'plot "intensity.out" index {index} using 1:2:3 with yerrorbars pt 7'
             if normalized:
                 command += f', exp(-({rate:.17g})*x) with lines'
             plot += [command] + decay_panel_layout(residual=True, top=.82, bottom=.11) + ['set ylabel "Residual / SD"']
             if normalized:
-                plot.append(f'plot "intensity.out" index {index} using 1:6 with points pt 7, 0 with lines')
+                if early_selection is not None and not all(report['used']):
+                    plot.append(f'plot "intensity.out" index {index} using 1:($7==1?$6:1/0) with points pt 7 lc rgb "#285879", '
+                                f'"intensity.out" index {index} using 1:($7==0?$6:1/0) with points pt 6 lc rgb "#c17b19", 0 with lines')
+                else:
+                    plot.append(f'plot "intensity.out" index {index} using 1:6 with points pt 7, 0 with lines')
             else:
                 plot += ['set label 999 "Residual unavailable: invalid fit/I0" at graph 0.1,0.5',
                          f'plot [{lo:.17g}:{hi:.17g}] [-1:1] 0 with lines', 'unset label 999']
@@ -1231,12 +1613,15 @@ def analyze(args):
             p['peak_id'] + ' ' + ' '.join(f'{v:.17g}' for v in extracted[p['peak_id']]) + '\n' for p in peaks)
         (stage / 'rlx_dfit.inp').write_text(fit_input)
         shutil.copyfile(noise_path, stage / 'vEstNoise.txt')
-        command = ['rlx_dfit', '-mode', 'noe' if args.mode == 'noe' else 'exp2', '-rms_noise',
-                   '-data', 'rlx_dfit.inp', '-d_esd', 'vEstNoise.txt']
-        if args.mode != 'noe':
-            command += ['-r_init', '1.0' if args.mode in ('r1', 'r1rho') else '10.0']
-        checked_run(command + ['-out', 'rlx_dfit.out'], stage)
-        nonempty(stage / 'rlx_dfit.out')
+        early_selection=None
+        artifact_names=[]
+        if args.mode == 'noe':
+            checked_run(['rlx_dfit','-mode','noe','-rms_noise','-data','rlx_dfit.inp',
+                         '-d_esd','vEstNoise.txt','-out','rlx_dfit.out'],stage)
+            nonempty(stage/'rlx_dfit.out')
+        else:
+            early_selection, artifact_names=fit_with_early_test(stage,peaks,extracted,times,noises,
+                                                               args.mode,args.early_point_policy)
         if not any(row['valid'] for row in fitted_rows(peaks,(stage/'rlx_dfit.out').read_text(),args.mode)):
             raise ValueError('No valid fitted peaks; previous results retained')
         names = prepare_reports(stage, peaks, extracted, (stage / 'rlx_dfit.out').read_text(),
@@ -1245,12 +1630,13 @@ def analyze(args):
                                     peak_list=peak_path.name, fit_origin='analysis', fit_revision=code_revision(),
                                     fit_input_sha256=file_sha256(stage/'rlx_dfit.inp'),
                                     fit_output_sha256=file_sha256(stage/'rlx_dfit.out'),
-                                    noise_sha256=file_sha256(stage/'vEstNoise.txt')))
+                                    noise_sha256=file_sha256(stage/'vEstNoise.txt')),
+                                early_selection=early_selection)
         restored = ''.join(p['assignment'] + ' ' + ' '.join(f'{v:.17g}' for v in extracted[p['peak_id']]) + '\n' for p in peaks)
         (stage / 'data_xtr.out').write_text(restored)
         checked_run(['gnuplot', 'plot.gnu'], stage)
         nonempty(stage / pdf_name)
-        names += ['data_xtr.out', 'rlx_dfit.inp', 'rlx_dfit.out', pdf_name]
+        names += ['data_xtr.out', 'rlx_dfit.inp', 'rlx_dfit.out', pdf_name]+artifact_names
         publish(stage, source, names)
 
 
@@ -1275,6 +1661,7 @@ def main(argv=None):
     p.add_argument('--format', default='nmrpipe'); p.add_argument('--mode', choices=('r1', 'r1rho', 'r2', 'noe'), required=True)
     p.add_argument('--peak-format', choices=('sparky2d', 'sparky3d'), default='sparky3d')
     p.add_argument('--header', required=True); p.add_argument('--noise', required=True); p.add_argument('--prefix', default='')
+    p.add_argument('--early-point-policy', choices=('auto','report','off'),default='auto')
     p = commands.add_parser('report', help='Rebuild reports without extraction, processing or fitting')
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument('--csv'); group.add_argument('--saved-prefix')

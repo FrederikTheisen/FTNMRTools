@@ -11,6 +11,7 @@ set RLX_DFIT_HEADER = relax_header.txt
 set RLX_DFIT_ESD = vEstNoise.txt
 # Empty preserves the existing prefix (filename before the first dot).
 set OUTPUT_PREFIX = ""
+set EARLY_POINT_POLICY = auto # auto, report (keep full-fit rates), off
 
 # Keep relax_tools.py beside this script. It stages and validates the complete run.
 # Prefix bare/relative filenames before :h; tcsh leaves a bare name unchanged.
@@ -24,5 +25,6 @@ if (! -f "$HELPER") then
 endif
 python3 "$HELPER" analyze --peaks "$SPARKY_PEAKS" --data "$DATA_FILE" \
     --format "$DATA_FMT" --mode "$DATA_TYPE" --peak-format "$PEAK_FMT" \
-    --header "$RLX_DFIT_HEADER" --noise "$RLX_DFIT_ESD" --prefix "$OUTPUT_PREFIX"
+    --header "$RLX_DFIT_HEADER" --noise "$RLX_DFIT_ESD" --prefix "$OUTPUT_PREFIX" \
+    --early-point-policy "$EARLY_POINT_POLICY"
 exit $status

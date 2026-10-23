@@ -178,3 +178,73 @@ fitting and plotting commands in the integration tests are stubs operating
 only in temporary folders on synthetic files. The fixture native_exp2.out
 contains a small excerpt of an existing fitter output for parser validation;
 it does not trigger a fit. No dataset or CCPN project is opened or modified.
+
+
+Automatic shortest-delay test (v2)
+---------------------------------
+
+relax_analyze_v2.com now sets EARLY_POINT_POLICY = auto. The helper accepts
+--early-point-policy auto|report|off. auto can select a shortened fit; report
+runs the same checks and candidate fit but keeps all-point rates; off keeps
+all-point rates without attempting a candidate. NOE bypasses this feature.
+The independent original relax_analyze.com remains unchanged.
+
+The shortest numerical delay is tested, not the first acquisition plane.
+All replicates at that delay are excluded together. This is a single,
+experiment-wide decision, with no iterative trimming or per-peak fallback.
+All fits continue to use rlx_dfit exp2. The helper adds no Python dependencies.
+
+The assessment cohort is frozen from positive, finite all-point fits without
+overlap flags and with exactly one peak per residue. At least 20 residues
+and five distinct remaining delays are required. Repeats are averaged within
+each residue/delay with inverse-noise-variance weights. The median across
+residues is normalized by the fixed all-point I0. Input noise is never
+replaced by the fitter's rescaled uncertainties for selection decisions.
+
+The shortest-delay residual must exceed both 0.5 percent of I0 and three
+times the median normalized noise, with 80 percent residual-sign agreement.
+The candidate is accepted only if the RMS structure score on the SAME
+retained delay bins improves at least 50 percent, every retained median
+lies within its limit, and median absolute fractional rate change is at
+most 20 percent. These named defaults live in EARLY_DEFAULTS and are recorded
+in every audit. They are diagnostic heuristics, not evidence of a physical
+cause or a validated temperature/sequence correction.
+
+Existing three-column result filenames now carry comment headers naming
+policy, fit basis, decision, excluded delay and original 1-based planes,
+and original/retained counts. The diagnostics TSV records both rates/errors,
+all fitted parameters/warnings, rate change, and selected fit basis. The
+machine-readable <prefix>_early_point_summary.json records thresholds,
+cohort IDs, residual bins, comparison scores, reasons and artifact hashes.
+
+Native artifacts for each run:
+  rlx_dfit_all_points.inp/.out and rlx_dfit_all_points_noise.txt
+  rlx_dfit_without_shortest.inp/.out and rlx_dfit_without_shortest_noise.txt
+  rlx_dfit.inp/.out and rlx_dfit_noise.txt (the selected, matching trio)
+If no candidate is attempted, its three files contain an explicit comment
+instead of leaving a previous run's candidate looking current. Native fitter
+outputs for attempted fits are retained verbatim. The processing noise file
+vEstNoise.txt and relaxation headers keep ALL acquisition observations.
+For manual reproduction use the selected trio, not the original full-length
+noise file with a shortened fitter input.
+
+data_xtr.out and intensity.out retain every observation in acquisition
+order. For v2 decay analyses intensity.out appends a seventh used_in_fit
+column (1/0); the first six columns retain their meaning. The PDF records the
+selection, compares aggregate residuals on retained observations, and shows
+excluded points with open orange symbols. Original-noise goodness-of-fit
+statistics use only retained points and N_used-2 degrees of freedom; these
+are conditional diagnostics after a data-driven selection.
+
+CSV schema 2 is self-contained: it includes the original observations,
+per-observation mask, both fits/warnings and the decision. Existing schema-1
+CSVs remain supported. Both CSV and --saved-prefix report refresh validate
+and retain the recorded selection without extraction or refitting. Editing
+a mask, decision, fit, observation or native archive is rejected. A report
+refresh never decides to exclude another delay.
+
+Insufficient data or a rejected candidate keeps the full fit and records a
+reason. A malformed candidate or failed external command aborts publication,
+leaving previous outputs intact. Invalid non-cohort candidate fits remain
+invalid if the experiment-wide candidate is selected; they never silently
+borrow an all-point rate.
