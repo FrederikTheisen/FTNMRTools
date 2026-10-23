@@ -32,9 +32,9 @@ spectrum scales. The existing -noise option overrides both with a shared SD.
 For plain files with neither metadata nor -noise, the zero-noise default
 applies. Incomplete or invalid compact metadata stops automatic use.
 
-relax_analyze.com ignores comment lines when preparing per-peak extraction
+relax_analyze_v2.com ignores comment lines when preparing per-peak extraction
 inputs; per-plane vEstNoise.txt inputs remain in use for relaxation fits. Importers
 and other readers should ignore lines starting with #.
 hetnoe_analyze.py retains its strongest-intensity duplicate-residue policy.
-relax_analyze.com keeps distinct peak positions separate, including duplicate
+relax_analyze_v2.com keeps distinct peak positions separate, including duplicate
 assignment labels; the separate ANP32A hetNOE analysis also keeps both E174 rows.

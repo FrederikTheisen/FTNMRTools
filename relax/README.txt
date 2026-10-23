@@ -1,11 +1,22 @@
 Relaxation processing and analysis
 =================================
 
-Keep relax_proc.com, relax_analyze.com and relax_tools.py together. Run the
-.com files from the experiment directory, as before:
+Available scripts:
+
+    relax_analyze.com          Original analyzer, restored unchanged.
+    relax_analyze_v2.com       Revised analyzer with validation and diagnostics.
+    relax_proc.com             Updated processing script; scientific settings retained.
+    relax_proc_original.com    Original processing template, preserved unchanged.
+
+The original scripts are byte-for-byte copies from commit cbbd3e9, before the
+relaxation fixes. They remain independent of relax_tools.py. The descriptions
+below apply to updated relax_proc.com and relax_analyze_v2.com.
+
+Keep the updated scripts and relax_tools.py together. Run the .com files
+from the experiment directory:
 
     csh /path/to/FTNMRTools/relax/relax_proc.com
-    tcsh /path/to/FTNMRTools/relax/relax_analyze.com
+    tcsh /path/to/FTNMRTools/relax/relax_analyze_v2.com
 
 Requirements: Python 3.8+, tcsh, the existing NMRPipe commands, data_xtr,
 rlx_dfit and gnuplot with pdfcairo support. Python uses only its standard
@@ -13,8 +24,10 @@ library. The controller inherits your configured command PATH and NMRTXT.
 
 These scripts do not automatically install themselves in dataset folders.
 Copying or using an updated script does not run it. Running relax_proc.com
-processes spectra; running relax_analyze.com extracts intensities and fits.
+processes spectra; running relax_analyze_v2.com extracts intensities and fits.
 Review each script's editable settings before running it on an acquisition.
+The two analyzers use the same output filenames; changing the entrypoint name
+does not create a separate set of result filenames.
 
 Processing settings and delays
 ------------------------------

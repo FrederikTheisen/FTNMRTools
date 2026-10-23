@@ -311,20 +311,20 @@ class ScriptIntegrationTests(unittest.TestCase):
         (self.source/'pre_results.tmp').write_text('OLD 9 9\n')
         interrupted=self.source/'.relax-analyze-interrupted';interrupted.mkdir()
         (interrupted/'rlx_dfit.out').write_text('old interrupted fit')
-        result=self.run_script('relax_analyze.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        result=self.run_script('relax_analyze_v2.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         results=(self.source/'sample_results.out').read_text().splitlines()[1:]
         self.assertEqual([l.split()[0] for l in results],['151','174','174'])
         self.assertEqual((self.source/'pre_results.tmp').read_text(),'OLD 9 9\n')
         self.assertTrue((self.source/'sample_fit_diagnostics.tsv').is_file())
         before=(self.source/'sample_results.out').read_bytes()
-        result=self.run_script('relax_analyze.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        result=self.run_script('relax_analyze_v2.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertEqual((self.source/'sample_results.out').read_bytes(),before)
     def test_analysis_failure_and_interruption_preserve_old_results(self):
         (self.source/'sample_results.out').write_text('old results\n')
         (self.source/'rlx_dfit.out').write_text('old raw fit\n')
         for failure in ('data_xtr','rlx_dfit','fit_interrupted','empty_fit','missing_fit','unexpected_fit','intensity_count','gnuplot'):
             with self.subTest(failure=failure):
-                result=self.run_script('relax_analyze.com',failure)
+                result=self.run_script('relax_analyze_v2.com',failure)
                 self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
                 self.assertEqual((self.source/'sample_results.out').read_text(),'old results\n')
                 self.assertEqual((self.source/'rlx_dfit.out').read_text(),'old raw fit\n')
@@ -332,22 +332,22 @@ class ScriptIntegrationTests(unittest.TestCase):
     def test_count_mismatch_rejected_before_external_commands(self):
         for header_text in ('2 0 1\n','3 0 nan 1\n','3 0 0 0\n'):
             (self.source/'relax_header.txt').write_text(header_text)
-            result=self.run_script('relax_analyze.com');self.assertNotEqual(result.returncode,0)
+            result=self.run_script('relax_analyze_v2.com');self.assertNotEqual(result.returncode,0)
         self.assertEqual(self.calls(),[])
         (self.source/'relax_header.txt').write_text('3 0 .2 .1\n')
         (self.source/'m.ft3').write_bytes(header(planes=2))
-        result=self.run_script('relax_analyze.com');self.assertNotEqual(result.returncode,0)
+        result=self.run_script('relax_analyze_v2.com');self.assertNotEqual(result.returncode,0)
         self.assertEqual(self.calls(),[])
     def test_ambiguous_peak_lists_rejected(self):
         (self.source/'extra.list').write_text(PEAKS)
-        result=self.run_script('relax_analyze.com');self.assertNotEqual(result.returncode,0)
+        result=self.run_script('relax_analyze_v2.com');self.assertNotEqual(result.returncode,0)
         self.assertEqual(self.calls(),[])
     def test_r2_and_noe_shell_modes(self):
-        original=(RELAX/'relax_analyze.com').read_text()
+        original=(RELAX/'relax_analyze_v2.com').read_text()
         for mode in ('r2','noe'):
             script=self.root/f'{mode}.com';script.write_text(original.replace('set DATA_TYPE = r1',f'set DATA_TYPE = {mode}').replace('set HELPER = "$0:h/relax_tools.py"',f'set HELPER = "{RELAX}/relax_tools.py"'))
             if mode=='noe':(self.source/'relax_header.txt').write_text('3 1 -1 1\n')
-            result=self.run_script('relax_analyze.com',script=script)
+            result=self.run_script('relax_analyze_v2.com',script=script)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             if mode=='noe':self.assertNotIn('exp(', (self.source/'plot.gnu').read_text())
         fit_calls=[args for name,args in self.calls() if name=='rlx_dfit']
