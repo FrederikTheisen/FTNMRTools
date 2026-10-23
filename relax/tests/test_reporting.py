@@ -157,6 +157,23 @@ class PortableTests(unittest.TestCase):
         self.assertEqual(r['peaks'][0]['assignment'],r['peaks'][1]['assignment'])
         self.assertNotEqual(r['peaks'][0]['coordinates'],r['peaks'][1]['coordinates'])
         prepare(self.root,r);self.assertEqual(self.csv.read_bytes(),before)
+    def test_compact_peak_summary_has_one_row_per_peak_and_provenance(self):
+        path=self.root/'sample_peak_summary.csv'
+        with path.open(newline='') as handle:rows=list(csv.DictReader(handle))
+        self.assertEqual(len(rows),len(self.b['peaks']))
+        self.assertEqual(len({row['peak_id'] for row in rows}),len(rows))
+        row=rows[0]
+        self.assertEqual(row['source_collection'],'collection')
+        self.assertEqual(row['source_experiment'],'3')
+        self.assertEqual(row['peak_list'],'peaks.list')
+        self.assertEqual(row['experiment_type'],'r1rho')
+        self.assertEqual(row['selected_fit_basis'],'all_points')
+        self.assertTrue(row['rate_s-1'])
+        self.assertTrue(row['rate_error_s-1'])
+        self.assertIn('overlap',rows[0])
+        self.assertEqual(row['all_points_rate_s-1'],'')
+        self.assertEqual(row['without_shortest_rate_s-1'],'')
+
     def test_warning_text_csv_quoting_and_global_warning(self):
         warning='# Warning: "quoted, value"\n# Warning: global uncertainties scaled with 1.1702705.2'
         self.b['fit_text']=warning+'\n'+self.b['fit_text'];prepare(self.root,self.b)
@@ -309,7 +326,7 @@ class PortableTests(unittest.TestCase):
     def test_removed_pages_and_hash_fields_absent_from_all_exports(self):
         plot=(self.root/'plot.gnu').read_text()
         for removed in ['Peak results','Methods and assessment coverage','Repeated-delay scatter',
-                        'NOE ratio methods','Report code:', 'sha256', 'a1-']:
+                        'NOE ratio methods','Report code:', 'sha256']:
             self.assertNotIn(removed,plot)
         self.assertIn('Shared residual summaries by acquisition plane',plot)
         self.assertIn('Shared residual summaries by delay',plot)

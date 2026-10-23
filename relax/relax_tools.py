@@ -906,6 +906,70 @@ def write_analysis_csv(path, report):
             writer.writerow({field: row.get(field) for field in fields})
 
 
+PEAK_SUMMARY_FIELDS = [
+    'analysis_id', 'report_version', 'source_collection', 'source_experiment',
+    'experiment_type', 'peak_list', 'fit_model', 'fit_origin', 'dataset_conclusion',
+    'primary_peak_count', 'holm_rejection_count', 'peak_index', 'peak_id', 'assignment',
+    'residue', 'w1', 'w2', 'w3', 'overlap', 'duplicate_assignment', 'valid_fit',
+    'primary_eligible', 'exclusion_reason', 'rate_s-1', 'rate_error_s-1', 'i0', 'i0_error',
+    'chi2_input', 'reduced_chi2_input', 'dof', 'p_holm', 'uncertainty_rescaled',
+    'flags', 'warnings', 'selected_fit_basis', 'selection_reason',
+    'excluded_shortest_delay_s', 'excluded_planes_1based', 'all_points_rate_s-1',
+    'all_points_error_s-1', 'without_shortest_rate_s-1', 'without_shortest_error_s-1',
+    'rate_change_percent', 'all_points_warnings', 'without_shortest_warnings']
+
+
+def write_peak_summary_csv(path, report):
+    """Write a compact, one-row-per-peak table for reading and downstream analysis."""
+    context = report['context']
+    mode = context['experiment_type']
+    selection = report['selection']
+    audit = selection['audit'] if selection is not None else {}
+    base_rows = {row['peak_id']: row for row in analysis_csv_rows(report)
+                 if row['plane_index'] == 1}
+    with Path(path).open('w', newline='') as handle:
+        writer = csv.DictWriter(handle, fieldnames=PEAK_SUMMARY_FIELDS)
+        writer.writeheader()
+        for peak_index, peak in enumerate(report['rows'], 1):
+            source = base_rows[peak['peak_id']]
+            row = dict(
+                analysis_id=context['analysis_id'], report_version=context['report_version'],
+                source_collection=context['source_collection'],
+                source_experiment=context['source_experiment'], experiment_type=mode,
+                peak_list=context['peak_list'], fit_model=context['fit_model'],
+                fit_origin=context['fit_origin'], dataset_conclusion=report['conclusion'],
+                primary_peak_count=report['primary_count'], holm_rejection_count=report['rejected'],
+                peak_index=peak_index, peak_id=peak['peak_id'], assignment=peak['assignment'],
+                residue=peak['residue'], w1=peak['coordinates'][0],
+                w2=peak['coordinates'][1] if len(peak['coordinates']) > 1 else '',
+                w3=peak['coordinates'][2] if len(peak['coordinates']) > 2 else '',
+                overlap=peak['overlap'], duplicate_assignment=peak['duplicate_assignment'],
+                valid_fit=peak['valid'], primary_eligible=peak['primary_eligible'],
+                exclusion_reason=peak['exclusion_reason'],
+                i0=peak['values'][2] if mode != 'noe' else '',
+                i0_error=peak['values'][3] if mode != 'noe' else '',
+                chi2_input=peak['chi2_input'], reduced_chi2_input=peak['reduced_chi2_input'],
+                dof=peak['dof'], p_holm=peak['p_holm'],
+                uncertainty_rescaled='uncertainty_rescaled' in peak['flags'],
+                flags=';'.join(peak['flags']), warnings=peak['warnings'],
+                selected_fit_basis=audit.get('fit_basis', 'all_points'),
+                selection_reason=audit.get('reason', ''),
+                excluded_shortest_delay_s=audit.get('excluded_delay_s', ''),
+                excluded_planes_1based=';'.join(map(str, audit.get('excluded_planes_1based', []))),
+                rate_change_percent=source.get('rate_change_percent', ''),
+                all_points_warnings=source.get('all_points_warnings', ''),
+                without_shortest_warnings=source.get('candidate_warnings', ''))
+            row['rate_s-1'] = peak['values'][0]
+            row['rate_error_s-1'] = peak['values'][1]
+            if selection is not None:
+                full=peak.get('all_points_fit'); candidate=peak.get('candidate_fit')
+                row['all_points_rate_s-1'] = full['values'][0] if full else ''
+                row['all_points_error_s-1'] = full['values'][1] if full else ''
+                row['without_shortest_rate_s-1'] = candidate['values'][0] if candidate else ''
+                row['without_shortest_error_s-1'] = candidate['values'][1] if candidate else ''
+            writer.writerow(row)
+
+
 def strict_bool(value):
     if value not in ('True', 'False'):
         raise ValueError(f'Invalid saved boolean: {value!r}')
@@ -1291,7 +1355,7 @@ def refresh_report(args):
             backup.mkdir(parents=True)
             for name in existing:shutil.copy2(destination/name,backup/name)
         publish(stage,destination,names)
-        print(f'Report {report_id}: {destination/(c["output_prefix"]+"_analysis.csv")}',flush=True)
+        print(f'Report {report_id}: {destination/(c["output_prefix"]+"_peak_summary.csv")} (one row per peak)',flush=True)
 
 
 
@@ -1436,7 +1500,9 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
             'excluded_delay_s','excluded_planes_1based','original_count','fit_count'))
     csv_name = prefix + '_analysis.csv'
     write_analysis_csv(stage / csv_name, report)
-    names = [csv_name]
+    peak_summary_name = prefix + '_peak_summary.csv'
+    write_peak_summary_csv(stage / peak_summary_name, report)
+    names = [csv_name, peak_summary_name]
     if early_selection is not None:
         summary_name=prefix+'_early_point_summary.json'
         (stage/summary_name).write_text(json.dumps(dict(context=context,selection=early_selection['audit']),

@@ -1,7 +1,8 @@
 RELAXATION REPORTS — VERSION 2
 
 relax_analyze_v2.com automatically exports a self-contained <prefix>_analysis.csv,
-a matching peak-list-named PDF, and the existing compatibility reports. Its
+a matching peak-list-named PDF, a compact <prefix>_peak_summary.csv with one
+row per peak, and the existing compatibility reports. Its
 DATA_TYPE choices remain r1, r1rho (T1rho/R1rho), r2 and noe. Processing settings,
 fitting models and starting rates are unchanged. The original analyzer is kept.
 
@@ -41,7 +42,13 @@ byte comparisons detect inputs changing while the report is being generated.
 
 CSV SCHEMA 2 AND IDENTIFICATION
 
-One quoted CSV row represents one individual peak in one acquisition plane.
+The compact <prefix>_peak_summary.csv has one row per peak, with the selected
+rate/error, overlap and validity flags, fit warnings, assessment values, source
+identification and (when assessed) all-points versus shortest-delay-excluded
+rate/error comparison. It is intended for reading and downstream analysis.
+
+The larger <prefix>_analysis.csv has one quoted row per peak per acquisition
+plane.
 Full numerical precision, acquisition order and repeated delays are preserved.
 Duplicate assignments at different coordinates keep distinct peak IDs. Rows
 can be reordered; peak_index and plane_index restore their original order.
