@@ -906,29 +906,34 @@ def write_analysis_csv(path, report):
             writer.writerow({field: row.get(field) for field in fields})
 
 
-PEAK_SUMMARY_FIELDS = [
+NUMBERS_BASE_FIELDS = [
     'analysis_id', 'report_version', 'source_collection', 'source_experiment',
     'experiment_type', 'peak_list', 'fit_model', 'fit_origin', 'dataset_conclusion',
     'primary_peak_count', 'holm_rejection_count', 'peak_index', 'peak_id', 'assignment',
     'residue', 'w1', 'w2', 'w3', 'overlap', 'duplicate_assignment', 'valid_fit',
     'primary_eligible', 'exclusion_reason', 'rate_s-1', 'rate_error_s-1', 'i0', 'i0_error',
     'chi2_input', 'reduced_chi2_input', 'dof', 'p_holm', 'uncertainty_rescaled',
-    'flags', 'warnings', 'selected_fit_basis', 'selection_reason',
-    'excluded_shortest_delay_s', 'excluded_planes_1based', 'all_points_rate_s-1',
-    'all_points_error_s-1', 'without_shortest_rate_s-1', 'without_shortest_error_s-1',
-    'rate_change_percent', 'all_points_warnings', 'without_shortest_warnings']
+    'flags', 'warnings', 'fit_basis', 'selection_reason', 'excluded_shortest_delay_s',
+    'excluded_planes_1based', 'all_points_rate_s-1', 'all_points_error_s-1',
+    'without_shortest_rate_s-1', 'without_shortest_error_s-1', 'rate_change_percent']
 
 
-def write_peak_summary_csv(path, report):
-    """Write a compact, one-row-per-peak table for reading and downstream analysis."""
+def write_numbers_csv(path, report):
+    """Write one complete analysis row per peak, including every measured plane."""
     context = report['context']
     mode = context['experiment_type']
     selection = report['selection']
     audit = selection['audit'] if selection is not None else {}
+    value_name='noe_ratio' if mode == 'noe' else 'rate_s-1'
+    error_name='noe_ratio_error' if mode == 'noe' else 'rate_error_s-1'
+    fields = [value_name if f == 'rate_s-1' else error_name if f == 'rate_error_s-1' else f
+              for f in NUMBERS_BASE_FIELDS]
+    fields += [f'plane_{i:02d}_{suffix}' for i in range(1, len(report['times']) + 1)
+               for suffix in ('delay_s', 'intensity', 'noise_sd', 'used_in_fit')]
     base_rows = {row['peak_id']: row for row in analysis_csv_rows(report)
                  if row['plane_index'] == 1}
     with Path(path).open('w', newline='') as handle:
-        writer = csv.DictWriter(handle, fieldnames=PEAK_SUMMARY_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for peak_index, peak in enumerate(report['rows'], 1):
             source = base_rows[peak['peak_id']]
@@ -945,29 +950,54 @@ def write_peak_summary_csv(path, report):
                 w3=peak['coordinates'][2] if len(peak['coordinates']) > 2 else '',
                 overlap=peak['overlap'], duplicate_assignment=peak['duplicate_assignment'],
                 valid_fit=peak['valid'], primary_eligible=peak['primary_eligible'],
-                exclusion_reason=peak['exclusion_reason'],
-                i0=peak['values'][2] if mode != 'noe' else '',
+                exclusion_reason=peak['exclusion_reason'], i0=peak['values'][2] if mode != 'noe' else '',
                 i0_error=peak['values'][3] if mode != 'noe' else '',
                 chi2_input=peak['chi2_input'], reduced_chi2_input=peak['reduced_chi2_input'],
                 dof=peak['dof'], p_holm=peak['p_holm'],
                 uncertainty_rescaled='uncertainty_rescaled' in peak['flags'],
                 flags=';'.join(peak['flags']), warnings=peak['warnings'],
-                selected_fit_basis=audit.get('fit_basis', 'all_points'),
+                fit_basis=audit.get('fit_basis', 'all_points'),
                 selection_reason=audit.get('reason', ''),
                 excluded_shortest_delay_s=audit.get('excluded_delay_s', ''),
                 excluded_planes_1based=';'.join(map(str, audit.get('excluded_planes_1based', []))),
-                rate_change_percent=source.get('rate_change_percent', ''),
-                all_points_warnings=source.get('all_points_warnings', ''),
-                without_shortest_warnings=source.get('candidate_warnings', ''))
-            row['rate_s-1'] = peak['values'][0]
-            row['rate_error_s-1'] = peak['values'][1]
+                rate_change_percent=source.get('rate_change_percent', ''))
+            row[value_name] = peak['values'][0]
+            row[error_name] = peak['values'][1]
             if selection is not None:
                 full=peak.get('all_points_fit'); candidate=peak.get('candidate_fit')
                 row['all_points_rate_s-1'] = full['values'][0] if full else ''
                 row['all_points_error_s-1'] = full['values'][1] if full else ''
                 row['without_shortest_rate_s-1'] = candidate['values'][0] if candidate else ''
                 row['without_shortest_error_s-1'] = candidate['values'][1] if candidate else ''
+            for index, (time, point, used) in enumerate(zip(report['times'], peak['points'], report['used']), 1):
+                row.update({f'plane_{index:02d}_delay_s': time,
+                            f'plane_{index:02d}_intensity': point['intensity'],
+                            f'plane_{index:02d}_noise_sd': point['noise'],
+                            f'plane_{index:02d}_used_in_fit': used})
             writer.writerow(row)
+
+
+def write_support_archive(path, prefix, stage, native_source, native_names, internal_names):
+    """Bundle technical records into one optional support file."""
+    import zipfile
+    archive_path=Path(path)
+    readme=(f'Relaxation analysis support files for {prefix}.\n'
+            'The adjacent *_numbers.csv is the one-row-per-peak analysis table; the PDF is the report.\n'
+            'This archive keeps the saved fitter inputs/outputs, warnings, extraction and plotting records\n'
+            'needed to audit or rebuild the report. Raw spectra, peak lists and CCPN projects\n'
+            'are not included.\n')
+    with zipfile.ZipFile(archive_path,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('README.txt',readme)
+        seen={'README.txt'}
+        for name in list(internal_names)+list(native_names):
+            name=Path(name).name
+            if name in seen or name.endswith('_numbers.csv') or name.endswith('_intensity.pdf'):
+                continue
+            candidate=Path(stage)/name
+            if not candidate.is_file(): candidate=Path(native_source)/name
+            if candidate.is_file():
+                archive.write(candidate,arcname=name)
+                seen.add(name)
 
 
 def strict_bool(value):
@@ -1312,50 +1342,85 @@ def load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings):
     return bundle
 
 
+def extract_support_archive(archive_path, destination):
+    import zipfile
+    destination=Path(destination)
+    with zipfile.ZipFile(archive_path) as archive:
+        for info in archive.infolist():
+            name=Path(info.filename)
+            if name.is_absolute() or len(name.parts)!=1 or name.name in ('','.','..'):
+                raise ValueError('Unsafe support archive member')
+            if not info.is_dir():
+                archive.extract(info,destination)
+
+
 def refresh_report(args):
+    extraction=None
     if args.csv:
         input_path=Path(args.csv).resolve()
         bundle=load_analysis_csv(input_path)
         source=input_path.parent
+        native_source=None
         watched=[input_path]
+        native_names=[]
         if args.experiment_type and args.experiment_type!=bundle['context']['experiment_type']:
             raise ValueError('CSV experiment type is fixed; use saved-result refresh to relabel legacy fits')
     else:
         source=Path.cwd().resolve()
-        bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
-        watched=[source/name for name in ('rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt',
-                  'intensity.out',args.saved_prefix+'_fit_diagnostics.tsv')]
-        if args.peak_list_name is None:
-            watched.append(source/'plot.gnu')
-        if bundle['context'].get('_early_point_selection'):
-            watched += [source/(args.saved_prefix+'_analysis.csv')]
-            watched += [source/name for name in early_archive_names()]
+        support=source/(args.saved_prefix+'_support.zip')
+        if (source/'rlx_dfit.inp').is_file():
+            native_source=source
+            native_names=['rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt',
+                          'data_xtr.out']+early_archive_names()
+            watched=[source/name for name in native_names if (source/name).is_file()]
+            watched += [source/(args.saved_prefix+'_fit_diagnostics.tsv'),source/'intensity.out',source/'plot.gnu']
+        elif support.is_file():
+            extraction=tempfile.TemporaryDirectory(prefix='relax-support-')
+            native_source=Path(extraction.name)
+            extract_support_archive(support,native_source)
+            native_names=[p.name for p in native_source.iterdir() if p.is_file()]
+            watched=[support]
+        else:
+            raise ValueError('No saved fitter files or support archive found')
+        bundle=load_saved_analysis(native_source,args.saved_prefix,args.experiment_type,args.peak_list_name)
     destination=Path(args.output_dir).resolve() if args.output_dir else source
     if not destination.is_dir():raise ValueError('Report output directory must already exist')
-    # Re-read under the same lock used by fitting/publication to avoid mixed runs.
-    with run_directory(destination,'report') as stage:
-        before={p:p.read_bytes() for p in watched}
-        if args.csv: bundle=load_analysis_csv(input_path)
-        elif destination==source:bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
-        else:raise ValueError('Legacy refresh writes beside saved results; use CSV to export elsewhere')
-        c=bundle['context'];mode=c['experiment_type']
-        names=prepare_reports(stage,bundle['peaks'],bundle['extracted'],bundle['fit_text'],
+    try:
+        with run_directory(destination,'report') as stage:
+            before={p:p.read_bytes() for p in watched}
+            if args.csv:
+                bundle=load_analysis_csv(input_path)
+            elif native_source == source:
+                bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
+            else:
+                bundle=load_saved_analysis(native_source,args.saved_prefix,args.experiment_type,args.peak_list_name)
+            c=bundle['context'];mode=c['experiment_type']
+            internal_names=prepare_reports(stage,bundle['peaks'],bundle['extracted'],bundle['fit_text'],
                               bundle['times'],bundle['noises'],mode,c['output_prefix'],c['pdf_name'],
-                              c['source_collection']+'/'+c['source_experiment'],context=c, warning_map=bundle.get('warning_map'))
-        checked_run(['gnuplot','plot.gnu'],stage)
-        nonempty(stage/c['pdf_name']);names.append(c['pdf_name'])
-        if any(p.read_bytes()!=contents for p,contents in before.items()):
-            raise ValueError('Saved report inputs changed during rendering')
-        with (stage/(c['output_prefix']+'_analysis.csv')).open(newline='') as handle:
-            report_id=next(csv.DictReader(handle))['analysis_id']
-        existing=[name for name in names if (destination/name).is_file()]
-        if existing:
-            stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-            backup=destination/'.report-backups'/report_id/stamp
-            backup.mkdir(parents=True)
-            for name in existing:shutil.copy2(destination/name,backup/name)
-        publish(stage,destination,names)
-        print(f'Report {report_id}: {destination/(c["output_prefix"]+"_peak_summary.csv")} (one row per peak)',flush=True)
+                              c['source_collection']+'/'+c['source_experiment'],context=c,
+                              warning_map=bundle.get('warning_map'))
+            checked_run(['gnuplot','plot.gnu'],stage)
+            nonempty(stage/c['pdf_name'])
+            if any(p.read_bytes()!=contents for p,contents in before.items()):
+                raise ValueError('Saved report inputs changed during rendering')
+            numbers_name=c['output_prefix']+'_numbers.csv'
+            support_name=c['output_prefix']+'_support.zip'
+            write_support_archive(stage/support_name,c['output_prefix'],stage,native_source or source,
+                                  native_names,internal_names)
+            with (stage/(c['output_prefix']+'_analysis.csv')).open(newline='') as handle:
+                report_id=next(csv.DictReader(handle))['analysis_id']
+            outputs=[c['pdf_name'],numbers_name,support_name]
+            existing=[name for name in outputs if (destination/name).is_file()]
+            if existing:
+                stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+                backup=destination/'.report-backups'/report_id/stamp
+                backup.mkdir(parents=True)
+                for name in existing:shutil.copy2(destination/name,backup/name)
+            publish(stage,destination,outputs)
+            print(f'Report {report_id}: {destination/numbers_name} (one row per peak)',flush=True)
+    finally:
+        if extraction is not None:
+            extraction.cleanup()
 
 
 
@@ -1500,21 +1565,14 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
             'excluded_delay_s','excluded_planes_1based','original_count','fit_count'))
     csv_name = prefix + '_analysis.csv'
     write_analysis_csv(stage / csv_name, report)
-    peak_summary_name = prefix + '_peak_summary.csv'
-    write_peak_summary_csv(stage / peak_summary_name, report)
-    names = [csv_name, peak_summary_name]
+    numbers_name = prefix + '_numbers.csv'
+    write_numbers_csv(stage / numbers_name, report)
+    names = [csv_name, numbers_name]
     if early_selection is not None:
         summary_name=prefix+'_early_point_summary.json'
         (stage/summary_name).write_text(json.dumps(dict(context=context,selection=early_selection['audit']),
                                                   sort_keys=True,indent=2,allow_nan=False)+'\n')
         names.append(summary_name)
-    for suffix, include in (('results.out', lambda r: True),
-                            ('results_peak_overlap.out', lambda r: r['overlap']),
-                            ('results_filtered.out', lambda r: not r['overlap'] and r['valid'])):
-        name = f'{prefix}_{suffix}'
-        text = tag_header + ''.join(f"{r['residue']} {r['values'][0]:.12g} {r['values'][1]:.12g}\n" for r in rows if include(r))
-        (stage / name).write_text(text)
-        names.append(name)
     diagnostics = f'{prefix}_fit_diagnostics.tsv'
     fields = ['peak_id', 'assignment', 'w1', 'w2', 'w3', 'residue', 'value', 'error', 'i0', 'i0_error',
               'chi2', 'chi2_threshold', 'overlap', 'duplicate_assignment', 'valid_fit', 'flags', 'warnings'] + traces
@@ -1681,8 +1739,12 @@ def analyze(args):
         (stage / 'data_xtr.out').write_text(restored)
         checked_run(['gnuplot', 'plot.gnu'], stage)
         nonempty(stage / pdf_name)
-        names += ['data_xtr.out', 'rlx_dfit.inp', 'rlx_dfit.out', pdf_name]+artifact_names
-        publish(stage, source, names)
+        numbers_name=prefix+'_numbers.csv'
+        support_name=prefix+'_support.zip'
+        native_names=['data_xtr.out','rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt',
+                      'relax_header.txt']+artifact_names
+        write_support_archive(stage/support_name,prefix,stage,stage,native_names,names)
+        publish(stage,source,[pdf_name,numbers_name,support_name])
 
 
 def main(argv=None):

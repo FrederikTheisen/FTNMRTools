@@ -73,38 +73,28 @@ rescaling. NOE keeps -mode noe -rms_noise; supply the type header required
 by that fitter mode, rather than treating its type codes as decay times.
 No exponential fit or decay residual is generated for NOE.
 
-Existing result names remain:
-    <prefix>_results.out
-    <prefix>_results_peak_overlap.out
-    <prefix>_results_filtered.out
-    data_xtr.out, rlx_dfit.inp, rlx_dfit.out, intensity.out, plot.gnu
+The analyzer publishes three user-facing files:
     <peak-list-filename>_intensity.pdf
+    <prefix>_numbers.csv
+    <prefix>_support.zip
 
-The three-column result files retain residue, fitted value and error.
-Filtered results exclude overlaps and invalid numerical fits. Duplicate
-labels and other quality warnings are flagged without automatic exclusion.
-The fitter output rlx_dfit.out is preserved verbatim with its temporary
-unique tags; <prefix>_fit_diagnostics.tsv maps them to original assignments
-and coordinates. data_xtr.out and intensity.out restore original labels.
-
-The diagnostics TSV also contains amplitude/error, chi-square and its
-reported threshold, overlap, validity and warning flags. Native warning
-text is preserved, including any malformed number formatting. A rescaling
-warning is not silently interpreted as an exact numeric scale factor.
+The PDF contains the plots and dataset assessment. The numbers CSV has one row
+per peak, including assignments, coordinates, overlap/validity/warning flags,
+selected rates and errors, fit statistics, any all-points versus
+shortest-delay-excluded comparison, and every acquisition plane's delay,
+intensity, input noise and fit-use flag. Repeated delays stay in acquisition
+order. The support ZIP groups the detailed report table, diagnostics, saved
+fitter inputs and outputs, and plotting records. Native fitter files are
+preserved byte-for-byte inside that archive instead of being scattered beside
+the PDF and numbers table.
 
 Plots use the reported R and I0 without a second fit. Measured intensities,
-input noise bars and predicted intensities are divided by fitted I0.
-The residual panel is (measured - predicted) / input noise SD. These bars
-condition on fitted I0; they do not include uncertainty in the fitted
-amplitude or quantify overlap/processing systematics. Invalid or zero I0
-receives a flagged raw-intensity panel without a normalized curve or
-residuals. The rate/NOE overview shows valid fitted peaks and marks overlaps.
-
-intensity.out retains time and plotted intensity as its first two columns.
-For decay data its additional columns are plotted noise SD, plotted
-prediction, plotted residual and residual/input-noise-SD. Invalid curves
-use NaN for prediction and residuals. For NOE the columns are plane index,
-raw intensity and per-plane input noise SD.
+input noise bars and predicted intensities are divided by fitted I0. The
+residual panel is (measured - predicted) / input noise SD. These bars condition
+on fitted I0; they do not include uncertainty in the fitted amplitude or
+quantify overlap/processing systematics. Invalid or zero I0 receives a flagged
+raw-intensity panel without a normalized curve or residuals. The rate/NOE
+overview shows valid fitted peaks and marks overlaps.
 
 Failure handling
 ----------------
@@ -163,13 +153,11 @@ most 20 percent. These named defaults live in EARLY_DEFAULTS and are recorded
 in every audit. They are diagnostic heuristics, not evidence of a physical
 cause or a validated temperature/sequence correction.
 
-Existing three-column result filenames now carry comment headers naming
-policy, fit basis, decision, excluded delay and original 1-based planes,
-and original/retained counts. The diagnostics TSV records both rates/errors,
-all fitted parameters/warnings, rate change, and selected fit basis. The
-machine-readable <prefix>_early_point_summary.json records thresholds,
-cohort IDs, residual bins, comparison scores and reasons. Native artifacts
-are validated numerically without hashing.
+Detailed diagnostics, the full measurement table, the selection audit, and
+compatibility information are grouped inside the support ZIP rather than
+published as separate files. The archive retains the fit comparisons, warning
+text, thresholds, cohort and residual-bin records used to review a shortened
+fit. Native artifacts are validated numerically without hashing.
 
 Native artifacts for each run:
   rlx_dfit_all_points.inp/.out and rlx_dfit_all_points_noise.txt
@@ -182,20 +170,10 @@ vEstNoise.txt and relaxation headers keep ALL acquisition observations.
 For manual reproduction use the selected trio, not the original full-length
 noise file with a shortened fitter input.
 
-data_xtr.out and intensity.out retain every observation in acquisition
-order. For v2 decay analyses intensity.out appends a seventh used_in_fit
-column (1/0); the first six columns retain their meaning. The PDF records the
-selection, compares aggregate residuals on retained observations, and shows
-excluded points with open orange symbols. Original-noise goodness-of-fit
-statistics use only retained points and N_used-2 degrees of freedom; these
-are conditional diagnostics after a data-driven selection.
-
-CSV schema 2 is self-contained: it includes the original observations,
-per-observation mask, both fits/warnings and the decision. Existing schema-1
-CSVs remain supported. Both CSV and --saved-prefix report refresh validate
-and retain the recorded selection without extraction or refitting. Inconsistent masks, decisions, fitted
-values, observations or archived numerical inputs are rejected. A report refresh
-never decides to exclude another delay.
+The support ZIP keeps the original observations, per-plane fit mask, both
+candidate fits/warnings and the selection audit. Report refresh validates the
+saved selection and numerical contents without extraction or refitting. A
+refresh never decides to exclude another delay.
 
 Insufficient data or a rejected candidate keeps the full fit and records a
 reason. A malformed candidate or failed external command aborts publication,
