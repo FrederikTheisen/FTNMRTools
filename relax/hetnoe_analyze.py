@@ -1,9 +1,64 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import math
 import re
 from pathlib import Path
 from collections import defaultdict
+
+def read_peak_file(path):
+    """Read compact noise comments, preserving the peak table bytes."""
+    data = Path(path).read_bytes()
+    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region', 'source_folder'}
+    fields = {}
+    table_lines = []
+    in_footer = False
+    for line in data.splitlines(keepends=True):
+        if line.lstrip().startswith(b'#'):
+            key, separator, value = line.lstrip()[1:].decode('utf-8').strip().partition(':')
+            if separator and key in names:
+                in_footer = True
+                if key in fields:
+                    raise ValueError(f'{path}: duplicate metadata field {key}')
+                fields[key] = value.strip()
+                continue
+        if in_footer:
+            if line.strip() and not line.lstrip().startswith(b'#'):
+                raise ValueError(f'{path}: peak rows must precede metadata')
+        else:
+            table_lines.append(line)
+    if not fields:
+        return data, None
+    if not {'noise_sd', 'noise_method', 'spectrum_scale'}.issubset(fields):
+        raise ValueError(f'{path}: incomplete compact noise metadata')
+    sigma, scale = float(fields['noise_sd']), float(fields['spectrum_scale'])
+    if not math.isfinite(sigma) or sigma <= 0:
+        raise ValueError(f'{path}: noise SD must be positive and finite')
+    if not math.isfinite(scale) or scale == 0:
+        raise ValueError(f'{path}: spectrum scale must be finite and nonzero')
+    if not fields['noise_method']:
+        raise ValueError(f'{path}: noise method is missing')
+    if 'source_folder' in fields:
+        folder = fields['source_folder']
+        if not folder or folder in ('.', '..') or any(c in folder for c in '/\\\r\n\t'):
+            raise ValueError(f'{path}: source_folder must be a single folder name')
+    fields.update(noise_sd=sigma, spectrum_scale=scale)
+    if 'noise_region' in fields:
+        region = json.loads(fields['noise_region'])
+        if not isinstance(region, dict) or not region:
+            raise ValueError(f'{path}: noise_region must contain axis bounds')
+        for bounds in region.values():
+            if (not isinstance(bounds, list) or len(bounds) != 2 or
+                    not all(isinstance(value, (int, float)) and math.isfinite(value) for value in bounds) or
+                    bounds[0] >= bounds[1]):
+                raise ValueError(f'{path}: invalid noise_region bounds')
+        fields['noise_region'] = region
+    return b''.join(table_lines), fields
+
+
+def read_noise_metadata(path):
+    return read_peak_file(path)[1]
+
 
 def to_bool(s):
     if s is None:
@@ -33,13 +88,15 @@ def parse_sparky_list(path):
         idx_overlap = 4
         for ln in f:
             line = ln.strip()
-            if 'intensity' in line:
-                idx_int = line.split().index('intensity')
-            if 'overlap' in line:
-                idx_overlap = line.split().index('overlap')
             if not line or line.startswith('#'):
                 continue
             parts = line.split()
+            if parts[0].lower() == 'assignment':
+                if 'intensity' in parts:
+                    idx_int = parts.index('intensity')
+                if 'overlap' in parts:
+                    idx_overlap = parts.index('overlap')
+                continue
             if len(parts) < 4:
                 # skip malformed lines
                 continue
@@ -93,10 +150,11 @@ def build_output_prefix_from_ref(ref_file):
         prefix = Path(ref_file).stem
     return f"{prefix}_HetNOE"
 
-def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
+def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False, sigma_ref=None):
     """
     R = A/B
-    sigma_R = sqrt((sigma/B)^2 + (A*sigma/B^2)^2)
+    sigma_R = sqrt((sigma_NOE/B)^2 + (A*sigma_REF/B^2)^2).
+    sigma is the NOE SD; sigma_ref defaults to the same value when both spectra share a noise SD.
     If B ~ 0, return (nan, nan) unless allow_zero_ref=True (then tiny epsilon guard).
     """
     if B_ref == 0.0:
@@ -105,7 +163,8 @@ def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False):
         else:
             return (float('nan'), float('nan'))
     R = A_noe / B_ref
-    sigma_R = abs(sigma / B_ref) * math.sqrt(1.0 + R*R)
+    ref_sd = sigma if sigma_ref is None else sigma_ref
+    sigma_R = math.hypot(sigma / B_ref, R * ref_sd / B_ref)
     return (R, sigma_R)
 
 def write_out(path, rows, simple=True):
@@ -125,13 +184,31 @@ def main():
     ap.add_argument("-ref", help="Reference (noe OFF) Sparky .list file (used for output naming).", required=True)
     ap.add_argument("-noe", help="NOE (noe ON) Sparky .list file.", required=True)
     ap.add_argument("-noise", type=float, required=False,
-                    help="Noise SD to use for both spectra (same sigma for REF and NOE).", default=0.0)
+                    help="Override noise SD for both spectra; otherwise read compact noise comments when present.", default=None)
     ap.add_argument("--allow-zero-ref", action="store_true",
                     help="If REF intensity is zero, use a tiny epsilon instead of returning NaN.")
     args = ap.parse_args()
 
     ref = parse_sparky_list(args.ref)
     noe = parse_sparky_list(args.noe)
+
+    if args.noise is not None:
+        if not math.isfinite(args.noise) or args.noise < 0:
+            ap.error('-noise must be finite and nonnegative')
+        sigma_ref = sigma_noe = args.noise
+    else:
+        ref_metadata = read_noise_metadata(args.ref)
+        noe_metadata = read_noise_metadata(args.noe)
+        sigma_ref = None if ref_metadata is None else float(ref_metadata['noise_sd'])
+        sigma_noe = None if noe_metadata is None else float(noe_metadata['noise_sd'])
+        if (ref_metadata is not None and noe_metadata is not None and
+                not math.isclose(float(ref_metadata['spectrum_scale']), float(noe_metadata['spectrum_scale']), rel_tol=1e-12)):
+            ap.error('Reference and NOE spectrum scales differ; review relative normalization')
+        if (sigma_ref is None) != (sigma_noe is None):
+            ap.error('Both lists need noise metadata, or supply -noise explicitly')
+        if sigma_ref is None:
+            sigma_ref = sigma_noe = 0.0  # Plain lists without noise information report zero uncertainty.
+    print(f"# Noise SD: REF={sigma_ref:g}; NOE={sigma_noe:g} (independent noise-only errors)")
 
     # Intersect residues (they're expected to match; we enforce intersection)
     common = sorted(set(ref.keys()) & set(noe.keys()))
@@ -146,7 +223,7 @@ def main():
         I_ref = ref[resid]["intensity"]
         I_noe = noe[resid]["intensity"]
 
-        ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, args.noise, allow_zero_ref=args.allow_zero_ref)
+        ratio, sigma_ratio = compute_ratio_and_error(I_noe, I_ref, sigma_noe, allow_zero_ref=args.allow_zero_ref, sigma_ref=sigma_ref)
 
         overlap_note = "overlap" if ref[resid]["overlap"] or noe[resid]["overlap"] else ""
         print(f"""{resid}\t{ratio:+.2f} ± {sigma_ratio:.2f} {overlap_note}""")

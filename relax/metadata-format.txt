@@ -1,0 +1,40 @@
+Peak-list noise metadata
+
+Four comments follow the final peak; the column header and peak rows stay intact:
+
+# noise_sd: 29881.358701383433
+# noise_method: MAD
+# spectrum_scale: 1.0
+# source_folder: 20250512_15N_hANP32a_50mMNaCl
+
+noise_sd is in the same scaled intensity units as peak heights. MAD denotes
+Gaussian-equivalent SD: median(abs(x-median(x))) / 0.6744897501960817.
+The reproducible sample uses at most 65,536 points in 1D/2D, or 10,000 in nD.
+
+Only when NOISE_REGION is explicitly configured, a fifth comment records it:
+# noise_region: {"H":[9.0,9.5]}
+Unspecified axes use their full range. Without this line, sampling spans the
+whole spectrum. source_folder is the acquisition collection name (date and conditions), not
+an experiment number or full path. It is taken from the resolved spectrum
+path: the parent of a Bruker experiment, or a dated ancestor for moved
+processed files. Export stops if the collection cannot be identified.
+Existing compact lists without source_folder remain readable.
+No JSON envelope, IDs, full paths, hashes or diagnostics are exported.
+
+Automatic sampling assumes most points are background. Grid noise is a proxy
+for interpolated peak-height error: processing correlates neighbouring points.
+Local artefacts, overlap, placement and systematic errors are not quantified.
+Higher-dimensional noise is pooled, rather than estimated separately per plane.
+
+hetnoe_analyze.py reads each spectrum's noise SD automatically and propagates
+independent REF and NOE errors. Automatic metadata use requires matching
+spectrum scales. The existing -noise option overrides both with a shared SD.
+For plain files with neither metadata nor -noise, the zero-noise default
+applies. Incomplete or invalid compact metadata stops automatic use.
+
+relax_analyze_v2.com ignores comment lines when preparing per-peak extraction
+inputs; per-plane vEstNoise.txt inputs remain in use for relaxation fits. Importers
+and other readers should ignore lines starting with #.
+hetnoe_analyze.py retains its strongest-intensity duplicate-residue policy.
+relax_analyze_v2.com keeps distinct peak positions separate, including duplicate
+assignment labels; the separate ANP32A hetNOE analysis also keeps both E174 rows.
