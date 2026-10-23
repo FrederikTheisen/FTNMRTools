@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import shutil
 import struct
 import subprocess
 import sys
@@ -261,6 +262,46 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual((p/'target').read_text(),'old')
 
 
+class EntrypointTests(unittest.TestCase):
+    def test_launch_paths_locate_companion_helper(self):
+        with tempfile.TemporaryDirectory(prefix='ftnmr-entrypoint-') as d:
+            root=Path(d);scripts=root/'scripts with spaces';scripts.mkdir()
+            log=root/'entrypoint.json'
+            (scripts/'relax_tools.py').write_text(
+                'import json, os, sys\nfrom pathlib import Path\n'
+                'Path(os.environ["FT_ENTRYPOINT_LOG"]).write_text(json.dumps(sys.argv))\n')
+            env=dict(os.environ, PATH='.:/usr/bin:/bin', FT_ENTRYPOINT_LOG=str(log))
+            for name in ('relax_proc.com','relax_analyze_v2.com'):
+                script=scripts/name
+                # Isolate launch semantics from a user's shell startup files.
+                text=(RELAX/name).read_text().split('\n',1)[1]
+                script.write_text('#!/bin/tcsh -f\n'+text);script.chmod(0o755)
+                link=scripts/('linked_'+name);link.symlink_to(script.name)
+                commands=(['/bin/tcsh','-f',name], ['./'+name], [name],
+                          ['/bin/tcsh','-f',str(script)], [str(script)], [str(link)])
+                for command in commands:
+                    with self.subTest(script=name,command=command):
+                        log.unlink(missing_ok=True)
+                        result=subprocess.run(command,cwd=scripts,env=env,text=True,capture_output=True)
+                        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                        args=json.loads(log.read_text())
+                        self.assertEqual(Path(args[0]),scripts/'relax_tools.py')
+                        self.assertEqual(args[1], 'run-proc' if name=='relax_proc.com' else 'analyze')
+                        if name=='relax_proc.com':
+                            path=Path(args[args.index('--script')+1])
+                            self.assertTrue(path.is_absolute())
+                            self.assertEqual(path.resolve(),script)
+
+    def test_missing_helper_fails_before_processing(self):
+        with tempfile.TemporaryDirectory(prefix='ftnmr-entrypoint-missing-') as d:
+            root=Path(d)
+            for name in ('relax_proc.com','relax_analyze_v2.com'):
+                script=root/name;shutil.copy2(RELAX/name,script)
+                result=subprocess.run(['/bin/tcsh','-f',name],cwd=root,text=True,capture_output=True)
+                self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+                self.assertIn('Keep relax_tools.py beside this script',result.stdout+result.stderr)
+
+
 class ScriptIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='ftnmr-stub-tests-');self.addCleanup(self.temp.cleanup)
@@ -344,8 +385,9 @@ class ScriptIntegrationTests(unittest.TestCase):
         self.assertEqual(self.calls(),[])
     def test_r2_and_noe_shell_modes(self):
         original=(RELAX/'relax_analyze_v2.com').read_text()
+        shutil.copy2(RELAX/'relax_tools.py',self.root/'relax_tools.py')
         for mode in ('r2','noe'):
-            script=self.root/f'{mode}.com';script.write_text(original.replace('set DATA_TYPE = r1',f'set DATA_TYPE = {mode}').replace('set HELPER = "$0:h/relax_tools.py"',f'set HELPER = "{RELAX}/relax_tools.py"'))
+            script=self.root/f'{mode}.com';script.write_text(original.replace('set DATA_TYPE = r1',f'set DATA_TYPE = {mode}'))
             if mode=='noe':(self.source/'relax_header.txt').write_text('3 1 -1 1\n')
             result=self.run_script('relax_analyze_v2.com',script=script)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)

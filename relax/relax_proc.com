@@ -11,9 +11,17 @@ set delay_source = auto # auto, vc, vd, ncyc; auto requires exactly one list
 set cycle_seconds = ""
 set cycle_constant = 0
 
-set HELPER = "$0:h/relax_tools.py"
+# Prefix bare/relative filenames before :h; tcsh leaves a bare name unchanged.
+set SCRIPT_PATH = "$0"
+if ("$SCRIPT_PATH" !~ /*) set SCRIPT_PATH = "$cwd/$SCRIPT_PATH"
+set HELPER = "$SCRIPT_PATH:h/relax_tools.py"
+if (! -f "$HELPER") then
+    echo "Missing helper: $HELPER"
+    echo "Keep relax_tools.py beside this script (and any entrypoint symlink)."
+    exit 2
+endif
 if ($#argv == 0) then
-    python3 "$HELPER" run-proc --script "$0" --source "$cwd"
+    python3 "$HELPER" run-proc --script "$SCRIPT_PATH" --source "$cwd"
     exit $status
 endif
 if ($#argv != 2) then

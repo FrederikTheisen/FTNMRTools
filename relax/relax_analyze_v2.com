@@ -13,7 +13,15 @@ set RLX_DFIT_ESD = vEstNoise.txt
 set OUTPUT_PREFIX = ""
 
 # Keep relax_tools.py beside this script. It stages and validates the complete run.
-set HELPER = "$0:h/relax_tools.py"
+# Prefix bare/relative filenames before :h; tcsh leaves a bare name unchanged.
+set SCRIPT_PATH = "$0"
+if ("$SCRIPT_PATH" !~ /*) set SCRIPT_PATH = "$cwd/$SCRIPT_PATH"
+set HELPER = "$SCRIPT_PATH:h/relax_tools.py"
+if (! -f "$HELPER") then
+    echo "Missing helper: $HELPER"
+    echo "Keep relax_tools.py beside this script (and any entrypoint symlink)."
+    exit 2
+endif
 python3 "$HELPER" analyze --peaks "$SPARKY_PEAKS" --data "$DATA_FILE" \
     --format "$DATA_FMT" --mode "$DATA_TYPE" --peak-format "$PEAK_FMT" \
     --header "$RLX_DFIT_HEADER" --noise "$RLX_DFIT_ESD" --prefix "$OUTPUT_PREFIX"

@@ -18,6 +18,11 @@ from the experiment directory:
     csh /path/to/FTNMRTools/relax/relax_proc.com
     tcsh /path/to/FTNMRTools/relax/relax_analyze_v2.com
 
+Bare filenames, relative paths and absolute paths are supported, including
+paths with spaces. For a local copied script, `tcsh relax_proc.com` or
+`./relax_proc.com` also works. Keep relax_tools.py beside each copied script
+or entrypoint symlink. A missing helper stops before processing begins.
+
 Requirements: Python 3.8+, tcsh, the existing NMRPipe commands, data_xtr,
 rlx_dfit and gnuplot with pdfcairo support. Python uses only its standard
 library. The controller inherits your configured command PATH and NMRTXT.
