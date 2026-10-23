@@ -215,7 +215,8 @@ policy, fit basis, decision, excluded delay and original 1-based planes,
 and original/retained counts. The diagnostics TSV records both rates/errors,
 all fitted parameters/warnings, rate change, and selected fit basis. The
 machine-readable <prefix>_early_point_summary.json records thresholds,
-cohort IDs, residual bins, comparison scores, reasons and artifact hashes.
+cohort IDs, residual bins, comparison scores and reasons. Native artifacts
+are validated numerically without hashing.
 
 Native artifacts for each run:
   rlx_dfit_all_points.inp/.out and rlx_dfit_all_points_noise.txt
@@ -239,9 +240,9 @@ are conditional diagnostics after a data-driven selection.
 CSV schema 2 is self-contained: it includes the original observations,
 per-observation mask, both fits/warnings and the decision. Existing schema-1
 CSVs remain supported. Both CSV and --saved-prefix report refresh validate
-and retain the recorded selection without extraction or refitting. Editing
-a mask, decision, fit, observation or native archive is rejected. A report
-refresh never decides to exclude another delay.
+and retain the recorded selection without extraction or refitting. Inconsistent masks, decisions, fitted
+values, observations or archived numerical inputs are rejected. A report refresh
+never decides to exclude another delay.
 
 Insufficient data or a rejected candidate keeps the full fit and records a
 reason. A malformed candidate or failed external command aborts publication,

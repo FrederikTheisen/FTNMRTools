@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 
 from test_relax_tools import tools, RELAX, working
@@ -165,20 +166,20 @@ class PortableTests(unittest.TestCase):
     def test_reject_missing_rows_inconsistent_metadata_noise_and_tampering(self):
         before=self.csv.read_bytes()
         for mutation in [lambda rows:rows.pop(2),lambda rows:rows[0].update(value='9'),
-                         lambda rows:rows[0].update(noise_sd='4'),lambda rows:rows[0].update(report_revision='different'),
+                         lambda rows:rows[0].update(noise_sd='4'),lambda rows:rows[0].update(report_version='different'),
                          lambda rows:rows[0].update(intensity='99'),lambda rows:rows[0].update(plane_index='20'),
                          lambda rows:rows[0].update(plane_bias='True')]:
             with self.subTest(mutation=mutation):
                 self.csv.write_bytes(before);self.rewrite(mutation)
                 with self.assertRaises(ValueError):tools.load_analysis_csv(self.csv)
-    def test_stable_fit_id_separate_report_revision(self):
+    def test_stable_uuid_separate_report_version(self):
         with self.csv.open() as f:original=next(csv.DictReader(f))
-        with mock.patch.object(tools,'code_revision',return_value='new-report-code'):
+        with mock.patch.object(tools,'REPORT_VERSION','next'):
             b=tools.load_analysis_csv(self.csv);prepare(self.root,b)
         with self.csv.open() as f:changed=next(csv.DictReader(f))
         self.assertEqual(original['analysis_id'],changed['analysis_id'])
-        self.assertEqual(changed['report_revision'],'new-report-code')
-        self.assertEqual(original['fit_revision'],changed['fit_revision'])
+        self.assertEqual(changed['report_version'],'next')
+        self.assertEqual(uuid.UUID(changed['analysis_id']).version,4)
     def test_saved_legacy_consistency_and_native_bytes(self):
         write_saved(self.root,self.b)
         names=['rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt']
@@ -193,11 +194,11 @@ class PortableTests(unittest.TestCase):
             elif name=='intensity.out':path.write_text(old.replace('0 1 0.01','0 0.7 0.01',1))
             else:path.write_text(old.replace('120.1','nan',1))
             with self.subTest(name=name),self.assertRaises(ValueError):tools.load_saved_analysis(self.root,'sample','r1rho')
-    def test_saved_refresh_retains_fit_producing_revision(self):
-        self.b['context'].update(fit_origin='analysis',fit_revision='original-fit-code')
+    def test_saved_refresh_retains_uuid_and_fit_origin(self):
+        self.b['context'].update(fit_origin='analysis')
         write_saved(self.root,self.b)
         loaded=tools.load_saved_analysis(self.root,'sample','r1rho')
-        self.assertEqual(loaded['context']['fit_revision'],'original-fit-code')
+        self.assertEqual(loaded['context']['analysis_id'],self.b['context']['analysis_id'])
         self.assertEqual(loaded['context']['fit_origin'],'analysis')
     def test_mapping_and_identifier_mismatches_fail_before_render(self):
         write_saved(self.root,self.b)
@@ -241,17 +242,99 @@ class PortableTests(unittest.TestCase):
         with mock.patch.object(tools,'checked_run',side_effect=render),mock.patch.object(Path,'rename',broken):
             with self.assertRaises(OSError):tools.refresh_report(args)
         self.assertEqual(before,{n:(self.root/n).read_bytes() for n in before})
-    def test_successful_refresh_backups_and_native_fingerprints(self):
+    def test_successful_refresh_backups_and_native_bytes(self):
         write_saved(self.root,self.b)
         original=(self.root/'sample_results.out').read_bytes()
+        native={n:(self.root/n).read_bytes() for n in ['rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt']}
         def render(command,stage): (stage/'peaks.list_intensity.pdf').write_bytes(b'new-pdf')
         args=argparse.Namespace(csv=None,saved_prefix='sample',experiment_type='r1rho',output_dir=None,peak_list_name=None)
         with working(self.root),mock.patch.object(tools,'checked_run',side_effect=render):tools.refresh_report(args)
         backups=list((self.root/'.report-backups').glob('*/*/sample_results.out'))
         self.assertEqual(len(backups),1);self.assertEqual(backups[0].read_bytes(),original)
         with self.csv.open() as f:row=next(csv.DictReader(f))
-        self.assertEqual(row['fit_input_sha256'],tools.file_sha256(self.root/'rlx_dfit.inp'))
-        self.assertEqual(row['fit_output_sha256'],tools.file_sha256(self.root/'rlx_dfit.out'))
+        self.assertEqual(native,{n:(self.root/n).read_bytes() for n in native})
+        self.assertEqual(row['analysis_id'],self.b['context']['analysis_id'])
+        self.assertFalse(any('sha256' in key for key in row))
+    def legacy_rows(self):
+        with self.csv.open(newline='') as handle: rows=list(csv.DictReader(handle))
+        for row in rows:
+            row.update(schema_version='1',analysis_id='a1-obsolete-content-id',
+                       fit_revision='sha256:old-fit-code',report_revision='sha256:old-report-code',
+                       fit_input_sha256='unused input digest',fit_output_sha256='unused output digest',
+                       noise_sha256='unused noise digest',assessment_method='old detailed methods paragraph')
+        return rows
+    def write_legacy_csv(self, rows):
+        with self.csv.open('w',newline='') as handle:
+            writer=csv.DictWriter(handle,fieldnames=tools.LEGACY_CSV_FIELDS,extrasaction='ignore')
+            writer.writeheader();writer.writerows(rows)
+    def test_schema1_csv_migrates_once_with_unchanged_numbers(self):
+        legacy=self.legacy_rows();self.write_legacy_csv(legacy)
+        loaded=tools.load_analysis_csv(self.csv)
+        self.assertEqual(loaded['context']['analysis_id'],'')
+        prepare(self.root,loaded)
+        first=self.csv.read_bytes()
+        with self.csv.open(newline='') as handle: migrated=list(csv.DictReader(handle))
+        self.assertEqual(uuid.UUID(migrated[0]['analysis_id']).version,4)
+        self.assertEqual(migrated[0]['schema_version'],'2')
+        for old,new in zip(legacy,migrated):
+            for key in tools.CSV_FIELDS:
+                if key not in ('schema_version','analysis_id','report_version'):
+                    self.assertEqual(old[key],new[key],key)
+        prepare(self.root,tools.load_analysis_csv(self.csv))
+        self.assertEqual(self.csv.read_bytes(),first)
+        for removed in ('sha256','assessment_method','fit_revision','report_revision','a1-obsolete'):
+            self.assertNotIn(removed,self.csv.read_text())
+    def test_schema1_csv_rejects_inconsistent_measurements_and_metadata(self):
+        rows=self.legacy_rows()
+        for field,value in [('intensity','99'),('value','99'),('noise_sd','99'),
+                            ('prediction','99'),('source_collection','other')]:
+            changed=copy.deepcopy(rows);changed[0][field]=value;self.write_legacy_csv(changed)
+            with self.subTest(field=field),self.assertRaises(ValueError):tools.load_analysis_csv(self.csv)
+    def test_schema1_saved_diagnostics_migrate_and_preserve_uuid_after_export(self):
+        write_saved(self.root,self.b)
+        path=self.root/'sample_fit_diagnostics.tsv'
+        with path.open(newline='') as handle:
+            reader=csv.DictReader(handle,delimiter='\t');fields=reader.fieldnames;rows=list(reader)
+        old_fields=fields[:-len(tools.TRACE_FIELDS)]+tools.LEGACY_TRACE_FIELDS
+        for row in rows:
+            row.update(schema_version='1',analysis_id='a1-obsolete',fit_revision='sha256:old',
+                       report_revision='sha256:old',fit_input_sha256='unused',fit_output_sha256='unused',noise_sha256='unused')
+        with path.open('w',newline='') as handle:
+            writer=csv.DictWriter(handle,fieldnames=old_fields,delimiter='\t',extrasaction='ignore')
+            writer.writeheader();writer.writerows(rows)
+        loaded=tools.load_saved_analysis(self.root,'sample','r1rho');prepare(self.root,loaded)
+        again=tools.load_saved_analysis(self.root,'sample','r1rho')
+        self.assertEqual(loaded['context']['analysis_id'],again['context']['analysis_id'])
+        self.assertEqual(again['extracted'],self.b['extracted'])
+    def test_removed_pages_and_hash_fields_absent_from_all_exports(self):
+        plot=(self.root/'plot.gnu').read_text()
+        for removed in ['Peak results','Methods and assessment coverage','Repeated-delay scatter',
+                        'NOE ratio methods','Report code:', 'sha256', 'a1-']:
+            self.assertNotIn(removed,plot)
+        self.assertIn('Shared residual summaries by acquisition plane',plot)
+        self.assertIn('Shared residual summaries by delay',plot)
+        self.assertIn('report v2',plot);self.assertIn('I0 =',plot)
+        self.assertIn('>=10 eligible peaks, >=80% same sign',plot)
+        self.assertIn('Gaussian measurement noise',plot)
+        for name in ['sample_analysis.csv','sample_fit_diagnostics.tsv','sample_results.out','intensity.out']:
+            text=(self.root/name).read_text()
+            self.assertNotIn('sha256',text);self.assertNotIn('assessment_method',text)
+            self.assertNotIn('report_revision',text);self.assertNotIn('fit_revision',text)
+        source=(RELAX/'relax_tools.py').read_text()
+        self.assertNotIn('import hashlib',source);self.assertNotIn('def file_sha256',source)
+    def test_uuid_validation_and_input_changes_during_render(self):
+        before=self.csv.read_bytes()
+        self.rewrite(lambda rows:[r.update(analysis_id='a1-obsolete') for r in rows])
+        with self.assertRaises(ValueError):tools.load_analysis_csv(self.csv)
+        self.csv.write_bytes(before)
+        pdf=self.root/'peaks.list_intensity.pdf';pdf.write_bytes(b'old-pdf')
+        def rendering_changes_input(command,stage):
+            (stage/pdf.name).write_bytes(b'new-pdf')
+            self.csv.write_bytes(before+b'\n')
+        args=argparse.Namespace(csv=str(self.csv),saved_prefix=None,experiment_type=None,output_dir=None,peak_list_name=None)
+        with mock.patch.object(tools,'checked_run',side_effect=rendering_changes_input):
+            with self.assertRaisesRegex(ValueError,'changed during rendering'):tools.refresh_report(args)
+        self.assertEqual(pdf.read_bytes(),b'old-pdf')
     def test_noe_and_invalid_amplitude_roundtrips(self):
         for mode in ['noe','r1rho']:
             b=bundle(count=3,mode=mode)

@@ -11,7 +11,6 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 import fcntl
 import glob
-import hashlib
 import json
 import math
 import os
@@ -26,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import uuid
 
 NUMBER = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
 TIME = re.compile(rf'({NUMBER})\s*(s|m|ms|u|us|µs|μs)?\Z')
@@ -431,8 +431,9 @@ def gnuplot_string(text):
 
 # Versioned, portable reporting. All calculations below use saved measurements
 # and reported fit parameters; none of these functions estimates fit parameters.
-REPORT_SCHEMA = '1'
-EARLY_SCHEMA = '2'
+REPORT_SCHEMA = '2'
+REPORT_VERSION = '2'
+EARLY_SCHEMA = REPORT_SCHEMA
 EARLY_DEFAULTS = dict(min_peaks=20, min_remaining_delays=5, residual_floor=.005,
                       noise_multiple=3., sign_fraction=.8, score_reduction=.5,
                       max_median_rate_change=.2)
@@ -444,10 +445,13 @@ CONCLUSIONS = {
     'inconclusive': 'Inconclusive',
     'not_applicable': 'Not applicable: NOE ratio analysis',
 }
-TRACE_FIELDS = ['schema_version', 'analysis_id', 'source_collection', 'source_experiment',
+LEGACY_TRACE_FIELDS = ['schema_version', 'analysis_id', 'source_collection', 'source_experiment',
                 'peak_list', 'output_prefix', 'pdf_name', 'experiment_type', 'fit_model',
                 'fit_origin', 'fit_revision', 'report_revision', 'fit_input_sha256',
                 'fit_output_sha256', 'noise_sha256']
+TRACE_FIELDS = ['schema_version', 'analysis_id', 'source_collection', 'source_experiment',
+                'peak_list', 'output_prefix', 'pdf_name', 'experiment_type', 'fit_model',
+                'fit_origin', 'report_version']
 CSV_FIELDS = TRACE_FIELDS + [
     'peak_index', 'peak_id', 'assignment', 'residue', 'w1', 'w2', 'w3', 'overlap',
     'duplicate_assignment', 'valid_fit', 'plane_index', 'delay_s', 'plane_code',
@@ -455,7 +459,7 @@ CSV_FIELDS = TRACE_FIELDS + [
     'value', 'value_error', 'value_units', 'i0', 'i0_error', 'fitter_chi2', 'fitter_threshold',
     'uncertainty_rescaled', 'warnings', 'flags', 'chi2_input', 'reduced_chi2_input', 'dof',
     'p_input', 'p_holm', 'primary_eligible', 'exclusion_reason', 'repeat_chi2', 'repeat_dof',
-    'repeat_pair_z', 'repeat_delay_chi2', 'repeat_delay_dof', 'repeat_delay_pair_z', 'assessment_method', 'dataset_conclusion', 'primary_peak_count', 'holm_rejection_count',
+    'repeat_pair_z', 'repeat_delay_chi2', 'repeat_delay_dof', 'repeat_delay_pair_z', 'dataset_conclusion', 'primary_peak_count', 'holm_rejection_count',
     'coherent_planes', 'alpha', 'coherence_min_peaks', 'coherence_sign_fraction',
     'coherence_median_sd', 'plane_median_sd', 'plane_q1_sd', 'plane_q3_sd',
     'plane_sign_fraction', 'plane_bias', 'delay_median_sd', 'delay_q1_sd', 'delay_q3_sd']
@@ -587,7 +591,9 @@ def validate_selection(selection, peaks, extracted, times, noises, mode, chosen_
     full, candidate = selection_rows(selection,peaks,mode)
     saved = selection['audit']
     calculated = evaluate_early_point(peaks,extracted,full,times,noises,saved['policy'],candidate,saved['thresholds'])
-    if 'archive_sha256' in saved: calculated['archive_sha256'] = saved['archive_sha256']
+    saved = dict(saved)
+    saved.pop('archive_sha256', None)  # Obsolete schema-1/early-schema-2 input only.
+    selection['audit'] = saved
     if calculated != saved:
         raise ValueError('Early-point decision disagrees with saved measurements/fits')
     expected = candidate if saved['fit_basis'] == 'exclude_shortest' else full
@@ -639,19 +645,26 @@ def fit_with_early_test(stage, peaks, extracted, times, noises, mode, policy='au
     for suffix in ('.inp','.out','_noise.txt'):
         shutil.copyfile(stage/(selected+suffix),stage/('rlx_dfit'+suffix))
     names = [stem+suffix for stem in stems for suffix in ('.inp','.out','_noise.txt')]+['rlx_dfit_noise.txt']
-    audit['archive_sha256'] = {name:file_sha256(stage/name) for name in names}
     selection = dict(audit=audit,all_fit_text=full_text,candidate_fit_text=candidate_text)
     return selection, names
 
 
-def file_sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+# Schema 1 is accepted only as an input format. Its obsolete trace fields and
+# methods prose are never carried into new reports and are not used as hashes.
+LEGACY_CSV_FIELDS = LEGACY_TRACE_FIELDS + CSV_FIELDS[len(TRACE_FIELDS):]
+LEGACY_CSV_FIELDS.insert(LEGACY_CSV_FIELDS.index('dataset_conclusion'), 'assessment_method')
+LEGACY_EARLY_CSV_FIELDS = LEGACY_CSV_FIELDS + EARLY_CSV_FIELDS[len(CSV_FIELDS):]
 
 
-def code_revision():
-    # A copied helper must not accidentally report the surrounding data repo's
-    # Git revision. The content fingerprint identifies the actual executed code.
-    return 'sha256:' + file_sha256(__file__)
+def validate_analysis_id(value):
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as error:
+        raise ValueError('Invalid analysis UUID') from error
+    if parsed.version != 4 or str(parsed) != value:
+        raise ValueError('Analysis ID must be a canonical UUID4')
+    return value
+
 
 
 def chi_square_sf(value, dof):
@@ -731,10 +744,10 @@ def report_context(mode, prefix, pdf_name, run_tag, **extra):
                    source_experiment=parts[1] if len(parts) == 2 else '',
                    peak_list=prefix + '.list', output_prefix=prefix, pdf_name=pdf_name,
                    experiment_type=mode, fit_model='noe' if mode == 'noe' else 'exp2',
-                   fit_origin='saved-results', fit_revision='unknown',
-                   fit_input_sha256='', fit_output_sha256='', noise_sha256='')
+                   fit_origin='saved-results', analysis_id=str(uuid.uuid4()),
+                   report_version=REPORT_VERSION)
     context.update(extra)
-    context['report_revision'] = code_revision()
+    context['report_version'] = REPORT_VERSION
     return context
 
 
@@ -832,21 +845,7 @@ def build_assessment(rows, extracted, times, noises, context, selection=None):
     rejected = sum(r['p_holm'] < ASSESSMENT['alpha'] for r in primary)
     conclusion = ('not_applicable' if mode == 'noe' else 'inconclusive' if not primary else
                   'departures_detected' if rejected or coherent else 'no_evidence_against')
-    # Result identity excludes reporting-code revision and experiment-label changes,
-    # but binds all saved numerical inputs, fitted parameters, mappings and warnings.
-    identity = dict(source=[context['source_collection'], context['source_experiment']],
-                    model=context['fit_model'], times=list(map(float,times)), noises=list(map(float,noises)),
-                    peaks=[dict(peak_id=r['peak_id'], assignment=r['assignment'],
-                                coordinates=r['coordinates'], residue=r['residue'],
-                                overlap=r['overlap'], values=list(map(float,r['values'])), warnings=r['warnings'],
-                                intensities=list(map(float,extracted[r['peak_id']]))) for r in rows])
-    if selection is not None:
-        identity['early_point'] = dict(audit=audit, full=[
-            dict(peak_id=r['peak_id'],values=r['all_points_fit']['values'],warnings=r['all_points_fit']['warnings'],
-                 candidate_values=r['candidate_fit']['values'] if r['candidate_fit'] else None,
-                 candidate_warnings=r['candidate_fit']['warnings'] if r['candidate_fit'] else None) for r in rows])
-    context = dict(context, analysis_id=('a2-' if selection is not None else 'a1-') + hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:20])
+    context = dict(context)
     return dict(context=context, rows=rows, times=list(map(float,times)), noises=list(map(float,noises)), planes=planes,
                 delays=delays, conclusion=conclusion, primary_count=len(primary),
                 rejected=rejected, coherent=coherent, selection=selection, used=used)
@@ -895,9 +894,6 @@ def analysis_csv_rows(report):
                        plane_sign_fraction=plane['sign_fraction'], plane_bias=plane['bias'],
                        repeat_delay_chi2=repeat.get('chi2'), repeat_delay_dof=repeat.get('dof'),
                        repeat_delay_pair_z=repeat.get('pair_z'),
-                       assessment_method=('Exponential suitability not applicable; NOE ratio analysis; supplied intensities, noise and ratio uncertainties unchanged' if mode=='noe' else
-                           'I(t)=I0 exp(-R t); independent Gaussian input noise; chi2 df=N_used-2; excluded points are displayed but omitted from GOF; approximate nonlinear GOF conditional on fit selection; Holm alpha=0.05; descriptive shared-plane screen >=10 peaks, >=80% same sign, |median residual/SD|>2; few repeats limit inference; rejection or uncertainty rescaling does not establish biexponentiality' if report['selection'] is not None else
-                           'I(t)=I0 exp(-R t); independent Gaussian input noise; chi2 df=N-2; approximate nonlinear GOF; Holm alpha=0.05; descriptive shared-plane screen >=10 peaks, >=80% same sign, |median residual/SD|>2; few repeats limit inference; rejection or uncertainty rescaling does not establish biexponentiality'),
                        delay_median_sd=delay['median'], delay_q1_sd=delay['q1'], delay_q3_sd=delay['q3'])
 
 
@@ -925,23 +921,29 @@ def safe_output_name(name):
 def load_analysis_csv(path):
     with Path(path).open(newline='') as handle:
         reader = csv.DictReader(handle)
-        if reader.fieldnames not in (CSV_FIELDS, EARLY_CSV_FIELDS):
+        input_fields = reader.fieldnames
+        if input_fields not in (CSV_FIELDS, EARLY_CSV_FIELDS, LEGACY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS):
             raise ValueError('Unsupported or incomplete analysis CSV schema')
         schema_fields = reader.fieldnames
-        early = schema_fields == EARLY_CSV_FIELDS
+        early = schema_fields in (EARLY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS)
         records = list(reader)
     if not records or any(None in row or None in row.values() for row in records):
         raise ValueError('Empty or incomplete analysis CSV')
-    traces = EARLY_TRACE_FIELDS if early else TRACE_FIELDS
-    context = {key: records[0][key] for key in traces}
-    if context['schema_version'] != (EARLY_SCHEMA if early else REPORT_SCHEMA):
+    legacy = input_fields in (LEGACY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS)
+    trace_fields = (LEGACY_TRACE_FIELDS if legacy else TRACE_FIELDS) + (['early_point_audit_json'] if early else [])
+    if records[0]['schema_version'] != ('2' if legacy and early else '1' if legacy else REPORT_SCHEMA):
         raise ValueError('Unsupported analysis CSV schema version')
+    context = {key: records[0][key] for key in (EARLY_TRACE_FIELDS if early else TRACE_FIELDS) if key in records[0]}
+    if legacy:
+        context.update(schema_version=REPORT_SCHEMA, analysis_id='', report_version=REPORT_VERSION)
+    else:
+        validate_analysis_id(context['analysis_id'])
     safe_output_name(context['output_prefix']); safe_output_name(context['pdf_name'])
     if context['fit_model'] != ('noe' if context['experiment_type'] == 'noe' else 'exp2'):
         raise ValueError('CSV model/experiment type mismatch')
     grouped = {}
     for record in records:
-        if any(record[field] != context[field] for field in traces):
+        if any(record[field] != records[0][field] for field in trace_fields):
             raise ValueError('Inconsistent repeated CSV provenance')
         index = int(record['peak_index']); plane = int(record['plane_index'])
         if index < 1 or plane < 1:
@@ -965,7 +967,7 @@ def load_analysis_csv(path):
             raise ValueError('Missing CSV measurement plane')
         first = slots[1]
         for record in slots.values():
-            if any(record[key] != first[key] for key in schema_fields if key not in varying):
+            if any(record[key] != first[key] for key in input_fields if key not in varying):
                 raise ValueError('Inconsistent repeated CSV fit or peak information')
         tag = first['peak_id']
         coords = [first[f'w{i}'] for i in (1,2,3) if first[f'w{i}'] != '']
@@ -1004,11 +1006,13 @@ def load_analysis_csv(path):
         raise ValueError('CSV duplicate-assignment flags disagree with identities')
     bundle = dict(peaks=peaks, extracted=extracted, fit_text='\n'.join(fit_lines)+'\n',
                   times=list(map(float,times)), noises=list(map(float,noises)), context=context, warning_map=warning_map)
-    # Recompute all diagnostics and verify the result identity and every exported
-    # value. This prevents silently accepting edited or inconsistent derived fields.
+    # Recompute diagnostics and verify every exported numerical value to reject
+    # inconsistent derived fields.
     selection = None
     if early:
         audit=json.loads(context['early_point_audit_json'])
+        audit.pop('archive_sha256', None)
+        context['early_point_audit_json']=json.dumps(audit,sort_keys=True,separators=(',',':'))
         if len(extra_fit_lines['all_points']) != len(peaks):
             raise ValueError('Missing all-point reference fits')
         if bool(extra_fit_lines['candidate']) != audit['candidate_attempted']:
@@ -1020,14 +1024,17 @@ def load_analysis_csv(path):
         bundle['context']['_early_point_selection']=selection
     rows = fitted_rows(peaks,bundle['fit_text'],context['experiment_type'],warning_map)
     computed = build_assessment(rows,extracted,times,noises,context,selection)
-    if computed['context']['analysis_id'] != context['analysis_id']:
-        raise ValueError('CSV analysis identity does not match its contents')
     expected = {(str(r['peak_index']),str(r['plane_index'])): r for r in analysis_csv_rows(computed)}
     for record in records:
         wanted = expected[(record['peak_index'],record['plane_index'])]
         for key in (EARLY_CSV_FIELDS if early else CSV_FIELDS):
-            if key == 'report_revision': continue
+            if legacy and key in ('schema_version','analysis_id','report_version'): continue
             actual = record[key]; value = wanted.get(key)
+            if legacy and key=='early_point_audit_json':
+                previous=json.loads(actual);previous.pop('archive_sha256',None)
+                if previous!=json.loads(value):
+                    raise ValueError('CSV early-point audit disagrees with saved measurements/fit')
+                continue
             canonical = '' if value is None else str(value)
             if actual == canonical: continue
             try:
@@ -1122,23 +1129,63 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
         peak_list_name=pdf_name[:-len(suffix)]
     safe_output_name(peak_list_name)
     context=report_context(mode,prefix,peak_list_name+'_intensity.pdf',source.parent.name+'/'+source.name,
-                           peak_list=peak_list_name,fit_input_sha256=file_sha256(source/'rlx_dfit.inp'),
-                           fit_output_sha256=file_sha256(source/'rlx_dfit.out'),
-                           noise_sha256=file_sha256(source/'vEstNoise.txt'))
-    # Reports produced by this schema retain the original fit provenance on later
-    # legacy-prefix refreshes. Unknown old fit-producing code stays unknown.
-    if all(key in mappings[0] for key in TRACE_FIELDS):
-        previous={key:mappings[0][key] for key in TRACE_FIELDS}
-        if any(any(row[key]!=previous[key] for key in TRACE_FIELDS) for row in mappings):
+                           peak_list=peak_list_name)
+    if 'schema_version' in mappings[0]:
+        schema=mappings[0]['schema_version']
+        if schema not in ('1', REPORT_SCHEMA):
+            raise ValueError('Unsupported saved diagnostics schema')
+        trace_fields=LEGACY_TRACE_FIELDS if schema=='1' else TRACE_FIELDS
+        if any(any(key not in row for key in trace_fields) for row in mappings):
+            raise ValueError('Incomplete saved diagnostics provenance')
+        previous={key:mappings[0][key] for key in trace_fields}
+        if any(any(row[key]!=previous[key] for key in trace_fields) for row in mappings):
             raise ValueError('Inconsistent saved diagnostics provenance')
-        for key in ('fit_input_sha256','fit_output_sha256','noise_sha256'):
-            if previous[key] and previous[key]!=context[key]:
-                raise ValueError('Saved diagnostics fingerprints disagree with native inputs/output')
         if previous['fit_model']!=context['fit_model'] or previous['output_prefix']!=prefix:
             raise ValueError('Saved diagnostics model/prefix mismatch')
-        context.update({key:previous[key] for key in ('source_collection','source_experiment',
-                                                     'fit_origin','fit_revision')})
+        context.update({key:previous[key] for key in ('source_collection','source_experiment','fit_origin')})
+        if schema==REPORT_SCHEMA:
+            context['analysis_id']=validate_analysis_id(previous['analysis_id'])
     return dict(peaks=peaks,extracted=extracted,fit_text=fit_text,times=times,noises=noises,context=context)
+
+
+def early_archive_names():
+    return [stem+suffix for stem in ('rlx_dfit_all_points','rlx_dfit_without_shortest')
+            for suffix in ('.inp','.out','_noise.txt')] + ['rlx_dfit_noise.txt']
+
+
+def validate_early_archives(source, bundle, mode):
+    """Compare saved native values to the CSV, including both archived fits."""
+    source=Path(source);peaks=bundle['peaks'];times=bundle['times'];noises=bundle['noises']
+    selection=bundle['context']['_early_point_selection'];audit=selection['audit']
+    def validate(stem, indices, fit_text, warning_map):
+        lines=meaningful_lines(source/(stem+'.inp'))
+        if not lines:
+            raise ValueError('Missing archived native fitter input: '+stem)
+        head=lines[0].split()
+        if int(head[0])!=len(indices) or list(map(float,head[1:]))!=[times[i] for i in indices]:
+            raise ValueError('Archived native delay vector disagrees with portable data: '+stem)
+        measurements=parse_extracted('\n'.join(lines[1:]),peaks,len(indices))
+        if any(measurements[tag]!=[bundle['extracted'][tag][i] for i in indices] for tag in measurements):
+            raise ValueError('Archived native measurements disagree with portable data: '+stem)
+        if counted_vector(source/(stem+'_noise.txt'),positive=True)!=[noises[i] for i in indices]:
+            raise ValueError('Archived native noise disagrees with portable data: '+stem)
+        native=fitted_rows(peaks,(source/(stem+'.out')).read_text(),mode)
+        reference=fitted_rows(peaks,fit_text,mode,warning_map)
+        for actual,wanted in zip(native,reference):
+            if actual['warnings']!=wanted['warnings'] or any(not close_saved(a,b) for a,b in zip(actual['values'],wanted['values'])):
+                raise ValueError('Archived native fit disagrees with portable data: '+stem)
+    all_indices=list(range(len(times)))
+    retained=[i for i in all_indices if i+1 not in audit['excluded_planes_1based']]
+    validate('rlx_dfit',retained,bundle['fit_text'],bundle['warning_map'])
+    validate('rlx_dfit_all_points',all_indices,selection['all_fit_text'],selection.get('all_warning_map'))
+    if audit['candidate_attempted']:
+        candidate=[i for i in all_indices if times[i]!=min(times)]
+        validate('rlx_dfit_without_shortest',candidate,selection['candidate_fit_text'],selection.get('candidate_warning_map'))
+    else:
+        expected='# Candidate not attempted: '+audit['reason']+'\n'
+        for suffix in ('.inp','.out','_noise.txt'):
+            if (source/('rlx_dfit_without_shortest'+suffix)).read_text()!=expected:
+                raise ValueError('Unexpected stale candidate archive')
 
 
 def load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings):
@@ -1147,8 +1194,11 @@ def load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings):
     context=bundle['context'];selection=context['_early_point_selection'];audit=selection['audit']
     if context['experiment_type'] == 'noe' or mode == 'noe':
         raise ValueError('Selected decay cannot be relabelled as NOE')
+    with (source/(prefix+'_analysis.csv')).open(newline='') as handle:
+        original=next(csv.DictReader(handle))
+    traces=(LEGACY_TRACE_FIELDS if 'report_version' not in original else TRACE_FIELDS)+['early_point_audit_json']
     for row in mappings:
-        if any(row.get(key) != context[key] for key in EARLY_TRACE_FIELDS):
+        if any(row.get(key) != original.get(key) for key in traces):
             raise ValueError('Saved diagnostics provenance disagrees with CSV')
     if [r['peak_id'] for r in mappings] != [p['peak_id'] for p in bundle['peaks']]:
         raise ValueError('Saved diagnostics peak identities disagree with CSV')
@@ -1164,14 +1214,7 @@ def load_selected_saved_analysis(source,prefix,mode,peak_list_name,mappings):
             strict_bool(row['duplicate_assignment']) != peak['duplicate_assignment'] or
             [row[f'w{i}'] for i in (1,2,3) if row.get(f'w{i}')] != peak['coordinates']):
             raise ValueError('Saved diagnostics peak mapping disagrees with CSV')
-    for name,digest in audit.get('archive_sha256',{}).items():
-        safe_output_name(name)
-        if file_sha256(source/name) != digest:
-            raise ValueError('Saved early-point archive fingerprint mismatch: '+name)
-    for name,key in [('rlx_dfit.inp','fit_input_sha256'),('rlx_dfit.out','fit_output_sha256'),
-                     ('vEstNoise.txt','noise_sha256')]:
-        if file_sha256(source/name) != context[key]:
-            raise ValueError('Saved selected-fit fingerprint mismatch: '+name)
+    validate_early_archives(source,bundle,mode)
     if counted_vector(source/'relax_header.txt') != bundle['times'] or counted_vector(
             source/'vEstNoise.txt',positive=True) != bundle['noises']:
         raise ValueError('Original processing vectors disagree with portable data')
@@ -1218,24 +1261,26 @@ def refresh_report(args):
         bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
         watched=[source/name for name in ('rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt','relax_header.txt',
                   'intensity.out',args.saved_prefix+'_fit_diagnostics.tsv')]
+        if args.peak_list_name is None:
+            watched.append(source/'plot.gnu')
         if bundle['context'].get('_early_point_selection'):
             watched += [source/(args.saved_prefix+'_analysis.csv')]
-            watched += [source/name for name in bundle['context']['_early_point_selection']['audit'].get('archive_sha256',{})]
+            watched += [source/name for name in early_archive_names()]
     destination=Path(args.output_dir).resolve() if args.output_dir else source
     if not destination.is_dir():raise ValueError('Report output directory must already exist')
     # Re-read under the same lock used by fitting/publication to avoid mixed runs.
     with run_directory(destination,'report') as stage:
+        before={p:p.read_bytes() for p in watched}
         if args.csv: bundle=load_analysis_csv(input_path)
         elif destination==source:bundle=load_saved_analysis(source,args.saved_prefix,args.experiment_type,args.peak_list_name)
         else:raise ValueError('Legacy refresh writes beside saved results; use CSV to export elsewhere')
-        before={p:file_sha256(p) for p in watched}
         c=bundle['context'];mode=c['experiment_type']
         names=prepare_reports(stage,bundle['peaks'],bundle['extracted'],bundle['fit_text'],
                               bundle['times'],bundle['noises'],mode,c['output_prefix'],c['pdf_name'],
                               c['source_collection']+'/'+c['source_experiment'],context=c, warning_map=bundle.get('warning_map'))
         checked_run(['gnuplot','plot.gnu'],stage)
         nonempty(stage/c['pdf_name']);names.append(c['pdf_name'])
-        if any(file_sha256(p)!=digest for p,digest in before.items()):
+        if any(p.read_bytes()!=contents for p,contents in before.items()):
             raise ValueError('Saved report inputs changed during rendering')
         with (stage/(c['output_prefix']+'_analysis.csv')).open(newline='') as handle:
             report_id=next(csv.DictReader(handle))['analysis_id']
@@ -1266,24 +1311,7 @@ def fit_annotation(row, mode):
 
 def early_report_intro(selection):
     audit=selection['audit']
-    lines=[f"Policy: {audit['policy']}; selected basis: {audit['fit_basis']}",
-           'Decision: '+audit['reason'],
-           f"Fixed cohort: {audit['cohort_size']} unique, unflagged, positive fits",
-           f"Shortest delay: {audit['candidate_delay_s']:.8g} s; original planes: {audit['candidate_planes_1based']}",
-           f"Observations retained: {audit['fit_count']} / {audit['original_count']}",
-           f"Score on the same retained delays: {display_number(audit['before_score'])} -> {display_number(audit['after_score'])}",
-           f"Fractional score reduction: {display_number(audit['score_reduction_fraction'])}",
-           f"Median absolute fractional rate change: {display_number(audit['median_absolute_rate_change_fraction'])}",
-           'A selection heuristic, not a diagnosis of the physical cause.',
-           'Original input noise and all-point I0 normalize both comparisons.',
-           'Goodness-of-fit probabilities after selection are conditional diagnostics.',
-           'All observations are retained; excluded markers remain visible.']
-    if audit['full_bins']:
-        first=audit['full_bins'][0]
-        lines += [f"Shortest-delay median/limit: {first['median']:.5g} / {first['limit']:.5g} of I0; same-sign fraction {first['sign_fraction']:.3g}",
-                  'Filled blue markers are retained; open orange markers are excluded.']
-    lines += textwrap.wrap('Thresholds: '+json.dumps(audit['thresholds'],sort_keys=True),100)
-    commands=text_page('Shortest-delay selection audit',lines)
+    commands=[]
     if audit['candidate_bins']:
         before={b['delay_s']:b for b in audit['full_bins']}
         commands+=list(AUTO_PLOT_MARGINS)+['set title "Shared residuals on the same retained delays"',
@@ -1313,52 +1341,27 @@ def text_page(title, lines):
 def report_intro(report):
     c = report['context']; mode = c['experiment_type']; rows = report['rows']
     name = 'T1rho / R1rho' if mode == 'r1rho' else 'hetNOE' if mode == 'noe' else mode.upper()
-    footer = c['analysis_id'] + ' | ' + c['source_collection'] + '/' + c['source_experiment']
-    commands = ['set label 9000 ' + gnuplot_string(footer) + ' at screen .02,.022 font "Sans,5.5" front',
-                'set label 9001 ' + gnuplot_string('Report code: ' + c['report_revision']) + ' at screen .02,.008 font "Sans,4.5" front']
+    footer = c['source_collection'] + '/' + c['source_experiment'] + ' | report v' + c['report_version']
+    commands = ['set label 9000 ' + gnuplot_string(footer) + ' at screen .02,.022 font "Sans,5.5" front']
     lines = [CONCLUSIONS[report['conclusion']],
-             f"{len(rows)} peaks; {len(report['times'])} acquisition planes; {len(set(report['times']))} distinct plane values",
-             f"Primary assessment: {report['primary_count']} eligible; {len(rows)-report['primary_count']} excluded",
-             f"Holm rejections: {report['rejected']}; descriptive shared-plane flags: {report['coherent'] or 'none'}",
-             'Source: ' + c['source_collection'] + '/' + c['source_experiment'],
-             'Peak list: ' + c['peak_list'], 'Model: ' + c['fit_model'] + '; saved-fit origin: ' + c['fit_origin'],
-             'Analysis ID: ' + c['analysis_id'], 'Fit-producing code: ' + c['fit_revision']]
-    lines += textwrap.wrap('Reporting code: ' + c['report_revision'],100)
-    for key in ('fit_input_sha256','fit_output_sha256','noise_sha256'):
-        lines += textwrap.wrap(key + ': ' + (c[key] or 'not recorded'),100)
-    lines += ['No extraction, processing or refitting is performed by report regeneration.',
-              'CSV carries full precision, measurements, uncertainties, identities, warnings and methods settings.']
+             'Dataset: ' + c['source_collection'] + '/' + c['source_experiment'],
+             'Peak list: ' + c['peak_list'],
+             f"{len(rows)} peaks; {len(report['times'])} acquisition planes; {len(set(report['times']))} distinct plane values"]
+    if mode != 'noe':
+        lines += [f"Assessment: {report['primary_count']} eligible; {len(rows)-report['primary_count']} excluded",
+                  f"Holm-adjusted departures (alpha=0.05): {report['rejected']}",
+                  f"Descriptive shared-plane flags: {report['coherent'] or 'none'}",
+                  'Assessment uses supplied noise SDs and assumes independent Gaussian measurement noise.',
+                  'Shared-plane screen: >=10 eligible peaks, >=80% same sign, |median residual/SD| > 2.',
+                  'This is a descriptive screen. Departures do not establish a biexponential mechanism.']
     if report.get('selection'):
         audit=report['selection']['audit']
-        lines.insert(1,f"Fit basis: {audit['fit_basis']}; fitted observations {audit['fit_count']} / {audit['original_count']}")
-        if not all(report['used']): lines[0] += ' (retained observations; conditional on selection)'
+        lines.insert(4,f"Fit basis: {audit['fit_basis']}; observations retained {audit['fit_count']}/{audit['original_count']}")
+        if not all(report['used']):
+            lines[0]+=' (retained observations; conditional on selection)'
+            lines.append('Open orange markers are excluded observations; all measurements remain in the CSV.')
     commands += text_page(name + ' | analysis summary',lines)
     if mode != 'noe':
-        methods = [
-            'Saved model: I(t) = I0 exp(-R t). Parameters and reported uncertainties are unchanged.',
-            ('Original-noise chi2 sums retained observations only; residual df = N_used - 2.' if report.get('selection') else
-             'Original-noise chi2 = sum(((I - prediction)/input SD)^2); residual df = N - 2.'),
-            'Approximate upper-tail chi2 p-values; Holm family adjustment at alpha = 0.05.',
-            'Primary coverage: valid, non-overlapping fits with positive residual df.',
-            'Overlap, invalid fits and other exclusions are listed on results pages and in the CSV.',
-            'Quality flags do not change compatibility filtering: only overlap and invalid fits are excluded.',
-            'Assumes independent Gaussian measurement errors with correctly supplied per-plane SDs.',
-            'Probabilities approximate nonlinear-fit goodness of fit; supplied noise is not re-estimated.',
-            'Cross-peak independence is not required by Holm; shared patterns are screened descriptively.',
-            'Shared-plane screen: >=10 eligible peaks, >=80% same residual sign, |median residual/SD| > 2.',
-            'This screen is descriptive, not an independent hypothesis test. Delay summaries pool repeats.',
-            'Repeat scatter uses inverse-variance weighted means and sum((I - mean)^2/SD^2), df = k - 1.',
-            'Pair contrast = (I_first - I_second)/sqrt(SD_first^2 + SD_second^2).',
-            'Few repeats give limited power and cannot establish noise calibration or drift on their own.',
-            'Neither rejection nor uncertainty rescaling establishes a biexponential mechanism.',
-            'Residual inspection complements statistical tests; supplied noise levels condition conclusions.',
-            'Decay panels use fitted-I0 normalization; zero/nonfinite I0 receives a flagged raw panel.',
-            'Main plot and residual plot areas use an 80:20 height ratio.',
-            'References: NIST Engineering Statistics Handbook, model validation (4.4).',
-            'https://itl.nist.gov/div898/handbook/pmd/section4/pmd44.htm',
-            'Holm method: R stats p.adjust documentation (valid under arbitrary dependence).',
-            'https://www.stat.ethz.ch/R-manual/R-devel/library/stats/html/p.adjust.html']
-        commands += text_page('Methods and assessment coverage',methods)
         eligible = [r for r in rows if r['primary_eligible']]
         if eligible:
             commands += list(AUTO_PLOT_MARGINS) + ['set title "Original-noise goodness of fit (eligible peaks)"',
@@ -1377,30 +1380,6 @@ def report_intro(report):
                 span = summaries[-1][0] - summaries[0][0] or 1.
                 commands.insert(len(commands)-1, f'set xrange [{summaries[0][0]-.04*span:.17g}:{summaries[-1][0]+.04*span:.17g}]')
                 commands += [f"{x:.17g} {s['median']:.17g} {s['q1']:.17g} {s['q3']:.17g}" for x,s in summaries]+['e']
-            repeated = [r for r in eligible if r['repeat_dof']]
-            if repeated:
-                commands += text_page('Repeated-delay scatter (eligible peaks)',[
-                    f"Repeat degrees of freedom per peak: {repeated[0]['repeat_dof']}",
-                    f"Median weighted within-repeat chi2: {statistics.median(r['repeat_chi2'] for r in repeated):.5g}",
-                    'Per-peak totals and each repeated-delay group are included in the CSV.',
-                    'Each repeated measurement contributes separately to the decay goodness-of-fit statistic.',
-                    'Few repeats limit interpretation; noise estimates and fitted uncertainties remain unchanged.'])
-    else:
-        commands += text_page('NOE ratio methods',[
-            'Exponential suitability: not applicable. Ratios and their fitter uncertainties are retained.',
-            'Per-plane intensities, supplied noise SDs, peak identity and trace fields are included in the CSV.',
-            'Compatibility filtering excludes overlap and invalid fits. No decay curves are calculated.'])
-    for offset in range(0,len(rows),16):
-        lines = []
-        for row in rows[offset:offset+16]:
-            eligible = 'primary' if row['primary_eligible'] else 'excluded: '+row['exclusion_reason']
-            lines.append(f"{row['peak_id']} | {row['assignment']} | {display_number(row['values'][0])} +/- {display_number(row['values'][1])} | {eligible}")
-            detail = ('; '.join(row['flags']) or 'no flags')
-            if mode != 'noe': detail = f"original reduced chi2={display_number(row['reduced_chi2_input'])}; Holm p={display_number(row['p_holm'],3)}; " + detail
-            lines.append(detail)
-        # 32 lines need a denser page; split into eight peaks per text page.
-        for page in range(0,len(lines),16):
-            commands += text_page('Peak results | values +/- fitter errors',lines[page:page+16])
     return commands
 
 
@@ -1443,8 +1422,11 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
     rows = fitted_rows(peaks, fit_text, mode, warning_map)
     context = dict(context) if context is not None else report_context(mode, prefix, pdf_name, run_tag)
     early_selection = early_selection or context.pop('_early_point_selection',None)
-    context['report_revision'] = code_revision()
-    report = build_assessment(rows, extracted, times, noises, context,early_selection)
+    context = {key:value for key,value in context.items() if key in TRACE_FIELDS}
+    context['schema_version'] = REPORT_SCHEMA
+    context['analysis_id'] = validate_analysis_id(context.get('analysis_id') or str(uuid.uuid4()))
+    context['report_version'] = REPORT_VERSION
+    report = build_assessment(rows, extracted, times, noises, context, early_selection)
     context = report['context']
     traces=EARLY_TRACE_FIELDS if early_selection is not None else TRACE_FIELDS
     tag_header = f'# {run_tag}\n' + ''.join(f'# {key}: {context[key]}\n' for key in traces if key in context)
@@ -1627,10 +1609,7 @@ def analyze(args):
         names = prepare_reports(stage, peaks, extracted, (stage / 'rlx_dfit.out').read_text(),
                                 times, noises, args.mode, prefix, pdf_name, run_tag,
                                 context=report_context(args.mode, prefix, pdf_name, run_tag,
-                                    peak_list=peak_path.name, fit_origin='analysis', fit_revision=code_revision(),
-                                    fit_input_sha256=file_sha256(stage/'rlx_dfit.inp'),
-                                    fit_output_sha256=file_sha256(stage/'rlx_dfit.out'),
-                                    noise_sha256=file_sha256(stage/'vEstNoise.txt')),
+                                    peak_list=peak_path.name, fit_origin='analysis'),
                                 early_selection=early_selection)
         restored = ''.join(p['assignment'] + ' ' + ' '.join(f'{v:.17g}' for v in extracted[p['peak_id']]) + '\n' for p in peaks)
         (stage / 'data_xtr.out').write_text(restored)

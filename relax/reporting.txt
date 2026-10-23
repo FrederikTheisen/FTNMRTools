@@ -1,159 +1,121 @@
-SELF-CONTAINED RELAXATION REPORTS
+RELAXATION REPORTS — VERSION 2
 
-Run relaxation analysis with relax_analyze_v2.com and its companion relax_tools.py.
-The original relax_analyze.com is retained. No processing settings are changed by
-this reporting update. In the editable analyzer, DATA_TYPE accepts r1, r1rho, r2
-and noe. r1rho identifies T1rho/R1rho; it uses the existing exp2 model and the same
-1.0 s^-1 initial rate as r1. r2 keeps its 10.0 s^-1 initial rate.
+relax_analyze_v2.com automatically exports a self-contained <prefix>_analysis.csv,
+a matching peak-list-named PDF, and the existing compatibility reports. Its
+DATA_TYPE choices remain r1, r1rho (T1rho/R1rho), r2 and noe. Processing settings,
+fitting models and starting rates are unchanged. The original analyzer is kept.
 
-Every successful analysis automatically exports <prefix>_analysis.csv alongside
-the existing results.out, results_filtered.out, results_peak_overlap.out,
-fit_diagnostics.tsv, intensity.out, plot.gnu and peak-list-named intensity PDF.
-The CSV is the comprehensive sharing/analysis artifact; no metadata sidecar is
-needed. Native rlx_dfit.inp/out are kept as generated, with SHA-256 fingerprints
-in the report. Compatibility tables retain residue/value/error columns. Their
-comment headers and diagnostic TSV trace columns identify the same analysis.
+The PDF contains one short summary, dataset assessment charts, individual decay
+plots and the rate overview. Fit parameters remain beside the decays, with an
+80:20 main/residual plot-area split and noise bars. Invalid fits receive flagged
+raw-intensity panels. NOE reports contain the summary and ratio overview, with
+exponential suitability marked not applicable. Peak-results tables, detailed
+methods pages and repeat-scatter pages are omitted. Repeat statistics stay in
+the CSV. Footers identify the collection/experiment and reporting version.
 
-REBUILD WITHOUT PROCESSING, EXTRACTION OR FITTING
+REBUILD FROM SAVED RESULTS
 
-From a directory containing saved results:
+From the directory containing the saved files:
 
   python3 /path/to/relax_tools.py report \
     --saved-prefix 50mM_25C_600MHz_T1rho --experiment-type r1rho
 
-This reads rlx_dfit.inp/out, <prefix>_fit_diagnostics.tsv, vEstNoise.txt,
-relax_header.txt and intensity.out. It validates native identifiers/parameters,
-mapping, measurement order, noise and reconstructed normalized intensities before
-publication. The peak-list filename is recovered from plot.gnu; alternatively
-supply --peak-list-name NAME. The peak list itself is not read. Legacy-prefix
-refresh writes beside the saved files. Use the CSV for exporting elsewhere.
-Unknown legacy fit-producing code stays 'unknown'; the new reporting code is
-never described as the code that produced those historical fits.
+This validates rlx_dfit.inp/out, <prefix>_fit_diagnostics.tsv, vEstNoise.txt,
+relax_header.txt and intensity.out. The peak-list name is recovered from
+plot.gnu, or supplied with --peak-list-name NAME. No peak list or spectrum is
+read. Legacy-prefix refresh writes beside the saved results.
 
-On another computer/directory, copy only the CSV, relax_tools.py, Python 3 and
-install gnuplot with pdfcairo support. Create the destination directory, then:
+Copy the CSV to another directory/computer and rebuild with only Python 3,
+relax_tools.py and gnuplot (pdfcairo support):
 
   python3 /path/to/relax_tools.py report --csv /path/to/sample_analysis.csv \
     --output-dir /path/to/existing-destination
 
-Neither command invokes processing programs, data_xtr or rlx_dfit. Only gnuplot
-is invoked, for rendering (there is no gnuplot fit command). The CSV carries all
-inputs to reproduce the PDF and compatibility reports. CSV rows may be reordered:
-peak_index and plane_index recover original order. Missing/duplicate rows,
-inconsistent repeated metadata, changed predictions/statistics or a mismatched
-analysis ID are errors. To correct original fits/inputs, regenerate a validated
-analysis; do not manually edit derived CSV fields.
+Neither reporting command invokes processing, extraction or fitting. Only
+gnuplot is invoked, to render reported parameters without a gnuplot fit command.
+Native fitter files, noise/delay inputs, peak lists and spectra are untouched.
+Existing derived reports are backed up under
+.report-backups/<analysis_id>/<UTC-timestamp>/ before refresh. Locking, temporary
+staging and rollback publication protect existing reports on failure. Direct
+byte comparisons detect inputs changing while the report is being generated.
 
-Reporting uses the analysis lock, a temporary stage and rollback publication.
-Existing derived reports are backed up in
-.report-backups/<analysis_id>/<UTC-timestamp>/ before a report refresh. Native
-fitter files, noise/header inputs, peak lists and spectra are never overwritten
-by report refresh. Rendering/validation failures retain existing reports.
+CSV SCHEMA 2 AND IDENTIFICATION
 
-CSV SCHEMA 1
+One quoted CSV row represents one individual peak in one acquisition plane.
+Full numerical precision, acquisition order and repeated delays are preserved.
+Duplicate assignments at different coordinates keep distinct peak IDs. Rows
+can be reordered; peak_index and plane_index restore their original order.
+Blank cells mean unavailable quantities. Nonfinite reported fit values remain
+flagged invalid. Warning text, including malformed numbers and embedded quotes
+or newlines, is preserved.
 
-One ordinary quoted CSV row per individual peak per acquisition plane. Numerical
-cells use Python's round-trip float representation, with no decimal truncation.
-Repeated delays remain separate rows. Duplicate assignments at distinct
-coordinates retain separate peak_id and peak_index values. Blank cells denote
-unavailable quantities; nonfinite reported fit parameters remain nan/inf and are
-flagged invalid. Warnings retain their original text and malformed scale-factor
-formatting, including embedded newlines and quotes.
+The CSV contains source collection/experiment, peak-list name, experiment type,
+model, saved-fit origin, schema/report versions and a persistent UUID4 analysis
+identifier. New fitting runs get new UUIDs, even if their values are identical;
+report rebuilds retain the UUID saved in the CSV or diagnostics. No file hashes,
+content-based IDs or code fingerprints are calculated or exported. The simple
+report_version identifies the reporting format, not the code that produced a
+historical fit. A UUID is a tracking label, not proof of unchanged content.
 
-Trace fields identify schema_version, analysis_id, source_collection/experiment,
-peak_list, output_prefix, pdf_name, experiment_type, fit_model, fit_origin,
-fit_revision, report_revision and SHA-256 fingerprints of native fitter input,
-output and noise input. The analysis ID binds saved parameters, measurements,
-noise, source and peak mapping, including overlaps and warnings. It excludes
-reporting code, derived assessment results and experiment relabeling within the
-same model. The independent report_revision is the executed helper's full SHA-256
-fingerprint, which also works for companion copies outside Git. Rebuilding with
-new reporting code does not imply a new fit. The CSV stores fit provenance and
-original file fingerprints without requiring those files to be present.
+Schema-1 CSVs and saved diagnostics are accepted for migration. Their obsolete
+trace fields are read only for consistency and are not carried forward. The
+numerical measurements, model predictions, fit information and assessment fields
+are validated without hashing. First schema-2 export assigns a new UUID; later
+rebuilds preserve it. A schema-1 CSV can migrate without native files. No metadata
+sidecar is required. Malformed/missing rows, inconsistent repeated fields,
+identifier/count mismatches and inconsistent numerical results fail validation.
 
-Identity: peak ID/index, assignment, residue, coordinates, overlap and duplicate
-assignment status. Acquisition plane indices are one-based. delay_s is seconds
-for decays; plane_code records NOE plane values without claiming they are delays.
-Measurements: intensity and supplied noise_sd in the same intensity units;
-prediction = I0 exp(-R*delay_s); residual = intensity - prediction;
-residual_noise_sd = residual/noise_sd. Decay parameters and units, I0/error,
-fitter-reported chi2/threshold, rescaling status and warnings repeat across rows.
-The fitter-reported statistic is preserved as reported, not treated as an
-original-noise goodness-of-fit statistic. No rescaling factor is inferred from
-malformed fitter warning numbers.
+Measurements include delay_s (or NOE plane_code), intensity, supplied noise_sd,
+prediction, residual and residual/noise SD. Fit values/errors and units, I0/error,
+fitter-reported statistics, overlaps, validity, warnings and assessment eligibility
+repeat across measurement rows. The original-noise statistics are separate from
+the fitter's reported statistics and uncertainty rescaling. Compatibility filtered
+outputs still exclude only overlap and invalid fits; new quality flags are for
+review. Compatibility numeric columns and filenames are unchanged.
 
-Assessment fields include original-noise chi2_input, reduced_chi2_input, dof,
-p_input and p_holm; primary_eligible and explicit exclusion_reason; repeat_chi2,
-repeat_dof and repeat_pair_z; per-delay repeat_delay_chi2/dof/pair_z; per-plane and
-per-delay residual medians/IQRs; same-sign fraction, plane_bias; dataset_conclusion,
-counts and screening settings. repeat_pair_z at peak level is available when
-there is exactly one repeated pair group; per-delay pair fields cover every
-pair group, repeated on its measurement rows. Pair sign follows acquisition
-order. For groups larger than two, pair contrast is unavailable. Noise estimates
-and fitted uncertainties are not altered. Assessment methods/assumptions are
-embedded in assessment_method as well as documented here and in the PDF.
+ASSESSMENT
 
-SINGLE-EXPONENTIAL SUITABILITY
+Saved single-exponential parameters are evaluated against the supplied noise
+without refitting or rescaling. Original-noise chi-square uses N-2 residual degrees
+of freedom, counting repeats separately. Approximate per-peak chi-square tests
+receive Holm adjustment at alpha=.05 across eligible non-overlapping valid fits.
+The shared-plane descriptive screen requires >=10 eligible peaks, >=80% with the
+same residual sign and absolute median residual/noise SD >2. This is not an
+independent hypothesis test. Residuals are summarized by plane and by delay.
 
-The model is I(t)=I0 exp(-R t), evaluated at reported saved parameters. chi2_input
-is sum((residual/input_noise_sd)^2); residual dof=N-2, counting repeated planes
-separately. p_input is the approximate upper-tail chi-square probability. It is
-calculated with standard-library regularized-gamma series/continued fractions,
-verified against NIST's published chi-square critical values and df=1/2 closed
-forms. Explicit accurate sums avoid Python-version differences in accumulation.
-These are approximate nonlinear-fit goodness-of-fit tests conditional on
-independent Gaussian measurement noise with correctly supplied SDs.
+The summary states whether departures are detected at supplied noise levels,
+there is no evidence against the model at those levels, or coverage is
+inconclusive. The assessment assumes independent Gaussian measurement noise
+with appropriate supplied SDs. Neither rejection nor uncertainty rescaling
+establishes a biexponential mechanism. NOE suitability is not applicable.
 
-Primary assessment covers valid, non-overlapping decay fits with
-positive residual dof. Overlapping/invalid fits and inadequate dof remain visible with exclusion
-reasons. Nonpositive rates remain quality flags and are not excluded solely
-for that warning. Holm adjustment at alpha=.05 covers
-all eligible peak tests without requiring independence between different peaks.
-New quality warnings are review flags: existing filtered exports still exclude
-only overlap and invalid fits. An assessment rejection does not automatically
-remove a rate from the compatibility filtered output.
-
-Repeated-delay groups use inverse-noise-variance weighted means. Within-repeat
-scatter = sum((I - weighted_mean)^2/noise_sd^2), with df=k-1 per group, summed for
-peak totals. A pair additionally has (I_first-I_second)/hypot(SD_first,SD_second).
-Few repeats limit conclusions about noise or drift. No noise estimate is replaced.
-
-Residuals are summarized by acquisition plane and by distinct delay; delay
-summaries pool all separate repeat measurements. The descriptive shared-plane
-screen flags a plane when >=10 eligible peaks contribute, >=80% have the same
-nonzero residual sign, and abs(median residual/input_noise_sd)>2. Zero residuals
-count in the denominator but do not contribute either sign. This is a descriptive
-screen, not an independent hypothesis test. The same screening rule is printed
-in the PDF. Summaries by delay do not add another hypothesis test.
-
-Qualified dataset conclusions:
-- departures_detected: Holm tests and/or shared-plane screening flags departures
-  at the supplied noise levels; individual and shared findings are distinguished.
-- no_evidence_against: neither check flags departures at supplied noise levels.
-- inconclusive: no eligible fits with positive residual degrees of freedom.
-- not_applicable: NOE ratio analysis; no exponential suitability/decay residuals.
-
-Neither rejection nor uncertainty rescaling establishes a biexponential mechanism.
-Inspect residuals as well as test results. The PDF includes provenance/methods,
-coverage, original-noise statistics and residual-summary charts, compact peak
-results and measured decays with reported parameters/noise bars. Decays use fitted
-I0 normalization and an 80:20 main/residual plot-area split. Invalid I0/fit panels
-show flagged raw intensities with no normalized curve. Every PDF page identifies
-the analysis and reporting code.
-
-References:
-https://itl.nist.gov/div898/handbook/pmd/section4/pmd44.htm
-https://www.stat.ethz.ch/R-manual/R-devel/library/stats/html/p.adjust.html
-https://www.itl.nist.gov/div898/handbook/eda/section3/eda3674.htm
+The CSV retains assessment thresholds, original-noise and fitter statistics,
+repeat scatter/dof and pair contrasts, without a repeated methods paragraph.
+Repeat scatter uses inverse-variance weighted means; pair contrasts use the
+intensity difference divided by its expected noise SD, in acquisition order.
+Per-delay fields cover each repeat group; the peak-level pair field is populated
+when there is exactly one repeated pair group. Few repeats limit interpretation.
+No noise estimates or fitted uncertainties are altered.
 
 VERIFICATION
 
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s relax/tests -v
 
-Tests use synthetic fixtures and stub external programs only. They cover numerical
-probabilities, Holm adjustment, repeated/unsorted delays, duplicate assignments,
-CSV round trips/reordered rows/quoting, original-noise vs rescaled diagnostics,
-shared/isolated departures, insufficient dof, NOE, validated saved refresh,
-standalone CSV rebuilding with fitting programs unavailable, publication rollback,
-render failures, backups and native fingerprint preservation. Original processing
-regressions and wrapper path checks remain included.
+Tests use synthetic inputs and stub processing/fitting commands. They cover
+schema migration, persistent UUIDs, standalone rebuilding, numerical consistency,
+probabilities and assessments, repeat/duplicate handling, removed PDF content,
+input changes during rendering, backup/rollback and processing regressions.
+
+SHORTEST-DELAY SELECTION COMPATIBILITY
+
+The existing early-point policies, scientific thresholds and fitting decisions
+are unchanged by this reporting update. Schema 2 supports optional selection
+columns carrying the full observations, selected mask, both fits and their audit.
+The older hashed schema-2 selection format is also accepted for migration and
+exports the new hash-free fields. Selection summaries retain their existing JSON
+filename and scientific audit content, without artifact hashes. Saved archives
+are validated directly against CSV parameters, warnings, delay/intensity/noise
+vectors and the recorded mask. A short selection line joins the main PDF summary;
+its comparison chart and excluded-point markers remain visible. Rebuilding a
+report never runs or changes the shortest-delay test. See README.txt for its
+policy and threshold definitions.
