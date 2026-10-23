@@ -1,27 +1,11 @@
 Relaxation processing and analysis
 =================================
 
-Available scripts:
-
-    relax_analyze.com          Original analyzer, restored unchanged.
-    relax_analyze_v2.com       Revised analyzer with validation and diagnostics.
-    relax_proc.com             Updated processing script; scientific settings retained.
-    relax_proc_original.com    Original processing template, preserved unchanged.
-
-The original scripts are byte-for-byte copies from commit cbbd3e9, before the
-relaxation fixes. They remain independent of relax_tools.py. The descriptions
-below apply to updated relax_proc.com and relax_analyze_v2.com.
-
-Keep the updated scripts and relax_tools.py together. Run the .com files
-from the experiment directory:
+Keep relax_proc.com, relax_analyze.com and relax_tools.py together. Run the
+.com files from the experiment directory, as before:
 
     csh /path/to/FTNMRTools/relax/relax_proc.com
-    tcsh /path/to/FTNMRTools/relax/relax_analyze_v2.com
-
-Bare filenames, relative paths and absolute paths are supported, including
-paths with spaces. For a local copied script, `tcsh relax_proc.com` or
-`./relax_proc.com` also works. Keep relax_tools.py beside each copied script
-or entrypoint symlink. A missing helper stops before processing begins.
+    tcsh /path/to/FTNMRTools/relax/relax_analyze.com
 
 Requirements: Python 3.8+, tcsh, the existing NMRPipe commands, data_xtr,
 rlx_dfit and gnuplot with pdfcairo support. Python uses only its standard
@@ -29,42 +13,17 @@ library. The controller inherits your configured command PATH and NMRTXT.
 
 These scripts do not automatically install themselves in dataset folders.
 Copying or using an updated script does not run it. Running relax_proc.com
-processes spectra; running relax_analyze_v2.com extracts intensities and fits.
+processes spectra; running relax_analyze.com extracts intensities and fits.
 Review each script's editable settings before running it on an acquisition.
-The two analyzers use the same output filenames; changing the entrypoint name
-does not create a separate set of result filenames.
 
 Processing settings and delays
 ------------------------------
 
-The default Bruker conversion and interleaved splitting retain the original
-template. Solvent suppression, apodization, Fourier transformation,
-extraction, phasing, zero filling and POLY -auto settings are unchanged.
-These settings are acquisition-specific. The former series.com calls are
-expanded into the same sethdr settings, with each update checked individually.
-
-The original conversion-output selection is preserved:
-
-    If conversion writes test.fid, the original COADD selection and
-    bruk_ranceY.M shuffling split the 2D interleaved FID into planes.
-
-    If conversion writes fid/test%03d.fid directly, the script uses those
-    planes without COADD, additional shuffling or FID header rewriting.
-    The converter must arrange H/N in X/Y and a real delay axis in Z, and
-    must handle any gradient shuffling.
-
-No new layout setting is needed. Producing both output layouts, or neither,
-is an error. Both routes create fid/ and ft/ before conversion. Direct-plane
-inputs are checked for exact filenames/counts against the delay list,
-compatible headers, untransformed X/Y axes, a real Z axis and complete payload
-sizes before Fourier processing. Delays keep acquisition order and repeats.
-
-For example, a 3D conversion with -yLAB Tau -zLAB 15N can transpose its stream
-into HN/15N/Tau planes before pipe2xyz -x -out ./fid/test%03d.fid. Keep that
-conversion's MULT, TP and ZTP operations. Echo-AntiEcho/Rance-Kay conversion
-already invokes the appropriate gradient shuffling; do not apply it again.
-See the NMRPipe conversion/shuffling documentation:
-https://www.nmrscience.com/ref/nmrpipe/coadd.html
+The Bruker conversion, splitting, solvent suppression, apodization, Fourier
+transformation, extraction, phasing, zero filling and POLY -auto settings
+remain the same as the original template. They are acquisition-specific.
+The former series.com calls are expanded into the same sethdr settings,
+with each header update checked individually.
 
 Configure path2vc, path2vd and path2ncyc at the top of relax_proc.com. Paths
 are relative to the experiment directory or absolute; patterns are accepted
@@ -135,9 +94,6 @@ warning is not silently interpreted as an exact numeric scale factor.
 
 Plots use the reported R and I0 without a second fit. Measured intensities,
 input noise bars and predicted intensities are divided by fitted I0.
-Decay pages use aligned panels with 80% of the plotting height for intensities
-and the fitted curve, and 20% for residuals. Only the lower panel shows delay
-labels. The final rate/NOE overview retains the full page.
 The residual panel is (measured - predicted) / input noise SD. These bars
 condition on fitted I0; they do not include uncertainty in the fitted
 amplitude or quantify overlap/processing systematics. Invalid or zero I0
@@ -164,9 +120,6 @@ leftover temporary directories cannot supply inputs to a new run. Outputs
 are published only when the entire run, including plotting, succeeds.
 Publication errors roll back replacements. Output symlinks are rejected.
 The lock file may remain after a run; the OS releases its lock automatically.
-The worker verifies that its current directory is the controller's temporary
-stage using directory identity, so /home and /data aliases of the same folder
-are accepted. A different directory, missing path or file remains an error.
 
 Tests without processing data
 -----------------------------
