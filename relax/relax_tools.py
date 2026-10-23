@@ -407,6 +407,18 @@ def parse_fit(text, mode):
     return records, {tag: warnings.get(tag, []) + global_warnings for tag in records}
 
 
+def decay_panel_layout(residual=False):
+    """Align panels with plot-area heights of 0.60 and 0.15 (80:20)."""
+    top, bottom = (.27, .12) if residual else (.90, .30)
+    return ['set lmargin at screen 0.14', 'set rmargin at screen 0.96',
+            f'set tmargin at screen {top:.2f}', f'set bmargin at screen {bottom:.2f}',
+            'set format x "%g"' if residual else 'set format x ""',
+            'set xlabel "Delay (s)"' if residual else 'unset xlabel']
+
+
+AUTO_PLOT_MARGINS = ('set lmargin -1', 'set rmargin -1', 'set tmargin -1', 'set bmargin -1')
+
+
 def gnuplot_string(text):
     return '"' + str(text).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', ' ') + '"'
 
@@ -492,12 +504,13 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
                 label += '\n' + textwrap.fill(', '.join(row['flags']), width=76)
             span = max(times) - min(times) or max(abs(max(times)), .01)
             lo, hi = min(times) - .03 * span, max(times) + .03 * span
-            plot += [f'set xrange [{lo:.17g}:{hi:.17g}]', 'set multiplot layout 2,1 title ' + gnuplot_string(label),
-                     'set xlabel "Delay (s)"', 'set ylabel ' + gnuplot_string('Intensity / fitted I0' if normalized else 'Raw intensity (invalid fit/I0)')]
+            plot += [f'set xrange [{lo:.17g}:{hi:.17g}]', 'set multiplot title ' + gnuplot_string(label)]
+            plot += decay_panel_layout()
+            plot.append('set ylabel ' + gnuplot_string('Intensity / fitted I0' if normalized else 'Raw intensity (invalid fit/I0)'))
             command = f'plot "intensity.out" index {index} using 1:2:3 with yerrorbars pt 7'
             if normalized:
                 command += f', exp(-({rate:.17g})*x) with lines'
-            plot += [command, 'set ylabel "Residual / input noise SD"']
+            plot += [command] + decay_panel_layout(residual=True) + ['set ylabel "Residual / SD"']
             if normalized:
                 plot.append(f'plot "intensity.out" index {index} using 1:6 with points pt 7, 0 with lines')
             else:
@@ -506,6 +519,8 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
             plot.append('unset multiplot')
         blocks.append('\n'.join(block))
     (stage / 'intensity.out').write_text(tag_header + '\n\n\n'.join(blocks) + '\n')
+    if mode != 'noe':
+        plot.extend(AUTO_PLOT_MARGINS)
     plot += ['set autoscale x', 'set title ' + gnuplot_string(mode.upper() + ' | ' + run_tag), 'set xlabel "Residue"',
              'set ylabel ' + gnuplot_string('hetNOE' if mode == 'noe' else mode.upper() + ' (1/s)'),
              'set key top right', 'set datafile missing "NaN"']

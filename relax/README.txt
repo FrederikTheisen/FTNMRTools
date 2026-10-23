@@ -135,6 +135,9 @@ warning is not silently interpreted as an exact numeric scale factor.
 
 Plots use the reported R and I0 without a second fit. Measured intensities,
 input noise bars and predicted intensities are divided by fitted I0.
+Decay pages use aligned panels with 80% of the plotting height for intensities
+and the fitted curve, and 20% for residuals. Only the lower panel shows delay
+labels. The final rate/NOE overview retains the full page.
 The residual panel is (measured - predicted) / input noise SD. These bars
 condition on fitted I0; they do not include uncertainty in the fitted
 amplitude or quantify overlap/processing systematics. Invalid or zero I0
