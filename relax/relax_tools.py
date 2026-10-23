@@ -592,8 +592,8 @@ def build_assessment(rows, extracted, times, noises, context):
                 if len(indices) < 2:
                     continue
                 weights = [1. / noises[i]**2 for i in indices]
-                mean = sum(y[i]*w for i, w in zip(indices, weights)) / sum(weights)
-                scatter = sum((y[i]-mean)**2/noises[i]**2 for i in indices)
+                mean = math.fsum(y[i]*w for i, w in zip(indices, weights)) / math.fsum(weights)
+                scatter = math.fsum((y[i]-mean)**2/noises[i]**2 for i in indices)
                 repeat_ss += scatter
                 repeat_df += len(indices)-1
                 pair_z = None
@@ -605,7 +605,9 @@ def build_assessment(rows, extracted, times, noises, context):
             row.update(repeat_chi2=repeat_ss if repeat_df else None, repeat_dof=repeat_df,
                        repeat_pair_z=pairs[0] if len(pairs) == 1 else None)
             if row['valid']:
-                chi2 = sum(point['z']**2 for point in row['points'])
+                # Explicit accurate summation is reproducible across Python 3.10
+                # and 3.12, whose built-in floating-point sum algorithms differ.
+                chi2 = math.fsum(point['z']**2 for point in row['points'])
                 if not math.isfinite(chi2):
                     raise ValueError('Nonfinite original-noise chi-square')
                 row['chi2_input'] = chi2

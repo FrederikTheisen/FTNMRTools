@@ -95,6 +95,13 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(r['primary_count'],1)
         self.assertIn('nonpositive_rate',r['rows'][0]['flags'])
         self.assertTrue(r['rows'][0]['valid'])
+    def test_original_noise_sum_uses_accurate_reproducible_accumulation(self):
+        b=bundle(count=1,times=[0.,.1,.2,.3]);b['noises']=[1.]*4
+        tag=b['peaks'][0]['peak_id']
+        b['extracted'][tag]=[100*math.exp(-2*t)+z for t,z in zip(b['times'],[1e8,1.,1.,1.])]
+        r=assessment(b);row=r['rows'][0]
+        self.assertEqual(row['chi2_input'],math.fsum(p['z']**2 for p in row['points']))
+        self.assertEqual(row['chi2_input'],1e16+4.)
     def test_bias_rule_boundaries(self):
         self.assertFalse(tools.residual_summary([3]*9)['bias'])
         self.assertFalse(tools.residual_summary([2]*10)['bias'])

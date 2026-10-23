@@ -100,7 +100,8 @@ is sum((residual/input_noise_sd)^2); residual dof=N-2, counting repeated planes
 separately. p_input is the approximate upper-tail chi-square probability. It is
 calculated with standard-library regularized-gamma series/continued fractions,
 verified against NIST's published chi-square critical values and df=1/2 closed
-forms. These are approximate nonlinear-fit goodness-of-fit tests conditional on
+forms. Explicit accurate sums avoid Python-version differences in accumulation.
+These are approximate nonlinear-fit goodness-of-fit tests conditional on
 independent Gaussian measurement noise with correctly supplied SDs.
 
 Primary assessment covers valid, non-overlapping decay fits with
