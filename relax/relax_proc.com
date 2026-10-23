@@ -57,6 +57,10 @@ set vList = (`cat delaylist`)
 if ($status != 0) goto failed
 set n = $#vList
 
+# Create the output directories before either conversion layout writes files.
+mkdir fid ft
+if ($status != 0) goto failed
+
 # Bruker conversion settings: edit for the acquisition, as before.
 bruk2pipe -verb -in ./ser \
   -bad 0.0 -ext -aswap -AMX -decim 2760 -dspfvs 20 -grpdly 67.9857330322266  \
@@ -71,28 +75,30 @@ bruk2pipe -verb -in ./ser \
   -out ./test.fid -ov
 
 if ($status != 0) goto failed
-python3 "$HELPER" check-fid test.fid delaylist
+# As in the original script, only split when conversion produced test.fid.
+# Validate the new conversion outputs before using either route.
+python3 "$HELPER" check-conversion delaylist
 if ($status != 0) goto failed
-mkdir fid ft
-if ($status != 0) goto failed
-set cList = ()
-foreach v ($vList)
-    set cList = ($cList 0.0)
-end
-set i = 1
-foreach v ($vList)
-    set cList[$i] = 1.0
-    set outName = (`printf fid/test%03d.fid $i`)
-    nmrPipe -in test.fid \
-    | nmrPipe -fn COADD -time -axis Y -cList $cList -verb \
-    | nmrPipe -fn MAC -macro $NMRTXT/bruk_ranceY.M -noRd -noWr \
-      -out $outName -ov
+if (-e test.fid) then
+    set cList = ()
+    foreach v ($vList)
+        set cList = ($cList 0.0)
+    end
+    set i = 1
+    foreach v ($vList)
+        set cList[$i] = 1.0
+        set outName = (`printf fid/test%03d.fid $i`)
+        nmrPipe -in test.fid \
+        | nmrPipe -fn COADD -time -axis Y -cList $cList -verb \
+        | nmrPipe -fn MAC -macro $NMRTXT/bruk_ranceY.M -noRd -noWr \
+          -out $outName -ov
+        if ($status != 0) goto failed
+        set cList[$i] = 0.0
+        @ i++
+    end
+    python3 "$HELPER" series fid/test*.fid
     if ($status != 0) goto failed
-    set cList[$i] = 0.0
-    @ i++
-end
-python3 "$HELPER" series fid/test*.fid
-if ($status != 0) goto failed
+endif
 
 # Processing choices are unchanged; the same scheme is used for every plane.
 set out = proc.ucsf

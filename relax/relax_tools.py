@@ -145,6 +145,57 @@ def check_fid(path, delays):
         raise ValueError('Indirect vector count is not divisible by the number of delays')
 
 
+def check_conversion(delays):
+    """Accept the original combined-FID or already-split conversion routes."""
+    combined = Path('test.fid')
+    planes = list(Path('fid').glob('test*.fid'))
+    if combined.exists() and planes:
+        raise ValueError('Conversion produced both test.fid and FID planes; select one output layout')
+    if combined.exists():
+        check_fid(combined, delays)
+    elif planes:
+        check_fid_series('fid', delays)
+    else:
+        raise ValueError('Conversion produced neither test.fid nor fid/test*.fid')
+
+
+def check_fid_series(directory, delays):
+    """Validate converted H/N planes with a real third (delay) axis.
+
+    Conversion must already arrange the axes and handle gradient shuffling.
+    This function only checks headers, file sizes and the expected plane names.
+    """
+    n = len(meaningful_lines(delays))
+    if not n:
+        raise ValueError('Empty delay list')
+    directory = Path(directory)
+    paths = sorted(directory.glob('test*.fid'))
+    expected = [directory / f'test{i:03d}.fid' for i in range(1, n + 1)]
+    if paths != expected:
+        raise ValueError(f'{directory}: converted FID planes do not match the delays')
+    grid = None
+    for path in paths:
+        header = pipe_header(path)
+        if header[9] != 3 or tuple(header[24:28]) != (2, 1, 3, 4) or header[57] != 0:
+            raise ValueError(f'{path}: expected an XYZ plane series with the delay axis third')
+        if header[51] != 1 or header[15] != n or header[442] != n:
+            raise ValueError(f'{path}: expected a real delay axis with {n} planes')
+        if header[220] != 0 or header[222] != 0:
+            raise ValueError(f'{path}: expected untransformed FID axes')
+        if header[56] not in (0, 1) or header[55] not in (0, 1):
+            raise ValueError(f'{path}: invalid quadrature flags')
+        # FDSPECNUM counts the stored rows; FDSIZE counts X real or imaginary
+        # points, so only the X complex flag adds a payload factor here.
+        shape = (integer_header(header[99], 'FDSIZE'), integer_header(header[219], 'FDSPECNUM'))
+        signature = shape + (header[56], header[55])
+        if grid is not None and signature != grid:
+            raise ValueError(f'{directory}: inconsistent converted FID grids')
+        grid = signature
+        expected_size = 2048 + 4 * shape[0] * shape[1] * (2 if header[56] == 0 else 1)
+        if path.stat().st_size != expected_size:
+            raise ValueError(f'{path}: FID payload size differs from its header')
+
+
 def noise_value(path):
     text = Path(path).read_text()
     matches = re.findall(rf'\bvEstNoise\b\s*(?:=|:)?\s*({NUMBER})(?![\w.])', text)
@@ -540,6 +591,8 @@ def main(argv=None):
     p.add_argument('--block', default='.01'); p.add_argument('--constant', default='.01')
     p.add_argument('--cycle-seconds', default=''); p.add_argument('--cycle-constant', default='0')
     p = commands.add_parser('check-fid'); p.add_argument('path'); p.add_argument('delays')
+    p = commands.add_parser('check-conversion'); p.add_argument('delays')
+    p = commands.add_parser('check-fid-series'); p.add_argument('directory'); p.add_argument('delays')
     p = commands.add_parser('noise-value'); p.add_argument('path')
     commands.add_parser('validate-proc')
     p = commands.add_parser('series'); p.add_argument('paths', nargs='+')
@@ -556,6 +609,10 @@ def main(argv=None):
                           args.constant, args.cycle_seconds, args.cycle_constant)
         elif args.command == 'check-fid':
             check_fid(args.path, args.delays)
+        elif args.command == 'check-conversion':
+            check_conversion(args.delays)
+        elif args.command == 'check-fid-series':
+            check_fid_series(args.directory, args.delays)
         elif args.command == 'noise-value':
             print(f'{noise_value(args.path):.17g}')
         elif args.command == 'validate-proc':

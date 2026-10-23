@@ -57,12 +57,16 @@ fn = args[args.index('-fn')+1] if '-fn' in args else ''
 with open(os.environ['FT_TEST_LOG'], 'a') as f: f.write(json.dumps([name, args])+'\n')
 fail = os.environ.get('FT_TEST_FAIL')
 if fail and fail in (name, fn): sys.exit(7)
-def header(dim=2, count=3):
+def header(dim=2, count=3, native=False):
     h=[0.0]*512
     h[2]=2.345;h[9]=dim;h[15]=count;h[26]=3;h[99]=4;h[219]=6
+    if native:
+        h[24:28]=[2,1,3,4];h[51]=1;h[442]=count
+        return struct.pack('<512f',*h)+struct.pack('<48f',*range(48))
     return struct.pack('<512f',*h)+struct.pack('<4f',0,1,2,3)
 if name == 'bruk2pipe':
-    Path(args[args.index('-out')+1]).write_bytes(header())
+    if '-out' in args:Path(args[args.index('-out')+1]).write_bytes(header())
+    else:sys.stdout.buffer.write(header(3,int(args[args.index('-yN')+1]),native=True))
 elif name == 'nmrPipe':
     data=Path(args[args.index('-in')+1]).read_bytes() if '-in' in args else sys.stdin.buffer.read()
     if '-out' in args:
@@ -72,6 +76,20 @@ elif name == 'nmrPipe':
             data=struct.pack('<512f',*h)+data[2048:]
         output.write_bytes(data)
     else:sys.stdout.buffer.write(data)
+elif name == 'pipe2xyz':
+    data=sys.stdin.buffer.read();h=struct.unpack('<512f',data[:2048]);n=int(h[15])
+    if fail=='native_empty':sys.exit(0)
+    if fail=='native_both':Path('test.fid').write_bytes(header())
+    if fail=='native_count':n+=1
+    for i in range(1,n+1):
+        if fail=='native_missing' and i==2:continue
+        payload=header(3,n,native=True)
+        if i==2 and fail in ('native_grid','native_complex_delay','native_transformed'):
+            v=list(struct.unpack('<512f',payload[:2048]))
+            v[{'native_grid':219,'native_complex_delay':51,'native_transformed':220}[fail]] = {'native_grid':8,'native_complex_delay':0,'native_transformed':1}[fail]
+            payload=struct.pack('<512f',*v)+payload[2048:]
+        if i==2 and fail=='native_truncated':payload=payload[:-4]
+        Path(args[args.index('-out')+1]%i).write_bytes(payload)
 elif name == 'xyz2pipe':
     n=len(list(Path('ft').glob('test*.ft2')))
     if fail == 'plane_count':n+=1
@@ -114,6 +132,22 @@ elif name == 'gnuplot':
     Path(output).write_bytes(b'%PDF synthetic plot\n')
 else:raise RuntimeError(name)
 '''
+
+
+NATIVE_CONVERSION = """bruk2pipe -in ./ser -xN 8 -yN 3 -zN 6 \
+    -xMODE DQD -yMODE Real -zMODE Echo-AntiEcho -ndim 3 \
+| nmrPipe -fn MULT -c 6.51042e-01 \
+| nmrPipe -fn TP -exch -noord -nohdr \
+| nmrPipe -fn ZTP -exch -noord \
+| nmrPipe -fn TP -exch -noord -nohdr \
+| pipe2xyz -x -out ./fid/test%03d.fid -ov
+"""
+
+
+def native_fid(endian='<', planes=3):
+    h=list(struct.unpack(endian+'512f',header(endian=endian)[:2048]))
+    h[24:28]=[2,1,3,4];h[51]=1;h[15]=planes;h[442]=planes
+    return struct.pack(endian+'512f',*h)+bytes(4*4*6*2)
 
 
 class DelayTests(unittest.TestCase):
@@ -165,6 +199,29 @@ class DelayTests(unittest.TestCase):
             with self.assertRaises(ValueError):tools.plane_count(p)
             p.write_bytes(b'bad header')
             with self.assertRaises(ValueError):tools.plane_count(p)
+
+
+class NativeFidTests(unittest.TestCase):
+    def test_series_headers_both_byte_orders_and_repeated_unsorted_delays(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fid=root/'fid';fid.mkdir();delays=root/'delaylist'
+            delays.write_text('.2\n0\n.2\n')
+            for endian in ('<','>'):
+                for i in range(1,4):(fid/f'test{i:03d}.fid').write_bytes(native_fid(endian))
+                before=[p.read_bytes() for p in sorted(fid.iterdir())]
+                tools.check_fid_series(fid,delays)
+                self.assertEqual(before,[p.read_bytes() for p in sorted(fid.iterdir())])
+                self.assertEqual(delays.read_text(),'.2\n0\n.2\n')
+
+    def test_rejects_stream_wrong_axes_complex_delays_and_processed_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);fid=root/'fid';fid.mkdir();delays=root/'delaylist';delays.write_text('0\n.1\n.2\n')
+            for index,value in ((9,2),(26,1),(51,0),(57,1),(220,1),(222,1),(442,2),(55,3)):
+                with self.subTest(index=index):
+                    for i in range(1,4):(fid/f'test{i:03d}.fid').write_bytes(native_fid())
+                    raw=(fid/'test002.fid').read_bytes();h=list(struct.unpack('<512f',raw[:2048]));h[index]=value
+                    (fid/'test002.fid').write_bytes(struct.pack('<512f',*h)+raw[2048:])
+                    with self.assertRaises(ValueError):tools.check_fid_series(fid,delays)
 
 
 class PeakAndFitTests(unittest.TestCase):
@@ -307,7 +364,7 @@ class ScriptIntegrationTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(prefix='ftnmr-stub-tests-');self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.source=self.root/'sample data';self.source.mkdir()
         self.bin=self.root/'bin';self.bin.mkdir();self.log=self.root/'calls.jsonl'
-        for name in ('bruk2pipe','nmrPipe','series.com','sethdr','setfdata','xyz2pipe','pipe2ucsf','ucsfdata','specStat.com','data_xtr','rlx_dfit','gnuplot'):
+        for name in ('bruk2pipe','nmrPipe','series.com','sethdr','setfdata','xyz2pipe','pipe2xyz','pipe2ucsf','ucsfdata','specStat.com','data_xtr','rlx_dfit','gnuplot'):
             p=self.bin/name;p.write_text(STUB);p.chmod(0o755)
         self.env=dict(os.environ,PATH=str(self.bin)+':/usr/bin:/bin',NMRTXT=str(self.root),
                       FT_TEST_LOG=str(self.log),PYTHONDONTWRITEBYTECODE='1')
@@ -362,6 +419,55 @@ class ScriptIntegrationTests(unittest.TestCase):
         self.assertEqual(len(list((self.source/'ft').glob('test*.ft2'))),3)
         result=self.run_script('relax_proc.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertEqual((self.source/'ser').read_text(),'synthetic input only')
+        functions=[args[args.index('-fn')+1] for name,args in self.calls() if name=='nmrPipe' and '-fn' in args]
+        # Two invocations above, three selected planes per invocation.
+        self.assertEqual(functions.count('COADD'),6)
+        self.assertEqual(functions.count('MAC'),6)
+    def native_script(self):
+        script=self.root/'native.com';text=(RELAX/'relax_proc.com').read_text()
+        start=text.index('bruk2pipe -verb -in ./ser')
+        end=text.index('\nif ($status != 0) goto failed',start)
+        script.write_text(text[:start]+NATIVE_CONVERSION+text[end:])
+        shutil.copy2(RELAX/'relax_tools.py',self.root/'relax_tools.py')
+        return script
+
+    def test_native_conversion_uses_planes_without_coadd_or_second_shuffling(self):
+        result=self.run_script('relax_proc.com',script=self.native_script())
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertEqual(tools.plane_count(self.source/'m.ft3'),3)
+        self.assertEqual(tools.counted_vector(self.source/'vEstNoise.txt'),[2,2,2])
+        self.assertEqual((self.source/'delaylist').read_text().splitlines(),['0','0.20000000000000001','0.10000000000000001'])
+        functions=[args[args.index('-fn')+1] for name,args in self.calls() if name=='nmrPipe' and '-fn' in args]
+        self.assertNotIn('COADD',functions);self.assertNotIn('MAC',functions)
+        self.assertIn('MULT',functions);self.assertIn('ZTP',functions)
+        self.assertIn('SOL',functions);self.assertIn('POLY',functions)
+        self.assertIn('pipe2xyz',[name for name,args in self.calls()])
+        self.assertFalse(any(name=='sethdr' and args[0].startswith('fid/') for name,args in self.calls()))
+
+    def test_bad_native_series_preserves_previous_outputs(self):
+        script=self.native_script();old=(self.source/'m.ft3').read_bytes()
+        (self.source/'fid').mkdir();(self.source/'fid/old.fid').write_text('old FID')
+        (self.source/'ft').mkdir();(self.source/'ft/old.ft2').write_text('old spectrum')
+        for failure in ('native_count','native_missing','native_grid','native_complex_delay','native_transformed','native_truncated','native_empty','native_both'):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                result=self.run_script('relax_proc.com',failure,script=script)
+                self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual((self.source/'m.ft3').read_bytes(),old)
+                self.assertEqual((self.source/'fid/old.fid').read_text(),'old FID')
+                self.assertEqual((self.source/'ft/old.ft2').read_text(),'old spectrum')
+                self.assertNotIn(['-fn','SOL'],[args for name,args in self.calls()])
+                self.assertFalse(list(self.source.glob('.relax-proc-*')))
+
+    def test_native_pipeline_failures_preserve_previous_outputs(self):
+        script=self.native_script();old=(self.source/'m.ft3').read_bytes()
+        for failure in ('MULT','ZTP','pipe2xyz'):
+            with self.subTest(failure=failure):
+                result=self.run_script('relax_proc.com',failure,script=script)
+                self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual((self.source/'m.ft3').read_bytes(),old)
+                self.assertFalse(list(self.source.glob('.relax-proc-*')))
+
     def test_processing_failures_preserve_existing_outputs(self):
         old=(self.source/'m.ft3').read_bytes()
         (self.source/'ft').mkdir();(self.source/'ft/old.ft2').write_text('old spectrum')

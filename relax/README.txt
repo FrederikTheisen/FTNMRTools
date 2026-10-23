@@ -37,11 +37,34 @@ does not create a separate set of result filenames.
 Processing settings and delays
 ------------------------------
 
-The Bruker conversion, splitting, solvent suppression, apodization, Fourier
-transformation, extraction, phasing, zero filling and POLY -auto settings
-remain the same as the original template. They are acquisition-specific.
-The former series.com calls are expanded into the same sethdr settings,
-with each header update checked individually.
+The default Bruker conversion and interleaved splitting retain the original
+template. Solvent suppression, apodization, Fourier transformation,
+extraction, phasing, zero filling and POLY -auto settings are unchanged.
+These settings are acquisition-specific. The former series.com calls are
+expanded into the same sethdr settings, with each update checked individually.
+
+The original conversion-output selection is preserved:
+
+    If conversion writes test.fid, the original COADD selection and
+    bruk_ranceY.M shuffling split the 2D interleaved FID into planes.
+
+    If conversion writes fid/test%03d.fid directly, the script uses those
+    planes without COADD, additional shuffling or FID header rewriting.
+    The converter must arrange H/N in X/Y and a real delay axis in Z, and
+    must handle any gradient shuffling.
+
+No new layout setting is needed. Producing both output layouts, or neither,
+is an error. Both routes create fid/ and ft/ before conversion. Direct-plane
+inputs are checked for exact filenames/counts against the delay list,
+compatible headers, untransformed X/Y axes, a real Z axis and complete payload
+sizes before Fourier processing. Delays keep acquisition order and repeats.
+
+For example, a 3D conversion with -yLAB Tau -zLAB 15N can transpose its stream
+into HN/15N/Tau planes before pipe2xyz -x -out ./fid/test%03d.fid. Keep that
+conversion's MULT, TP and ZTP operations. Echo-AntiEcho/Rance-Kay conversion
+already invokes the appropriate gradient shuffling; do not apply it again.
+See the NMRPipe conversion/shuffling documentation:
+https://www.nmrscience.com/ref/nmrpipe/coadd.html
 
 Configure path2vc, path2vd and path2ncyc at the top of relax_proc.com. Paths
 are relative to the experiment directory or absolute; patterns are accepted
