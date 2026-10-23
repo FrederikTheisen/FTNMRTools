@@ -331,6 +331,30 @@ class ScriptIntegrationTests(unittest.TestCase):
         self.assertEqual((self.source/'m.ft3').read_bytes(),old)
         self.assertEqual(self.calls(),[])
 
+    def test_worker_accepts_stage_directory_alias(self):
+        @contextmanager
+        def aliased_stage(source,kind):
+            physical=self.root/'physical stage';physical.mkdir()
+            logical=self.root/'logical stage';logical.symlink_to(physical,target_is_directory=True)
+            yield logical
+        with mock.patch.object(tools,'run_directory',aliased_stage), mock.patch.dict(os.environ,self.env,clear=True):
+            tools.run_processing(RELAX/'relax_proc.com',self.source)
+        self.assertEqual(tools.plane_count(self.source/'m.ft3'),3)
+        self.assertEqual(tools.counted_vector(self.source/'vEstNoise.txt'),[2,2,2])
+        self.assertTrue(self.calls())
+
+    def test_worker_rejects_different_or_missing_stage_directory(self):
+        old=(self.source/'m.ft3').read_bytes()
+        for stage in (self.root,self.root/'missing stage',self.source/'ser'):
+            with self.subTest(stage=stage):
+                env=dict(self.env,FTNMR_RELAX_STAGE=str(stage))
+                result=subprocess.run(['/bin/tcsh','-f',str(RELAX/'relax_proc.com'),'--worker',str(self.source)],
+                                      cwd=self.source,env=env,text=True,capture_output=True)
+                self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+                self.assertIn('Worker directory differs',result.stdout)
+                self.assertEqual((self.source/'m.ft3').read_bytes(),old)
+                self.assertEqual(self.calls(),[])
+
     def test_successful_processing_and_repeat_run(self):
         result=self.run_script('relax_proc.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertEqual(tools.plane_count(self.source/'m.ft3'),3)

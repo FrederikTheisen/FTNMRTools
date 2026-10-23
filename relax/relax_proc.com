@@ -36,7 +36,10 @@ if (! $?FTNMR_RELAX_STAGE) then
     echo "Internal worker must be started by the controller."
     exit 2
 endif
-if ("$FTNMR_RELAX_STAGE" != "$cwd") then
+# tcsh may use a /home alias while Python uses /data for the same directory.
+# Check directory identity, preserving the guard against a different location.
+python3 -c 'import os, sys; sys.exit(not os.path.isdir(sys.argv[1]) or not os.path.samefile(sys.argv[1], os.getcwd()))' "$FTNMR_RELAX_STAGE"
+if ($status != 0) then
     echo "Worker directory differs from its temporary stage."
     exit 2
 endif

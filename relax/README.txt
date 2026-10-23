@@ -138,6 +138,9 @@ leftover temporary directories cannot supply inputs to a new run. Outputs
 are published only when the entire run, including plotting, succeeds.
 Publication errors roll back replacements. Output symlinks are rejected.
 The lock file may remain after a run; the OS releases its lock automatically.
+The worker verifies that its current directory is the controller's temporary
+stage using directory identity, so /home and /data aliases of the same folder
+are accepted. A different directory, missing path or file remains an error.
 
 Tests without processing data
 -----------------------------
