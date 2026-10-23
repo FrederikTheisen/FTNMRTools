@@ -265,7 +265,7 @@ class PeakAndFitTests(unittest.TestCase):
         self.assertAlmostEqual(numeric[1][5],(80-prediction)/3)
         plot=(self.path/'plot.gnu').read_text()
         self.assertIn('exp(-(2)*x)',plot);self.assertNotIn('\nfit ',plot)
-        filtered=(self.path/'test_results_filtered.out').read_text().splitlines()[1:]
+        filtered=tools.meaningful_lines(self.path/'test_results_filtered.out')
         self.assertEqual([l.split()[0] for l in filtered],['151','174'])
         with (self.path/'test_fit_diagnostics.tsv').open() as f:rows=list(csv.DictReader(f,delimiter='\t'))
         self.assertEqual(rows[1]['overlap'],'True');self.assertEqual(rows[2]['overlap'],'False')
@@ -483,7 +483,7 @@ class ScriptIntegrationTests(unittest.TestCase):
         interrupted=self.source/'.relax-analyze-interrupted';interrupted.mkdir()
         (interrupted/'rlx_dfit.out').write_text('old interrupted fit')
         result=self.run_script('relax_analyze_v2.com');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        results=(self.source/'sample_results.out').read_text().splitlines()[1:]
+        results=tools.meaningful_lines(self.source/'sample_results.out')
         self.assertEqual([l.split()[0] for l in results],['151','174','174'])
         self.assertEqual((self.source/'pre_results.tmp').read_text(),'OLD 9 9\n')
         self.assertTrue((self.source/'sample_fit_diagnostics.tsv').is_file())
@@ -513,10 +513,10 @@ class ScriptIntegrationTests(unittest.TestCase):
         (self.source/'extra.list').write_text(PEAKS)
         result=self.run_script('relax_analyze_v2.com');self.assertNotEqual(result.returncode,0)
         self.assertEqual(self.calls(),[])
-    def test_r2_and_noe_shell_modes(self):
+    def test_r2_r1rho_and_noe_shell_modes(self):
         original=(RELAX/'relax_analyze_v2.com').read_text()
         shutil.copy2(RELAX/'relax_tools.py',self.root/'relax_tools.py')
-        for mode in ('r2','noe'):
+        for mode in ('r2','r1rho','noe'):
             script=self.root/f'{mode}.com';script.write_text(original.replace('set DATA_TYPE = r1',f'set DATA_TYPE = {mode}'))
             if mode=='noe':(self.source/'relax_header.txt').write_text('3 1 -1 1\n')
             result=self.run_script('relax_analyze_v2.com',script=script)
@@ -525,6 +525,7 @@ class ScriptIntegrationTests(unittest.TestCase):
         fit_calls=[args for name,args in self.calls() if name=='rlx_dfit']
         self.assertEqual(fit_calls[-1][fit_calls[-1].index('-mode')+1],'noe')
         self.assertIn('10.0',fit_calls[0])
+        self.assertEqual(fit_calls[1][fit_calls[1].index('-r_init')+1], '1.0')
 
 
 if __name__=='__main__':unittest.main()

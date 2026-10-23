@@ -5,7 +5,7 @@
 set SPARKY_PEAKS = "*.list"
 set DATA_FILE = ./m.ft3
 set DATA_FMT = nmrpipe
-set DATA_TYPE = r1 # r1, r2, noe
+set DATA_TYPE = r1 # r1, r1rho (T1rho), r2, noe
 set PEAK_FMT = sparky3d # sparky3d or sparky2d
 set RLX_DFIT_HEADER = relax_header.txt
 set RLX_DFIT_ESD = vEstNoise.txt
