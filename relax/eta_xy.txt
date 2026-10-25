@@ -54,6 +54,12 @@ States-TPPI spectra, and processed with one common recipe. No new Bruker
 experiment numbers are created. No Rance-Kay shuffling macro is applied:
 this pulse program uses States-TPPI, unlike the gradient-selected relaxation
 template. The 15N Fourier step applies its required sign alternation once.
+The two readout branches have opposite 15N frequency directions: planes 2/4
+therefore require FT -neg in addition to -alt. This decodes the acquisition;
+all four planes still receive the same phase/window/baseline settings. The
+direction correction was confirmed on actual May 12 data: before correction
+the 2/4 peaks were mirrored, afterward all four peak positions aligned. An
+old processing record without this correction is rejected by the analyzer.
 
 Direct conversion parameters come from acqus/acqu2s. Processing retains the
 shared template's SOL, SP .4/.98/2/.5, left-half proton extraction and
@@ -95,6 +101,9 @@ comment RECORDS after CSV parsing. No analysis IDs, hashes or code fingerprints
 are added. The PDF shows the rate and product-ratio overviews. The support ZIP
 keeps the extraction tags/mapping, original peak list, measured intensities,
 noise vector, acquisition parameters, pulse program and plotting records.
+It also includes processing.txt when available. Optional coordinates_source,
+common_coordinate_shift_ppm and purpose peak-list comments carry through to
+the numbers footer, for example when using registered coordinates for a test.
 
 Noise is per-plane SD in the SAME units as extracted heights. Error propagation
 assumes independent Gaussian plane noise and fixed peak positions/time:

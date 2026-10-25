@@ -1,5 +1,6 @@
 """Synthetic etaXY mathematics, acquisition layout, extraction and publication."""
 import argparse
+import cmath
 import csv
 import math
 from pathlib import Path
@@ -169,6 +170,10 @@ class WorkflowTests(unittest.TestCase):
         (self.root/'audita.txt').unlink();path.unlink()
         with self.assertRaises(FileNotFoundError):eta.experiment_profile(self.root)
     def test_one_2d_list_reordered_extraction_duplicates_and_three_outputs(self):
+        with self.peaks.open('a') as handle:
+            handle.write('# coordinates_source: reference.list\n# purpose: actual-data test\n')
+        trace=self.root/'processing.txt'
+        trace.write_text('evolution_time_s: 0.05\nindirect_ft_negated_planes: 2, 4\n')
         with mock.patch.object(eta.rt,'checked_run',side_effect=self.command):eta.analyze(self.args)
         rows=records(self.root/'eta_numbers.csv')
         self.assertEqual(len(rows),2)
@@ -182,9 +187,12 @@ class WorkflowTests(unittest.TestCase):
         text=(self.root/'eta_numbers.csv').read_text()
         self.assertIn('# plane_noise_sd: 1.0, 2.0, 3.0, 4.0',text)
         self.assertNotIn('analysis_id',text)
+        self.assertIn('# coordinates_source: reference.list',text)
+        self.assertIn('# purpose: actual-data test',text)
         with zipfile.ZipFile(self.root/'eta_support.zip') as archive:
             self.assertEqual(archive.read('original_peak_list.list'),self.peaks.read_bytes())
             self.assertEqual(archive.read('pulseprogram'),(self.root/'pulseprogram').read_bytes())
+            self.assertEqual(archive.read('processing.txt'),trace.read_bytes())
         self.assertEqual({p.name for p in self.root.glob('eta*') if p.name != 'etaXY.list'},
                          {'eta.pdf','eta_numbers.csv','eta_support.zip'})
     def test_saved_intensities_need_no_extractor_or_fitter(self):
@@ -239,6 +247,11 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             eta.pipeline([[sys.executable,'-c','raise SystemExit(7)'],
                           [sys.executable,'-c','import sys; sys.stdin.read()']],self.root)
+    def test_old_processing_record_is_rejected_before_extraction(self):
+        (self.root/'processing.txt').write_text('evolution_time_s: 0.05\n')
+        with mock.patch.object(eta.rt,'checked_run') as command,\
+                self.assertRaisesRegex(ValueError,'direction correction'):eta.analyze(self.args)
+        command.assert_not_called()
     def test_failed_processing_leaves_old_outputs_and_raw_untouched(self):
         out=self.root/'eta_xy_processed';out.mkdir();(out/'m.ft3').write_bytes(b'old stack')
         raw=(self.root/'ser').read_bytes()
@@ -284,17 +297,30 @@ class WorkflowTests(unittest.TestCase):
                 mock.patch.object(eta.rt.subprocess,'run',side_effect=lambda cmd,**kwargs:command(cmd,self.root)):
             eta.process(args)
         self.assertEqual(len(pipelines),4)
-        for pipeline in pipelines:
+        reconstructed_frequencies=[]
+        for index,pipeline in enumerate(pipelines,1):
             self.assertEqual(sum('-alt' in c for c in pipeline),1)
+            self.assertEqual(any('-neg' in c for c in pipeline),index in (2,4))
+            # Independent Fourier check of the conjugate indirect evolution
+            # observed in the two readout branches of the actual acquisition.
+            n,k=32,5
+            direction=1 if index in (1,3) else -1
+            signal=[cmath.exp(2j*math.pi*k*j/n*direction) for j in range(n)]
+            if any('-neg' in c for c in pipeline):signal=[v.conjugate() for v in signal]
+            signal=[v*(-1)**j for j,v in enumerate(signal)]
+            spectrum=[abs(sum(v*cmath.exp(-2j*math.pi*f*j/n) for j,v in enumerate(signal))) for f in range(n)]
+            reconstructed_frequencies.append(max(range(n),key=lambda f:spectrum[f]))
             phases=[c for c in pipeline if 'PS' in c]
             self.assertEqual(phases[0][phases[0].index('-p0')+1],10.)
             self.assertEqual(phases[1][phases[1].index('-p0')+1],30.)
             self.assertFalse(any('MAC' in c for c in pipeline))
+        self.assertEqual(reconstructed_frequencies,[21]*4)
         self.assertEqual(len(list((out/'planes').glob('*.ft2'))),4)
         self.assertEqual(eta.rt.plane_count(out/'m.ft3'),4)
         self.assertEqual(eta.rt.counted_vector(out/'vEstNoise.txt'),[10.]*4)
         self.assertFalse((out/'raw').exists())
         self.assertFalse((out/'fid').exists())
+        self.assertIn('indirect_ft_negated_planes: 2, 4',(out/'processing.txt').read_text())
 
 
 if __name__=='__main__':unittest.main()

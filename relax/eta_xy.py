@@ -166,7 +166,7 @@ def peak_list(path):
     return path, fmt, rt.read_peaks(path, fmt)
 
 
-def write_numbers(path, peaks, extracted, noises, profile, peak_name, spectrum_name):
+def write_numbers(path, peaks, extracted, noises, profile, peak_name, spectrum_name, peak_notes=None):
     coordinate_fields = [f'w{i}' for i in range(1,len(peaks[0]['coordinates'])+1)]
     shared = {field: peaks[0]['coordinates'][i] for i,field in enumerate(coordinate_fields)
               if all(p['coordinates'][i] == peaks[0]['coordinates'][i] for p in peaks)}
@@ -197,6 +197,7 @@ def write_numbers(path, peaks, extracted, noises, profile, peak_name, spectrum_n
                         plane_roles=', '.join(ROLES), plane_noise_sd=', '.join(map(str,noises)),
                         rate_convention='magnitude', noise_propagation='first_order_independent_planes',
                         **shared)
+        metadata.update(peak_notes or {})
         for key,value in metadata.items():
             text = str(value).replace('\r','\\r').replace('\n','\\n')
             handle.write(f'# {key}: {text}\n')
@@ -254,6 +255,14 @@ def analyze(args):
     with rt.run_directory(destination,'eta-analyze') as stage:
         watched = [peak_path,noises_path,profile['folder']/'acqus',profile['folder']/'acqu2s',profile['folder']/'pulseprogram']
         before = {p:p.read_bytes() for p in watched}
+        processing_record = data_path.parent/'processing.txt'
+        if processing_record.is_file():
+            before[processing_record] = processing_record.read_bytes()
+            settings = dict(line.split(': ',1) for line in processing_record.read_text().splitlines() if ': ' in line)
+            if settings.get('indirect_ft_negated_planes') != '2, 4':
+                raise ValueError('Processing record lacks the required nitrogen-direction correction for planes 2/4; reprocess this series')
+            if float(settings.get('evolution_time_s','nan')) != profile['time']:
+                raise ValueError('Processing record and acquisition D20 disagree')
         data_stat = file_signature(data_path)
         clean = stage/'peaks.list'
         clean.write_text('assignment '+ ' '.join(f'w{i}' for i in range(1,len(peaks[0]['coordinates'])+1))+'\n'+
@@ -293,7 +302,14 @@ def analyze(args):
                     text=str(value).replace('\r','\\r').replace('\n','\\n')
                     handle.write(f'# {key}: {text}\n')
         extracted = rt.parse_extracted(raw.read_text(),peaks,4)
-        results = write_numbers(stage/names[1],peaks,extracted,noises,profile,peak_name,spectrum_name)
+        peak_notes = {}
+        for line in before[peak_path].decode().splitlines():
+            if line.startswith('# '):
+                key,separator,value = line[2:].partition(': ')
+                if separator and key in ('coordinates_source','common_coordinate_shift_ppm','purpose'):
+                    if key in peak_notes:raise ValueError('Duplicate peak-list coordinate metadata')
+                    peak_notes[key] = value
+        results = write_numbers(stage/names[1],peaks,extracted,noises,profile,peak_name,spectrum_name,peak_notes)
         plot_script(stage,prefix,results,profile,peak_name)
         rt.checked_run(['gnuplot','plot.gnu'],stage)
         rt.nonempty(stage/names[0])
@@ -302,6 +318,8 @@ def analyze(args):
                 archive.write(path,path.name)
             archive.writestr('original_peak_list.list',before[peak_path])
             archive.writestr('vEstNoise.txt',noises_path.read_bytes())
+            if processing_record in before:
+                archive.writestr('processing.txt',before[processing_record])
             for filename in ('acqus','acqu2s','pulseprogram'):
                 archive.writestr(filename,before[profile['folder']/filename])
             archive.writestr('README.txt','Four-plane nico_nnh_tr_noSE analysis. '+METHOD_URL+'\n'
@@ -402,6 +420,8 @@ def process(args):
             converted += ['-xLAB','HN','-yLAB','15N','-ndim','2','-aq2D','States','-out',fid,'-ov']
             rt.checked_run(converted,stage);rt.nonempty(fid)
             out=planes/f'plane_{index:02d}.ft2'
+            # Decode the opposite 15N frequency sense in readout branches 2/4
+            # before applying the same phase/window recipe to every plane.
             commands=[['nmrPipe','-in',fid,'-fn','SOL'],
                       ['nmrPipe','-fn','SP','-off','.4','-end','.98','-pow','2','-c','.5'],
                       ['nmrPipe','-fn','ZF','-size',args.h_zf],['nmrPipe','-fn','FT'],
@@ -409,7 +429,8 @@ def process(args):
                       ['nmrPipe','-fn','PS','-p0',args.h_p0,'-p1',args.h_p1,'-di'],
                       ['nmrPipe','-fn','TP'],
                       ['nmrPipe','-fn','SP','-off','.4','-end','.98','-pow','2','-c','.5'],
-                      ['nmrPipe','-fn','ZF','-size',args.n_zf],['nmrPipe','-fn','FT','-alt'],
+                      ['nmrPipe','-fn','ZF','-size',args.n_zf],
+                      ['nmrPipe','-fn','FT','-alt']+(['-neg'] if index in (2,4) else []),
                       ['nmrPipe','-fn','PS','-p0',args.n_p0,'-p1',args.n_p1,'-di'],
                       ['nmrPipe','-fn','TP'],['nmrPipe','-fn','POLY','-auto','-ord','4','-out',out,'-ov']]
             pipeline(commands,stage);rt.nonempty(out)
@@ -434,6 +455,7 @@ def process(args):
                     f"pulse_program: nico_nnh_tr_noSE\nevolution_time_s: {profile['time']}\n"
                     f"plane_roles: {', '.join(ROLES)}\nh_phase: {args.h_p0}, {args.h_p1}\n"
                     f"n_phase: {args.n_p0}, {args.n_p1}\nzero_fill: {args.h_zf}, {args.n_zf}\n"
+                    'indirect_ft_negated_planes: 2, 4\n'
                     'States-TPPI; one common phase/window/baseline recipe for all four planes.\n'
                     'SOL; SP .4/.98/2/.5; H left-half extraction; POLY -auto -ord 4.\n')
         (stage/'processing.txt').write_text(settings)
