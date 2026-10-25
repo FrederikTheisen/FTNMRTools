@@ -1,6 +1,11 @@
 Relaxation processing and analysis
 =================================
 
+etaXY uses separate eta_xy_proc.com / eta_xy_analyze.com entrypoints. See
+eta_xy.txt for the reviewed four-plane nico_nnh_tr_noSE sequence, its D20
+timing convention and the one-peak-list workflow. Do not use the ordinary
+relaxation processing template for this States-TPPI acquisition.
+
 Keep relax_proc.com, relax_analyze.com and relax_tools.py together. Run the
 .com files from the experiment directory, as before:
 
