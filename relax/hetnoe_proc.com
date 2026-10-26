@@ -1,35 +1,44 @@
 #!/bin/tcsh
-# Run from the ORIGINAL interleaved HetNOE experiment, not a TopSpin split copy.
-# Tune phases on the reference plane, then use the SAME settings for both planes.
-# Zero phase is a starting setting, not a validated phase for every dataset.
+# Process the pseudo-3D NMRPipe FIDs made by the Bruker `bruker` conversion.
+# Run from the original experiment directory after running fid.com.
+# H and 15N phases are shared by both HetNOE planes; tune on the reference.
+
 set H_P0 = 0
 set H_P1 = 0
 set N_P0 = 0
 set N_P1 = 0
-set H_ZF = 4096
-set N_ZF = 1024
-# N correction runs with 15N active, before transposing back to H.
-set N_BASELINE_ORDER = 4
-set H_BASELINE_ORDER = 4
+set BASELINE_ORDER = 4
+set OUTDIR = hetnoe_processed
 
-# Use the shared FTNMRTools checkout; keep experiment settings in this script.
-set SCRIPT_PATH = "$0"
-if ("$SCRIPT_PATH" !~ */*) then
-    if (! -f "$SCRIPT_PATH") set SCRIPT_PATH = "`which "$SCRIPT_PATH"`"
+if (! -e fid/test001.fid) then
+    echo "Missing fid/test001.fid. Run the Bruker-generated fid.com first."
+    exit 1
 endif
-if ("$SCRIPT_PATH" !~ /*) set SCRIPT_PATH = "$cwd/$SCRIPT_PATH"
-set TOOLS_DIR = "$HOME/Documents/Projects/FTNMRTools/relax"
-if ($?FTNMRTOOLS_ROOT) then
-    set TOOLS_DIR = "$FTNMRTOOLS_ROOT/relax"
+
+mkdir -p "$OUTDIR"
+if ($status != 0) exit 1
+
+xyz2pipe -in fid/test%03d.fid \
+| nmrPipe -fn SOL \
+| nmrPipe -fn SP -off 0.5 -end 0.95 -pow 2 -elb 0.0 -glb 0.0 -c 0.5 \
+| nmrPipe -fn ZF -zf 1 -auto \
+| nmrPipe -fn FT \
+| nmrPipe -fn PS -p0 $H_P0 -p1 $H_P1 -di \
+| nmrPipe -fn EXT -left -sw \
+| nmrPipe -fn TP \
+| nmrPipe -fn SP -off 0.5 -end 0.95 -pow 1 -elb 0.0 -glb 0.0 -c 0.5 \
+| nmrPipe -fn ZF -zf 1 -auto \
+| nmrPipe -fn FT \
+| nmrPipe -fn PS -p0 $N_P0 -p1 $N_P1 -di \
+| nmrPipe -fn POLY -auto -ord $BASELINE_ORDER \
+| nmrPipe -fn TP \
+| nmrPipe -fn POLY -auto -ord $BASELINE_ORDER \
+| pipe2xyz -out "$OUTDIR/test%03d.ft3" -ov
+
+if ($status != 0) then
+    echo "NMRPipe processing failed. Check the first command that reported an error."
+    exit 1
 endif
-set HELPER = "$TOOLS_DIR/hetnoe_proc.py"
-if (! -f "$HELPER") then
-    echo "Shared FTNMRTools helper not found: $HELPER"
-    echo "Set FTNMRTOOLS_ROOT to your FTNMRTools checkout."
-    exit 2
-endif
-python3 "$HELPER" process --experiment "$cwd" \
-    --h-p0 "$H_P0" --h-p1 "$H_P1" --n-p0 "$N_P0" --n-p1 "$N_P1" \
-    --h-zf "$H_ZF" --n-zf "$N_ZF" \
-    --n-baseline-order "$N_BASELINE_ORDER" --h-baseline-order "$H_BASELINE_ORDER" $argv:q
-exit $status
+
+echo "Processed NMRPipe plane series: $OUTDIR/test%03d.ft3"
+echo "15N baseline correction is applied before the final transpose."
