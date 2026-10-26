@@ -6,11 +6,15 @@ eta_xy.txt for the reviewed four-plane nico_nnh_tr_noSE sequence, its D20
 timing convention and the one-peak-list workflow. Do not use the ordinary
 relaxation processing template for this States-TPPI acquisition.
 
-Keep relax_proc.com, relax_analyze.com and relax_tools.py together. Run the
-.com files from the experiment directory, as before:
+Use one shared FTNMRTools checkout. The .com scripts use helpers in
+$HOME/Documents/Projects/FTNMRTools/relax. For another installation location,
+set FTNMRTOOLS_ROOT to the checkout root once. You do not need helper files
+inside individual experiments; existing local helper copies are ignored.
+Keep experiment-specific conversion and phase settings in your local .com file.
+Run it from the experiment directory, as before:
 
-    csh /path/to/FTNMRTools/relax/relax_proc.com
-    tcsh /path/to/FTNMRTools/relax/relax_analyze.com
+    csh ./relax_proc.com
+    tcsh /path/to/FTNMRTools/relax/relax_analyze_v2.com
 
 Requirements: Python 3.8+, tcsh, the existing NMRPipe commands, data_xtr,
 rlx_dfit and gnuplot with pdfcairo support. Python uses only its standard
@@ -30,14 +34,18 @@ remain the same as the original template. They are acquisition-specific.
 The former series.com calls are expanded into the same sethdr settings,
 with each header update checked individually.
 
-Configure path2vc, path2vd and path2ncyc at the top of relax_proc.com. Paths
-are relative to the experiment directory or absolute; patterns are accepted
-only when they identify one file. For example, path2vd may be
-"lists/vd/15N_T1rho_9_1-200.vd". delay_source=auto requires exactly one
-available source. Set delay_source to vc, vd or ncyc to select explicitly.
-No source or multiple matches is an error; old delaylist files are not used.
+Delay lookup follows the original order: vclist, vdlist, vplist, ncyc_list
+in the experiment root; if none exists, look in lists/vc, lists/vd, lists/vp
+and lists/ncyc. The first available source is used. No acqus lookup is needed.
+The selected filename is printed. Multiple files in the selected subfolder
+require an explicit path; they are never concatenated.
 
-vdlist values accept bare numbers or s for seconds, m/ms for milliseconds,
+The editable path2vc/path2vd/path2vp/path2ncyc settings still support relative
+or absolute paths and patterns matching one file. Custom paths are honoured.
+Set delay_source to vc, vd, vp or ncyc when an explicit type is preferred.
+Old generated delaylist files are not used as inputs.
+
+vdlist and vplist values accept bare numbers or s for seconds, m/ms for milliseconds,
 and u/us/µs for microseconds, including scientific notation. Blank lines
 and whole-line # comments are ignored. Order and repeated delays are kept.
 Values must be finite and nonnegative.

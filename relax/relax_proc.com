@@ -6,18 +6,27 @@ set delay_constant = 0.01
 set path2vc = "vclist"
 set path2vd = "vdlist"
 set path2ncyc = "ncyc_list"
-set delay_source = auto # auto, vc, vd, ncyc; auto requires exactly one list
+set path2vp = "vplist"
+# Missing default lists are located in the lists/ subfolders automatically.
+set delay_source = auto # auto follows vc, vd, vp, ncyc order; or select a source explicitly
 # ncyc_list has no implicit units. Configure seconds per cycle before selecting it.
 set cycle_seconds = ""
 set cycle_constant = 0
 
-# Prefix bare/relative filenames before :h; tcsh leaves a bare name unchanged.
+# Use the shared FTNMRTools checkout; keep experiment settings in this script.
 set SCRIPT_PATH = "$0"
+if ("$SCRIPT_PATH" !~ */*) then
+    if (! -f "$SCRIPT_PATH") set SCRIPT_PATH = "`which "$SCRIPT_PATH"`"
+endif
 if ("$SCRIPT_PATH" !~ /*) set SCRIPT_PATH = "$cwd/$SCRIPT_PATH"
-set HELPER = "$SCRIPT_PATH:h/relax_tools.py"
+set TOOLS_DIR = "$HOME/Documents/Projects/FTNMRTools/relax"
+if ($?FTNMRTOOLS_ROOT) then
+    set TOOLS_DIR = "$FTNMRTOOLS_ROOT/relax"
+endif
+set HELPER = "$TOOLS_DIR/relax_tools.py"
 if (! -f "$HELPER") then
-    echo "Missing helper: $HELPER"
-    echo "Keep relax_tools.py beside this script (and any entrypoint symlink)."
+    echo "Shared FTNMRTools helper not found: $HELPER"
+    echo "Set FTNMRTOOLS_ROOT to your FTNMRTools checkout."
     exit 2
 endif
 if ($#argv == 0) then
@@ -49,7 +58,7 @@ set SOURCE = "$argv[2]"
 set anyerror
 onintr failed
 
-python3 "$HELPER" delays --base "$SOURCE" --vc "$path2vc" --vd "$path2vd" \
+python3 "$HELPER" delays --base "$SOURCE" --vc "$path2vc" --vd "$path2vd" --vp "$path2vp" \
     --ncyc "$path2ncyc" --source "$delay_source" --block "$delay_block" \
     --constant "$delay_constant" --cycle-seconds "$cycle_seconds" --cycle-constant "$cycle_constant"
 if ($status != 0) goto failed
@@ -117,7 +126,7 @@ foreach tau ($vList)
   | nmrPipe  -fn SP -off 0.4 -end 0.98 -pow 2 -c .5    \
   | nmrPipe  -fn ZF -size 1024                           \
   | nmrPipe  -fn FT                                      \
-  | nmrPipe  -fn PS -p0 0 -p1 0 -di                 \
+  | nmrPipe  -fn PS -p0 -90 -p1 0 -di                 \
   | nmrPipe  -fn TP                                     \
   | nmrPipe  -fn POLY -auto -ord 4                      \
      -verb -ov -out $outName

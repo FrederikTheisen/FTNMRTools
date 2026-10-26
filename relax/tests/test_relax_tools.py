@@ -151,6 +151,61 @@ def native_fid(endian='<', planes=3):
 
 
 class DelayTests(unittest.TestCase):
+    def test_vplist_is_auto_discovered_with_time_units_and_root_priority(self):
+        with tempfile.TemporaryDirectory() as d, working(d):
+            p=Path(d);(p/'vplist').write_text('1s\n25ms\n1e3us\n25ms\n')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[1,.025,.001,.025])
+            (p/'vdlist').write_text('2s\n')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[2])
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list','vp'),[1,.025,.001,.025])
+    def test_archived_vdlist_is_selected_read_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);folder=p/'lists'/'vd';folder.mkdir(parents=True)
+            (p/'acqus').write_text('##$VDLIST= <selected.vd>\n')
+            (folder/'selected.vd').write_text('100m\n0s\n100m\n')
+            self.assertEqual(tools.resolve_delay_source(p,'vclist','vdlist','ncyc_list'),('vd',folder/'selected.vd'))
+            self.assertFalse((p/'delaylist').exists());self.assertFalse((p/'relax_header.txt').exists())
+            with working(p):
+                self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[.1,0,.1])
+                self.assertEqual(tools.counted_vector('relax_header.txt'),[.1,0,.1])
+    def test_unique_archived_list_without_reference_and_ambiguous_lists(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);folder=p/'lists'/'vd';folder.mkdir(parents=True)
+            (folder/'one.vd').write_text('1s\n')
+            self.assertEqual(tools.resolve_delay_source(p,'vclist','vdlist','ncyc_list'),('vd',folder/'one.vd'))
+            (folder/'two.vd').write_text('2s\n')
+            with self.assertRaisesRegex(ValueError,'Multiple vd lists'):
+                tools.resolve_delay_source(p,'vclist','vdlist','ncyc_list')
+    def test_available_archived_list_does_not_require_matching_metadata(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);folder=p/'lists'/'vd';folder.mkdir(parents=True)
+            (p/'acqus').write_text('##$VDLIST= <old-name.vd>\n')
+            (folder/'current.vd').write_text('9s\n')
+            self.assertEqual(tools.resolve_delay_source(p,'vclist','vdlist','ncyc_list'),('vd',folder/'current.vd'))
+    def test_local_and_explicit_paths_keep_priority_and_missing_custom_path_has_no_fallback(self):
+        with tempfile.TemporaryDirectory() as d, working(d):
+            p=Path(d);folder=p/'lists'/'vd';folder.mkdir(parents=True)
+            (p/'acqus').write_text('##$VDLIST= <archived.vd>\n')
+            (folder/'archived.vd').write_text('2s\n')
+            (p/'vdlist').write_text('1s\n');(p/'override').write_text('3s\n')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[1])
+            self.assertEqual(tools.create_delays(p,'vclist',str(p/'override'),'ncyc_list'),[3])
+            with self.assertRaises(ValueError):tools.create_delays(p,'vclist','missing-custom','ncyc_list')
+    def test_archived_vclist_retains_cycle_formula_and_vc_vd_priority(self):
+        with tempfile.TemporaryDirectory() as d, working(d):
+            p=Path(d);vc=p/'lists'/'vc';vc.mkdir(parents=True)
+            (p/'acqus').write_text('##$VCLIST= <cycles>\n')
+            (vc/'cycles').write_text('0\n2\n1\n')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[.01,.03,.02])
+            vd=p/'lists'/'vd';vd.mkdir();(vd/'times').write_text('1s\n')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[.01,.03,.02])
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list','vd'),[1])
+    def test_archived_reference_uses_saved_basename_of_original_absolute_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);folder=p/'lists'/'vd';folder.mkdir(parents=True)
+            (p/'acqus').write_text('##$VDLIST= </original/instrument/lists/vd/selected.vd>\n')
+            (folder/'selected.vd').write_text('1s\n')
+            self.assertEqual(tools.resolve_delay_source(p,'vclist','vdlist','ncyc_list'),('vd',folder/'selected.vd'))
     def test_units_and_scientific_notation(self):
         for value, expected in [('0.25', .25), ('1',1), ('1s',1), ('100m',.1), ('100ms',.1),
                                 ('100u',.0001), ('100us',.0001), ('100µs',.0001), ('100μs',.0001),
@@ -164,7 +219,7 @@ class DelayTests(unittest.TestCase):
             p=Path(d);(p/'vdlist').write_text('100m\n0m\n100m\n25m\n')
             self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[.1,0,.1,.025])
             (p/'vclist').write_text('0\n2\n1\n')
-            with self.assertRaises(ValueError):tools.create_delays(p,'vclist','vdlist','ncyc_list')
+            self.assertEqual(tools.create_delays(p,'vclist','vdlist','ncyc_list'),[.01,.03,.02])
             actual=tools.create_delays(p,'vclist','vdlist','ncyc_list','vc',.01,.01)
             self.assertEqual(actual,[.01,.03,.02])
             (p/'ncyc_list').write_text('0\n2\n1\n')
@@ -323,11 +378,12 @@ class EntrypointTests(unittest.TestCase):
     def test_launch_paths_locate_companion_helper(self):
         with tempfile.TemporaryDirectory(prefix='ftnmr-entrypoint-') as d:
             root=Path(d);scripts=root/'scripts with spaces';scripts.mkdir()
+            (root/'relax').symlink_to(scripts,target_is_directory=True)
             log=root/'entrypoint.json'
             (scripts/'relax_tools.py').write_text(
                 'import json, os, sys\nfrom pathlib import Path\n'
                 'Path(os.environ["FT_ENTRYPOINT_LOG"]).write_text(json.dumps(sys.argv))\n')
-            env=dict(os.environ, PATH='.:/usr/bin:/bin', FT_ENTRYPOINT_LOG=str(log))
+            env=dict(os.environ, PATH='.:/usr/bin:/bin', FT_ENTRYPOINT_LOG=str(log), FTNMRTOOLS_ROOT=str(root))
             for name in ('relax_proc.com','relax_analyze_v2.com'):
                 script=scripts/name
                 # Isolate launch semantics from a user's shell startup files.
@@ -342,7 +398,7 @@ class EntrypointTests(unittest.TestCase):
                         result=subprocess.run(command,cwd=scripts,env=env,text=True,capture_output=True)
                         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                         args=json.loads(log.read_text())
-                        self.assertEqual(Path(args[0]),scripts/'relax_tools.py')
+                        self.assertEqual(Path(args[0]).resolve(),scripts/'relax_tools.py')
                         self.assertEqual(args[1], 'run-proc' if name=='relax_proc.com' else 'analyze')
                         if name=='relax_proc.com':
                             path=Path(args[args.index('--script')+1])
@@ -354,9 +410,42 @@ class EntrypointTests(unittest.TestCase):
             root=Path(d)
             for name in ('relax_proc.com','relax_analyze_v2.com'):
                 script=root/name;shutil.copy2(RELAX/name,script)
-                result=subprocess.run(['/bin/tcsh','-f',name],cwd=root,text=True,capture_output=True)
+                result=subprocess.run(['/bin/tcsh','-f',name],cwd=root,env=dict(os.environ,FTNMRTOOLS_ROOT=str(root)),text=True,capture_output=True)
                 self.assertEqual(result.returncode,2,result.stdout+result.stderr)
-                self.assertIn('Keep relax_tools.py beside this script',result.stdout+result.stderr)
+                self.assertIn('Set FTNMRTOOLS_ROOT',result.stdout+result.stderr)
+
+    def test_copied_entrypoints_use_one_shared_installation_and_ignore_stale_local_helpers(self):
+        with tempfile.TemporaryDirectory(prefix='ftnmr-shared-') as d:
+            root=Path(d)/'workspace with  two spaces';shared=root/'FTNMRTools'/'relax';shared.mkdir(parents=True)
+            dataset=root/'nmrdata'/'sample'/'3';dataset.mkdir(parents=True)
+            log=root/'helper.json';env=dict(os.environ,FT_ENTRYPOINT_LOG=str(log))
+            env['FTNMRTOOLS_ROOT']=str(root/'FTNMRTools')
+            modules={'relax_proc.com':'relax_tools.py','relax_analyze_v2.com':'relax_tools.py',
+                     'eta_xy_proc.com':'eta_xy.py','eta_xy_analyze.com':'eta_xy.py','hetnoe_proc.com':'hetnoe_proc.py'}
+            for module in set(modules.values()):
+                (dataset/module).write_text('raise AssertionError("stale local helper must never run")\n')
+            for version in (1,2):
+                for module in set(modules.values()):
+                    (shared/module).write_text('import sys,os,json\nfrom pathlib import Path\nPath(os.environ["FT_ENTRYPOINT_LOG"]).write_text(json.dumps(dict(argv=sys.argv,version='+str(version)+')))\n')
+                for name,module in modules.items():
+                    script=dataset/name
+                    if not script.exists():shutil.copy2(RELAX/name,script)
+                    result=subprocess.run(['/bin/tcsh','-f',str(script)],cwd=dataset,env=env,text=True,capture_output=True)
+                    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                    saved=json.loads(log.read_text())
+                    self.assertEqual(Path(saved['argv'][0]),shared/module)
+                    self.assertEqual(saved['version'],version)
+    def test_explicit_shared_installation_works_without_a_dataset_helper(self):
+        with tempfile.TemporaryDirectory(prefix='ftnmr-explicit-root-') as d:
+            root=Path(d);installed=root/'installation with spaces';shared=installed/'relax';shared.mkdir(parents=True)
+            dataset=root/'dataset';dataset.mkdir();log=root/'helper.json'
+            (shared/'relax_tools.py').write_text('import sys,os,json\nfrom pathlib import Path\nPath(os.environ["FT_ENTRYPOINT_LOG"]).write_text(json.dumps(sys.argv))\n')
+            script=dataset/'relax_proc.com';shutil.copy2(RELAX/'relax_proc.com',script)
+            env=dict(os.environ,FTNMRTOOLS_ROOT=str(installed),FT_ENTRYPOINT_LOG=str(log))
+            result=subprocess.run(['/bin/tcsh','-f',str(script)],cwd=dataset,env=env,text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertEqual(Path(json.loads(log.read_text())[0]),shared/'relax_tools.py')
+            self.assertFalse((dataset/'relax_tools.py').exists())
 
 
 class ScriptIntegrationTests(unittest.TestCase):
@@ -367,7 +456,7 @@ class ScriptIntegrationTests(unittest.TestCase):
         for name in ('bruk2pipe','nmrPipe','series.com','sethdr','setfdata','xyz2pipe','pipe2xyz','pipe2ucsf','ucsfdata','specStat.com','data_xtr','rlx_dfit','gnuplot'):
             p=self.bin/name;p.write_text(STUB);p.chmod(0o755)
         self.env=dict(os.environ,PATH=str(self.bin)+':/usr/bin:/bin',NMRTXT=str(self.root),
-                      FT_TEST_LOG=str(self.log),PYTHONDONTWRITEBYTECODE='1')
+                      FT_TEST_LOG=str(self.log),PYTHONDONTWRITEBYTECODE='1',FTNMRTOOLS_ROOT=str(RELAX.parent))
         (self.source/'ser').write_text('synthetic input only')
         (self.source/'vdlist').write_text('0s\n200ms\n100m\n')
         (self.source/'m.ft3').write_bytes(header())
@@ -423,6 +512,24 @@ class ScriptIntegrationTests(unittest.TestCase):
         # Two invocations above, three selected planes per invocation.
         self.assertEqual(functions.count('COADD'),6)
         self.assertEqual(functions.count('MAC'),6)
+
+    def test_processing_finds_archived_delay_list_from_source_while_worker_is_staged(self):
+        (self.source/'vdlist').unlink()
+        folder=self.source/'lists'/'vd';folder.mkdir(parents=True)
+        (folder/'acquisition.vd').write_text('0s\n200ms\n100m\n')
+        (self.source/'acqus').write_text('##$VDLIST= <acquisition.vd>\n')
+        result=self.run_script('relax_proc.com')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn(str(folder/'acquisition.vd'),result.stdout)
+        self.assertEqual(tools.counted_vector(self.source/'relax_header.txt'),[0,.2,.1])
+        self.assertEqual((folder/'acquisition.vd').read_text(),'0s\n200ms\n100m\n')
+
+    def test_processing_uses_vplist_without_local_vdlist(self):
+        (self.source/'vdlist').unlink();(self.source/'vplist').write_text('0s\n200ms\n100m\n')
+        result=self.run_script('relax_proc.com')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('Delay source: vp:',result.stdout)
+        self.assertEqual(tools.counted_vector(self.source/'relax_header.txt'),[0,.2,.1])
     def native_script(self):
         script=self.root/'native.com';text=(RELAX/'relax_proc.com').read_text()
         start=text.index('bruk2pipe -verb -in ./ser')

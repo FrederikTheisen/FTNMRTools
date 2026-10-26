@@ -12,14 +12,20 @@ set RLX_DFIT_ESD = vEstNoise.txt
 set OUTPUT_PREFIX = ""
 set EARLY_POINT_POLICY = auto # auto, report (keep full-fit rates), off
 
-# Keep relax_tools.py beside this script. It stages and validates the complete run.
-# Prefix bare/relative filenames before :h; tcsh leaves a bare name unchanged.
+# Use the shared FTNMRTools checkout; keep experiment settings in this script.
 set SCRIPT_PATH = "$0"
+if ("$SCRIPT_PATH" !~ */*) then
+    if (! -f "$SCRIPT_PATH") set SCRIPT_PATH = "`which "$SCRIPT_PATH"`"
+endif
 if ("$SCRIPT_PATH" !~ /*) set SCRIPT_PATH = "$cwd/$SCRIPT_PATH"
-set HELPER = "$SCRIPT_PATH:h/relax_tools.py"
+set TOOLS_DIR = "$HOME/Documents/Projects/FTNMRTools/relax"
+if ($?FTNMRTOOLS_ROOT) then
+    set TOOLS_DIR = "$FTNMRTOOLS_ROOT/relax"
+endif
+set HELPER = "$TOOLS_DIR/relax_tools.py"
 if (! -f "$HELPER") then
-    echo "Missing helper: $HELPER"
-    echo "Keep relax_tools.py beside this script (and any entrypoint symlink)."
+    echo "Shared FTNMRTools helper not found: $HELPER"
+    echo "Set FTNMRTOOLS_ROOT to your FTNMRTools checkout."
     exit 2
 endif
 python3 "$HELPER" analyze --peaks "$SPARKY_PEAKS" --data "$DATA_FILE" \

@@ -1,7 +1,9 @@
 etaXY: nico_nnh_tr_noSE
 ======================
 
-Keep eta_xy.py, eta_xy_proc.com, eta_xy_analyze.com and relax_tools.py together.
+Use the shared FTNMRTools checkout for helpers; no per-experiment helper copies
+are needed. Entry points use $HOME/Documents/Projects/FTNMRTools, or the
+FTNMRTOOLS_ROOT checkout if configured.
 No script runs just by being copied. The old relaxation scripts are unchanged.
 Requirements: Python 3.8+, the existing NMRPipe/data_xtr environment, and gnuplot
 with pdfcairo. The Python code uses its standard library only.

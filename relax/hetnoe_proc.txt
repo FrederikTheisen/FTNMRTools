@@ -134,3 +134,7 @@ Read-only real-data validation (2026-10-26): May 12 experiment 5 demultiplexes
 to EXACTLY the existing 10005/10006 raw files, byte for byte. This validates
 record/state separation, not final phase or baseline quality on real data.
 No real dataset was processed or fitted while adding this script.
+
+The .com entrypoint uses the shared FTNMRTools checkout at
+$HOME/Documents/Projects/FTNMRTools (or FTNMRTOOLS_ROOT when configured).
+Per-experiment helper copies are not needed; local phase settings are retained.

@@ -55,25 +55,32 @@ def parse_delay(value):
     return finite_number(float(match[1]) * scale, 'delay in seconds', 0)
 
 
-def create_delays(base, vc, vd, ncyc, source='auto', block=.01, constant=.01,
-                  cycle_seconds='', cycle_constant=0):
-    choices = {}
-    for kind, pattern in (('vc', vc), ('vd', vd), ('ncyc', ncyc)):
+def resolve_delay_source(base, vc, vd, ncyc, source='auto', vp='vplist'):
+    """Use the first available root list, then the standard lists subfolders."""
+    paths = [('vc', vc), ('vd', vd), ('vp', vp), ('ncyc', ncyc)]
+    defaults = {'vc': 'vclist', 'vd': 'vdlist', 'vp': 'vplist', 'ncyc': 'ncyc_list'}
+    archived = [(kind, 'lists/'+kind+'/*') for kind, pattern in paths
+                if Path(pattern) == Path(defaults[kind])]
+    for kind, pattern in paths + archived:
+        if source not in ('auto', kind):
+            continue
         path = Path(pattern)
-        matches = sorted(Path(p) for p in glob.glob(str(path if path.is_absolute() else Path(base) / path))
-                         if Path(p).is_file())
-        if source == kind or source == 'auto':
-            if len(matches) > 1:
-                raise ValueError(f'Multiple {kind} lists match {pattern!r}; configure one exact path')
-            if matches:
-                choices[kind] = matches[0]
-    if len(choices) != 1:
-        raise ValueError('Select exactly one existing delay source (vc, vd or ncyc); configure delay_source and its path')
-    kind, path = next(iter(choices.items()))
+        matches = sorted(Path(p) for p in glob.glob(str(path if path.is_absolute() else Path(base)/path))
+                         if Path(p).is_file() and not Path(p).name.startswith('.'))
+        if len(matches) > 1:
+            raise ValueError(f'Multiple {kind} lists match {pattern!r}; configure one exact path')
+        if matches:
+            return kind, matches[0]
+    raise ValueError('No delay list found in the experiment root or lists subfolders')
+
+
+def create_delays(base, vc, vd, ncyc, source='auto', block=.01, constant=.01,
+                  cycle_seconds='', cycle_constant=0, vp='vplist'):
+    kind, path = resolve_delay_source(base, vc, vd, ncyc, source, vp)
     values = meaningful_lines(path)
     if not values:
         raise ValueError(f'{path}: empty delay list')
-    if kind == 'vd':
+    if kind in ('vd', 'vp'):
         delays = [parse_delay(value) for value in values]
     else:
         step = finite_number(block if kind == 'vc' else cycle_seconds, 'cycle/block duration', 0)
@@ -84,6 +91,7 @@ def create_delays(base, vc, vd, ncyc, source='auto', block=.01, constant=.01,
         if any(not count.is_integer() for count in counts):
             raise ValueError('Cycle counts must be integers')
         delays = [finite_number(offset + count * step, 'converted delay', 0) for count in counts]
+    print(f'Delay source: {kind}: {path}')
     Path('delaylist').write_text(''.join(f'{v:.17g}\n' for v in delays))
     Path('relax_header.txt').write_text(f'{len(delays)} ' + ' '.join(f'{v:.17g}' for v in delays) + '\n')
     return delays
@@ -1854,7 +1862,8 @@ def main(argv=None):
     p = commands.add_parser('delays')
     p.add_argument('--base', required=True)
     p.add_argument('--vc', default='vclist'); p.add_argument('--vd', default='vdlist')
-    p.add_argument('--ncyc', default='ncyc_list'); p.add_argument('--source', choices=('auto', 'vc', 'vd', 'ncyc'), default='auto')
+    p.add_argument('--ncyc', default='ncyc_list'); p.add_argument('--vp', default='vplist')
+    p.add_argument('--source', choices=('auto', 'vc', 'vd', 'vp', 'ncyc'), default='auto')
     p.add_argument('--block', default='.01'); p.add_argument('--constant', default='.01')
     p.add_argument('--cycle-seconds', default=''); p.add_argument('--cycle-constant', default='0')
     p = commands.add_parser('check-fid'); p.add_argument('path'); p.add_argument('delays')
@@ -1880,7 +1889,7 @@ def main(argv=None):
     try:
         if args.command == 'delays':
             create_delays(args.base, args.vc, args.vd, args.ncyc, args.source, args.block,
-                          args.constant, args.cycle_seconds, args.cycle_constant)
+                          args.constant, args.cycle_seconds, args.cycle_constant, args.vp)
         elif args.command == 'check-fid':
             check_fid(args.path, args.delays)
         elif args.command == 'check-conversion':
