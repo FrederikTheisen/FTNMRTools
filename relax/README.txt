@@ -214,3 +214,12 @@ and saturated planes in hetnoe_processed/, including an explicit POLY baseline
 correction along 15N before the final transpose, then correction along H.
 Both planes share the same editable phases/windows/baseline orders.
 See hetnoe_proc.txt for acquisition checks, plane roles, noise and analysis.
+
+Condition overview tables
+-------------------------
+
+condition_overview.py combines current saved numbers into one overview.tsv per
+reviewed condition, with one residue row and adjacent acquisition value/error/
+quality columns. It can also refresh pulse-program metadata and PDFs without
+processing, extraction or fitting. See condition_overview.txt for the catalog,
+QC decisions, pending-condition rules, six header rows and delivery index.

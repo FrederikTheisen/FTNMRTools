@@ -1,0 +1,195 @@
+"""Saved-result overviews, metadata-only refresh and rollback tests."""
+import argparse
+import copy
+import csv
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest import mock
+import zipfile
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import condition_overview as co
+import relax_tools as rt
+
+
+def decay_bundle():
+    peaks=[dict(peak_id='FT000001-H',assignment='?-A10N-H',residue=10,coordinates=['120','8'],overlap=False,duplicate_assignment=False)]
+    times=[0.,.1,.2,.4]
+    import math
+    y=[100*math.exp(-2*t) for t in times]
+    return dict(peaks=peaks,extracted={'FT000001-H':y},fit_text='FT000001-H 2 0.1 100 3 0 5\n',times=times,noises=[1.]*4)
+
+
+class OverviewTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.project=self.root/'project';self.project.mkdir()
+        self.data=self.root/'data';self.data.mkdir()
+        self.catalog=self.root/'catalog.csv'
+    def catalog_rows(self, rows):
+        fields=list(dict.fromkeys(k for r in rows for k in r))
+        with self.catalog.open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(rows)
+    def fixture(self,mode='r1',name='collection/3',date='2025-01-01',salt=50,temp=25,condition_extra=None):
+        folder=self.project/'ANP32aIDR'/f'{temp}C'/f'{mode}_{salt}mM_600MHz'/'run'/name;folder.mkdir(parents=True)
+        acq=self.data/name;acq.mkdir(parents=True,exist_ok=True);(acq/'acqus').write_text('##$PULPROG= <actual_sequence>\n')
+        prefix='sample';numbers=folder/'sample_numbers.csv';archive=folder/'sample_support.zip'
+        if mode=='noe':
+            fields=['residue','hetNOE','hetNOE_sd','I_ref','I_NOE','I_ref_sd','I_NOE_sd','ref_overlap','NOE_overlap','review_flags','comparison_eligible']
+            with numbers.open('w',newline='') as f:
+                w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerow(dict(zip(fields,[10,-.25,.02,100,-25,1,2,False,True,'overlap',False])))
+            (folder/'sample_intensity.pdf').write_bytes(b'old PDF')
+            provenance={'definition':'signed ratio','analysis_driver_sha256':'original-fit-code','reference_metadata':{'noise_sd':1}}
+            (folder/'provenance.json').write_text(json.dumps(provenance))
+            with zipfile.ZipFile(archive,'w') as z:
+                z.writestr('inputs/original.list',b'assigned peaks unchanged')
+                z.writestr('provenance.json',json.dumps(provenance))
+        else:
+            b=decay_bundle();c=rt.report_context(mode,'sample','sample_T1.list_intensity.pdf',name,peak_list='sample_T1.list')
+            names=rt.prepare_reports(folder,**b,mode=mode,prefix='sample',pdf_name=c['pdf_name'],run_tag=name,context=c)
+            (folder/c['pdf_name']).write_bytes(b'old PDF')
+            with zipfile.ZipFile(archive,'w') as z:
+                for file in names:
+                    if file!=numbers.name:z.write(folder/file,file)
+                z.writestr('rlx_dfit.inp',b'native input unchanged');z.writestr('rlx_dfit.out',b'native fit unchanged')
+                z.writestr('rlx_dfit_noise.txt',b'native noise unchanged')
+                z.writestr('data_xtr.out',b'native measurements unchanged')
+        spec=dict(relative_path=name)
+        job=dict(spec=spec,frozen_sha256='original-fitter-code',driver_sha256='original-driver',output_hashes={str(numbers):'old'})
+        (folder/'job.json').write_text(json.dumps(job))
+        c={'nominal_temperature_C':temp};c.update(condition_extra or {})
+        entry=dict(relative_path=name,protein='ANP32A',construct='IDR',experiment_type=mode,NaCl_mM=str(salt),temperature_C=str(temp),temperature_basis='reviewed nominal',field_MHz='600',conditions=json.dumps(c),status='analysed',output_directory=str(folder),investigator_exclusion='',acquisition_date=date)
+        return entry
+    def records(self,*entries,**kw):
+        self.catalog_rows(entries);return co.discover(self.catalog,self.project,self.data,**kw)
+    def fake_render(self,cmd,cwd,stdout=None):
+        self.assertEqual(cmd[0],'gnuplot','No processing/extraction/fitting executable may run')
+        script=(Path(cwd)/'plot.gnu').read_text();import re
+        name=re.search(r'set output "([^"]+)"',script)[1]
+        self.assertIn('actual_sequence',script)
+        (Path(cwd)/name).write_bytes(b'%PDF new')
+    def test_numbers_metadata_quoting_and_exact_byte_preservation(self):
+        data=b'"residue","warnings"\r\n10,"a, quoted\n# warning: embedded"\r\n# source_folder: collection\r\n'
+        fields,rows,meta=co.read_numbers_bytes(data)
+        self.assertEqual(rows[0]['warnings'],'a, quoted\n# warning: embedded')
+        new=co.add_pulse_footer(data,'sequence');self.assertTrue(new.startswith(data))
+        self.assertEqual(co.read_numbers_bytes(new)[:2],(fields,rows))
+        self.assertEqual(co.add_pulse_footer(new,'sequence'),new)
+        with self.assertRaises(ValueError):co.add_pulse_footer(new,'other')
+    def test_condition_grouping_construct_additives_and_provisional_temperature(self):
+        a=self.fixture();b=copy.deepcopy(a);b['NaCl_mM']='500'
+        self.assertNotEqual(co.confirmed_condition(a)[0],co.confirmed_condition(b)[0])
+        b=copy.deepcopy(a);b['construct']='FL';self.assertNotEqual(co.confirmed_condition(a)[0],co.confirmed_condition(b)[0])
+        b=copy.deepcopy(a);b['conditions']=json.dumps({'nominal_temperature_C':25,'additives':'30bpDNA'})
+        self.assertNotEqual(co.confirmed_condition(a)[0],co.confirmed_condition(b)[0])
+        a['temperature_basis']='provisional controller group';self.assertIsNone(co.confirmed_condition(a)[0])
+        a['temperature_basis']='reviewed';a['NaCl_mM']='unknown';self.assertIsNone(co.confirmed_condition(a)[0])
+    def test_groups_across_proteins_fields_observables_and_six_header_values(self):
+        original=self.fixture();base_key=co.confirmed_condition(original)[0]
+        for key,value in [('protein','SeV Ntail'),('field_MHz','700'),('experiment_type','noe'),('temperature_C','5')]:
+            changed=dict(original);changed[key]=value
+            self.assertNotEqual(base_key,co.confirmed_condition(changed)[0])
+        changed=dict(original,protein='heTDR1',construct='heTDR1')
+        row=self.records(changed)[0]
+        path=self.root/'hetdr-overview.tsv';co.write_overview(path,[row],[],self.project)
+        text=path.read_text();self.assertIn('HeTDR1',text);self.assertIn('actual_sequence',text)
+        row['mode']='r1rho';row['protocol']={'spinlock_nominal_Hz':'1500','spinlock_offset_from_carrier_Hz':'0'}
+        info=co.header_cells(row,self.project)
+        self.assertIn('spinlock_Hz=1500',info[1]);self.assertIn('offset_Hz=0',info[1])
+
+    def test_duplicate_catalog_and_archive_paths_rejected(self):
+        a=self.fixture()
+        with self.assertRaisesRegex(ValueError,'Duplicate current acquisition'):self.records(a,a)
+        a['output_directory']=str(self.project/'workers')
+        with self.assertRaisesRegex(ValueError,'archived/diagnostic'):self.records(a)
+        with self.assertRaisesRegex(ValueError,'protected'):co.safe_source('211@950/1')
+    def test_qc_keeps_review_unassessed_and_excludes_only_reviewed_decisions(self):
+        entries=[self.fixture(name=f'collection/{i}') for i in (3,4,5)]
+        path=self.root/'fid.csv'
+        with path.open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=['relative_path','FID_screen_status','notes']);w.writeheader();w.writerows([
+                dict(relative_path='collection/3',FID_screen_status='major_signature_or_logged_event',notes='review only'),
+                dict(relative_path='collection/4',FID_screen_status='startup_pattern_only',notes='startup review')])
+        decisions=self.root/'decisions.json';decisions.write_text(json.dumps({'known_strong_growth_experiments':['collection/4']}))
+        records=self.records(*entries,fid_inventory=path,decisions=decisions)
+        self.assertEqual([r['qc'][0] for r in records],['review','review','not_assessed'])
+        self.assertFalse(records[0]['exclusion']);self.assertTrue(records[1]['exclusion'])
+    def test_cells_missing_duplicates_overlap_invalid_and_negative_noe(self):
+        p=dict(residue='10',rate_s=2,**{'rate_s-1':'2','rate_error_s-1':'.1','reduced_chi2_input':'1.2','overlap':'True','valid_fit':'True'})
+        self.assertEqual(co.peak_cells([p],'r1')[:4],['2','.1','True','1.2'])
+        self.assertEqual(co.peak_cells([],'r1'),['','','','','missing'])
+        self.assertEqual(co.peak_cells([p,p],'r1')[-1],'multiple_peaks')
+        p['duplicate_assignment']='True';self.assertEqual(co.peak_cells([p],'r1')[0],'')
+        p.pop('duplicate_assignment');p['valid_fit']='False';self.assertEqual(co.peak_cells([p],'r1')[0],'')
+        self.assertIn('invalid_fit',co.peak_cells([p],'r1')[-1])
+        self.assertEqual(co.peak_cells([{'hetNOE':'-.25','hetNOE_sd':'.02'}],'noe')[:2],['-.25','.02'])
+    def test_overview_has_six_headers_and_sorted_union_with_source_paths(self):
+        a,b=self.fixture(name='collection/3'),self.fixture(name='collection/4',date='2024-12-01')
+        records=self.records(a,b);records[0]['rows'].append(dict(records[0]['rows'][0],residue='9'))
+        dest=self.root/'overview.tsv';co.write_overview(dest,records,[],self.project)
+        with dest.open() as f:rows=list(csv.reader(f,delimiter='\t'))
+        self.assertEqual([r[0] for r in rows[2:8]],['source','pulse / protocol','short-delay exclusion','noise SD','acquisition QC','fit assessment'])
+        self.assertIn('collection/4',rows[2][1]);self.assertEqual(rows[8][0],'residue')
+        self.assertEqual([r[0] for r in rows[9:11]],['9','10'])
+        self.assertEqual(len(rows[8]),11);self.assertIn('not_assessed',rows[6][1])
+    def test_decay_refresh_preserves_numbers_native_fits_original_provenance_and_backups(self):
+        row=self.records(self.fixture())[0];old=row['numbers'].read_bytes()
+        support=row['directory']/'sample_support.zip'
+        with zipfile.ZipFile(support) as z:native=co.native_members(z)
+        with mock.patch.object(rt,'checked_run',side_effect=self.fake_render):self.assertEqual(co.refresh(row),'refreshed')
+        self.assertEqual(co.read_numbers_bytes(row['numbers'].read_bytes())[:2],co.read_numbers_bytes(old)[:2])
+        self.assertEqual(row['metadata']['pulse_program'],'actual_sequence')
+        with zipfile.ZipFile(support) as z:
+            self.assertEqual(co.native_members(z),native)
+            self.assertEqual(json.loads(z.read('report_refresh.json'))['pulse_program'],'actual_sequence')
+        job=co.load_json(row['directory']/'job.json');self.assertEqual(job['frozen_sha256'],'original-fitter-code')
+        self.assertFalse(job['report_refresh']['refitted'])
+        self.assertTrue(list((row['directory']/'.report-backups').rglob('sample_numbers.csv')))
+        again=self.records(self.fixture_for_existing(row))[0]
+        with mock.patch.object(rt,'checked_run') as cmd:self.assertEqual(co.refresh(again),'already_current');cmd.assert_not_called()
+    def fixture_for_existing(self,row):
+        return {k:v for k,v in row.items() if k in ['relative_path','protein','construct','experiment_type','NaCl_mM','temperature_C','temperature_basis','field_MHz','conditions','status','output_directory','investigator_exclusion','acquisition_date']}
+    def test_custom_noe_refresh_preserves_numeric_bytes_inputs_and_fit_origin(self):
+        row=self.records(self.fixture(mode='noe'))[0];old=row['numbers'].read_bytes()
+        with mock.patch.object(rt,'checked_run',side_effect=self.fake_render):co.refresh(row)
+        self.assertTrue(row['numbers'].read_bytes().startswith(old))
+        with zipfile.ZipFile(row['directory']/'sample_support.zip') as z:
+            self.assertEqual(z.read('inputs/original.list'),b'assigned peaks unchanged')
+            self.assertEqual(json.loads(z.read('provenance.json'))['analysis_driver_sha256'],'original-fit-code')
+        self.assertIn('pulse_program',co.load_json(row['directory']/'provenance.json'))
+    def test_render_failure_leaves_every_existing_report_unchanged(self):
+        row=self.records(self.fixture())[0];before={p.name:p.read_bytes() for p in row['directory'].iterdir() if p.is_file()}
+        with mock.patch.object(rt,'checked_run',side_effect=subprocess.CalledProcessError(9,'gnuplot')):
+            with self.assertRaises(subprocess.CalledProcessError):co.refresh(row)
+        for name,data in before.items():self.assertEqual((row['directory']/name).read_bytes(),data)
+    def test_publication_failure_rolls_back_complete_acquisition(self):
+        row=self.records(self.fixture())[0];folder=row['directory']
+        before={p.name:p.read_bytes() for p in folder.iterdir() if p.is_file()}
+        rename=Path.rename
+        def broken(path,target):
+            if path.name=='job.json' and path.parent!=folder and path.parent.name!='.previous' and Path(target)==folder/'job.json':raise OSError('simulated publication failure')
+            return rename(path,target)
+        with mock.patch.object(rt,'checked_run',side_effect=self.fake_render),mock.patch.object(Path,'rename',new=broken):
+            with self.assertRaises(OSError):co.refresh(row)
+        for name,data in before.items():self.assertEqual((folder/name).read_bytes(),data)
+    def test_source_acquisition_change_aborts_before_publication(self):
+        row=self.records(self.fixture())[0];before=row['numbers'].read_bytes()
+        def changed(cmd,cwd,stdout=None):
+            self.fake_render(cmd,cwd,stdout);row['acqus_path'].write_text('##$PULPROG= <other>\n')
+        with mock.patch.object(rt,'checked_run',side_effect=changed),self.assertRaisesRegex(ValueError,'input changed'):co.refresh(row)
+        self.assertEqual(row['numbers'].read_bytes(),before)
+    def test_dry_run_has_no_writes_and_full_run_publishes_index(self):
+        a=self.fixture();self.catalog_rows([a]);args=argparse.Namespace(project_root=str(self.project),data_root=str(self.data),catalog=str(self.catalog),fid_inventory=None,r1_qc=None,qc_decisions=None,dry_run=True,refresh_reports=False)
+        with mock.patch.object(co,'refresh') as refresh:counts=co.run(args);refresh.assert_not_called()
+        self.assertEqual(counts['included'],1);self.assertFalse((self.project/'.relax.lock').exists())
+        args.dry_run=False;co.run(args)
+        path=co.destination_for(self.records(a),self.project)
+        self.assertTrue(path.is_file());self.assertTrue((self.project/'condition-overviews.tsv').is_file())
+
+
+if __name__=='__main__':unittest.main()

@@ -1,0 +1,132 @@
+CONDITION OVERVIEWS AND SAVED-REPORT REFRESH
+
+Keep condition_overview.py beside relax_tools.py. Python 3.8+ and gnuplot
+(pdfcairo) are required. No NMRPipe, spectrum extraction or fitting executable
+is invoked. The command does not discover/pick peaks, repair FIDs or average
+acquisitions. Original experiment scripts, raw/processed spectra and CCPN
+projects are never changed. The protected 211@950 subtree is rejected.
+
+USAGE
+
+    python3 /path/to/FTNMRTools/relax/condition_overview.py \
+        --project-root /path/to/Electrostatics \
+        --data-root /path/to/nmrdata \
+        --catalog /path/to/master_acquisitions.csv \
+        --fid-inventory /path/to/experiment_inventory.csv \
+        --r1-qc /path/to/dataset_status.csv \
+        --qc-decisions /path/to/reviewed_findings.json \
+        --refresh-reports
+
+Use --dry-run first for a read-only disposition summary. Omit --refresh-reports
+to regenerate only the condition overviews from existing numbers files. The
+three QC arguments are optional; unavailable acquisition QC is not_assessed.
+
+The catalog is the reviewed master acquisition CSV already used by the
+Electrostatics delivery. Only analysed R1, R1rho and HetNOE entries are selected.
+It explicitly identifies each current report directory, avoiding directory-wide
+searches that could count archived/pilot/diagnostic reruns as extra acquisitions.
+Each selected directory must have exactly one *_numbers.csv. Duplicate source
+acquisitions, conflicting source/sequence metadata and unsafe destinations fail
+before publication. CPMG and other incompatible observables are not included.
+
+GROUPING AND QUALITY
+
+Group keys are protein/construct, observable, NaCl concentration, nominal
+temperature, field, and any explicitly recorded additive condition. Historical
+folder labels and controller TE are never used to establish a condition. The
+master's per-experiment nominal temperature is used rather than a collection's
+multi-temperature annotation. Explicitly provisional temperature assignments,
+unconfirmed salt/temperature/construct or pending condition review are held out
+of confirmed groups and listed in the delivery index.
+
+The reviewed findings JSON's known_strong_growth_experiments list and explicit
+exclusions, plus investigator exclude_from_primary_analysis=true decisions,
+exclude acquisitions. Automatic metrics alone do not create new exclusions.
+Minor/unresolved FID flags are review; missing QC is not_assessed. A saved
+screen without major flags is labelled screened_no_major_flags, not clean.
+Retained-range R1 screening is used so omitted raw tails are not confused with
+artefacts in the analysed range. Review flags do not imply a confirmed cause.
+
+Sequence families are displayed rather than silently pooled or averaged.
+R1rho spin-lock strength and offset are included where already documented;
+otherwise strength is unknown. A failed exponential goodness-of-fit test is a
+residue-level flag, not automatic evidence of acquisition corruption.
+
+TSV LAYOUT
+
+Each condition gets overview.tsv at its existing condition-directory level.
+Two short comments identify the condition and units, followed by SIX header rows:
+    source: collection/expno, acquisition date, project-relative numbers path
+    pulse / protocol: actual PULPROG; available R1rho spin-lock settings
+    short-delay exclusion: saved fit basis, excluded delay and reason
+    noise SD: complete per-plane vector in one cell (REF/SAT SDs for HetNOE)
+    acquisition QC: screened/review/not_assessed with a brief explanation
+    fit assessment: valid/flagged peak counts and saved dataset conclusion
+
+The column header then introduces one residue column and a block per acquisition:
+    acq01.value, acq01.error, acq01.overlap, acq01.reduced_chi2, acq01.flags
+HetNOE omits reduced_chi2 and uses signed ratios. Rates/errors use s^-1.
+Acquisitions are ordered by date then collection/expno; residues are the sorted
+union across acquisitions. Every displayed numerical cell comes directly from
+the saved numbers file, retaining its full numerical precision.
+
+Missing measurements are blank with missing. Invalid fits have blank value/error
+and invalid_fit. Overlap values remain visible with a flag. Multiple peak rows
+for one residue, or a known duplicate assignment with an unmatched companion,
+have blank value/error and multiple_peaks; no largest-peak choice or proximity
+matching occurs. The detailed numbers-file reference retains every peak.
+Flags include existing fit/placement warnings, rescaling and original-noise
+lack-of-fit. No new fit or uncertainty estimate is calculated.
+Excluded acquisitions with known matching conditions are listed below the table.
+The project-root condition-overviews.tsv is the delivery index: one entry per
+selected acquisition, including excluded and condition-review dispositions and
+links to the original numbers file and applicable overview.
+
+REFRESH CONTRACT
+
+--refresh-reports reads saved portable analyses from decay support ZIPs. It
+validates them with relax_tools.py, reproduces the existing numerical cells,
+and renders the PDF with the pulse sequence in its summary. Existing custom
+HetNOE reports are plotted from their saved numbers; ratios/errors are not
+recalculated and original list pairing/positions are not revisited.
+
+Numbers tables keep their original bytes; only a pulse_program footer is added
+(or an unknown pulse footer is filled). Noise, intensities, rates, errors,
+overlap flags, fit decisions and native fitter/extraction records are preserved.
+All existing ZIP members are retained; derived report members receive the pulse
+metadata, and report_refresh.json identifies this as a metadata-only refresh.
+Original fitting-code provenance stays unchanged. Existing job output-checksum
+fields are updated solely to preserve the frozen driver's resume contract; no
+hashes are added to numbers files, overviews or new refresh metadata.
+
+Each acquisition's numbers file, PDF, support archive and existing job/provenance
+records are locked, staged and replaced as one transaction. Backups go under
+.report-backups/condition-overview-<timestamp> before replacement; publication
+failure rolls back the complete set. Inputs are compared byte-for-byte before
+publication. A failure later in the batch retains earlier successful refreshes;
+a rerun skips already refreshed reports and completes the remaining work.
+Overviews and their index are backed up on replacement. Per-acquisition output
+names and the existing three user-facing analysis outputs are preserved.
+
+TESTING
+
+    python3 -m unittest discover -s relax/tests -p test_condition_overview.py -v
+
+Tests use temporary synthetic saved results and stub rendering. They cover
+cross-condition/protein grouping, provisional metadata, QC dispositions,
+multiple peaks, missing/invalid/overlapping values, signed NOEs, full precision,
+metadata quoting, original native bytes and fitting provenance, input changes,
+render failures, rollback, idempotence, dry runs and the TSV/index layout.
+
+VALIDATED PROJECT DELIVERY (2026-10-26)
+
+The Electrostatics refresh covered 114 current reports. The delivery contains
+44 condition overviews with 69 acquisitions, five reviewed late-FID-growth
+exclusions, and 40 pending-condition entries (36 heTDR1 and four ANP32A).
+The TSVs have 4,522 residue rows and 7,041 displayed value/error pairs; 35
+ambiguous cells were left blank. Independent before/after checks verified
+identical numerical-table bytes, original native fit/extraction/input bytes,
+original fitting provenance and all 114 saved acqus files. All 114 refreshed
+PDFs contain their pulse-program name. The command ran with processing,
+extraction and fitting executables unavailable in PATH. Representative decay
+and NOE PDF pages and the grouped TSVs were inspected.
