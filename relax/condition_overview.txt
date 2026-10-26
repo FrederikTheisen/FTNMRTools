@@ -55,32 +55,86 @@ residue-level flag, not automatic evidence of acquisition corruption.
 TSV LAYOUT
 
 Each condition gets overview.tsv at its existing condition-directory level.
-Two short comments identify the condition and units, followed by SIX header rows:
-    source: collection/expno, acquisition date, project-relative numbers path
+It is an AUTOMATICALLY GENERATED OUTPUT: do not edit its values or insert review
+comments. Regeneration replaces it, retaining a backup. A notice at the top
+states this; persistent comments belong in condition-reviews.tsv (see below).
+
+Condition and units comments precede SIX compact header rows:
+    source: exactly one collection/expno per acquisition block
     pulse / protocol: actual PULPROG; available R1rho spin-lock settings
-    short-delay exclusion: saved fit basis, excluded delay and reason
-    noise SD: complete per-plane vector in one cell (REF/SAT SDs for HetNOE)
-    acquisition QC: screened/review/not_assessed with a brief explanation
+    delays used: "all delays used" or e.g. "1 ms delay omitted"
+    noise / median first-plane height: per-plane noise percentages and reference
+    acquisition QC: saved screen status and any user assessment/comment
     fit assessment: valid/flagged peak counts and saved dataset conclusion
 
 The column header then introduces one residue column and a block per acquisition:
-    acq01.value, acq01.error, acq01.overlap, acq01.reduced_chi2, acq01.flags
-HetNOE omits reduced_chi2 and uses signed ratios. Rates/errors use s^-1.
-Acquisitions are ordered by date then collection/expno; residues are the sorted
-union across acquisitions. Every displayed numerical cell comes directly from
-the saved numbers file, retaining its full numerical precision.
+    R1, error, overlap, reduced_chi2, flags
+Use R1rho or hetNOE for those observables. HetNOE omits reduced_chi2 and retains
+signed ratios. Parameter/error headings repeat without acq01 prefixes; identify
+blocks by position and the source row. These are intentionally spreadsheet-style
+multi-row headers, so a plain DictReader with duplicate names is unsuitable.
+Use csv.reader or construct column keys from source plus parameter heading.
+Detailed numbers-file paths and acquisition dates appear in footnotes instead
+of duplicating the source in the main header.
 
-Missing measurements are blank with missing. Invalid fits have blank value/error
-and invalid_fit. Overlap values remain visible with a flag. Multiple peak rows
-for one residue, or a known duplicate assignment with an unmatched companion,
-have blank value/error and multiple_peaks; no largest-peak choice or proximity
-matching occurs. The detailed numbers-file reference retains every peak.
-Flags include existing fit/placement warnings, rescaling and original-noise
-lack-of-fit. No new fit or uncertainty estimate is calculated.
+Acquisitions are ordered by date then collection/expno. Residue rows span every
+integer from the first observed residue to the last observed residue in that
+condition, including wholly unassigned positions. They do not begin at 1 or
+extend beyond the observed endpoints. Missing values stay blank with missing;
+invalid fits have blank value/error and invalid_fit. Overlap values remain
+visible. Multiple peak rows for one residue, or a known duplicate with an
+unmatched companion, have blank value/error and multiple_peaks. No peak is
+chosen, matched by proximity or averaged. Values/errors retain their exact
+saved numerical precision.
+
+NOISE AND ERROR LABELS
+
+Noise percentages are 100 x each plane's saved noise SD / median absolute
+first-plane peak height. The median uses unique, valid, non-overlapping peaks,
+excluding zeros and nonfinite heights; its value and peak count are printed.
+For HetNOE the first plane is the reference spectrum. For decays it is the first
+ACQUIRED plane, even if omitted from the fit; it is not necessarily the shortest
+delay. The percentages are an acquisition-level summary, not per-residue SNRs.
+Unnormalised noise and individual heights remain in the detailed numbers file.
+
+"all delays used" means the reported values come from the all-delay fit. It
+therefore omits redundant exclusion=none and selection-reason text. Excluded
+shortest delays are given directly in ms. No saved fit decision is changed.
+
+error_adjusted_by_fitter replaces the overview's opaque uncertainty_rescaled
+label. It means the reported parameter error was adjusted by the fitter using
+residual scatter relative to the input noise. The fitted value is unchanged.
+It does not cure poor model agreement or identify a mechanism. The original
+warning, exact fitter factor and original-noise diagnostics remain in the
+underlying reports; the overview does not perform or reverse any rescaling.
+Equivalent original_noise_lack_of_fit / lack_of_fit flags are shown once.
+
 Excluded acquisitions with known matching conditions are listed below the table.
-The project-root condition-overviews.tsv is the delivery index: one entry per
-selected acquisition, including excluded and condition-review dispositions and
-links to the original numbers file and applicable overview.
+The project-root condition-overviews.tsv is a generated delivery index including
+excluded/pending dispositions, source-file links and user comments. Do not edit
+that index for persistent assessments.
+
+PERSISTENT USER REVIEWS
+
+condition-reviews.tsv in the project root is EDITABLE INPUT and is never rewritten
+by regeneration. It is created once, only if absent, with the columns:
+    target    assessment    comment
+Initial targets are the current collection/expno identifiers; assessment/comment
+are blank. Free-text comments are preserved byte-for-byte in this input file.
+--user-reviews PATH selects a different input. New targets can be added manually;
+unknown/duplicate targets and invalid assessments raise an error without changing
+that file. Use a collection/expno target for an acquisition, or a project-relative
+condition directory (e.g. ANP32aIDR/25C/R1_500mM_600MHz) for a condition-wide note.
+
+Assessment is blank (comment only), usable, review or exclude. An acquisition
+assessment takes precedence over a condition-wide assessment; both comments are
+retained. Explicit usable acceptance overrides acquisition exclusions, while the
+automated QC evidence remains visible. review does not cancel an existing
+exclusion. Neither an assessment nor a free-text comment silently changes salt,
+temperature or other condition metadata; unresolved conditions stay pending until
+the reviewed condition catalog is updated. The script reads the review input
+without modifying it and propagates assessments/comments into the overview and
+index. Tests verify that comments survive repeated generation.
 
 REFRESH CONTRACT
 
@@ -115,6 +169,7 @@ TESTING
 Tests use temporary synthetic saved results and stub rendering. They cover
 cross-condition/protein grouping, provisional metadata, QC dispositions,
 multiple peaks, missing/invalid/overlapping values, signed NOEs, full precision,
+continuous residue ranges, relative-noise summaries, persistent user reviews,
 metadata quoting, original native bytes and fitting provenance, input changes,
 render failures, rollback, idempotence, dry runs and the TSV/index layout.
 
@@ -123,8 +178,9 @@ VALIDATED PROJECT DELIVERY (2026-10-26)
 The Electrostatics refresh covered 114 current reports. The delivery contains
 44 condition overviews with 69 acquisitions, five reviewed late-FID-growth
 exclusions, and 40 pending-condition entries (36 heTDR1 and four ANP32A).
-The TSVs have 4,522 residue rows and 7,041 displayed value/error pairs; 35
-ambiguous cells were left blank. Independent before/after checks verified
+The first delivery had 4,522 observed-residue rows and 7,041 displayed value/error
+pairs; 35 ambiguous cells were left blank. The revised layout also inserts rows
+for unassigned residue positions between the observed endpoints. Independent before/after checks verified
 identical numerical-table bytes, original native fit/extraction/input bytes,
 original fitting provenance and all 114 saved acqus files. All 114 refreshed
 PDFs contain their pulse-program name. The command ran with processing,

@@ -5,7 +5,7 @@ No spectrum processing, intensity extraction, peak matching or fitting occurs.
 See condition_overview.txt. Python standard library plus gnuplot for PDFs.
 """
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
 import io
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import zipfile
@@ -219,6 +220,66 @@ def discover(catalog, project, data_root, fid_inventory=None, r1_qc=None, decisi
     return sorted(result, key=lambda r: (r.get('acquisition_date', ''), r['relative_path']))
 
 
+def read_user_reviews(path, records, project):
+    """Read editable input; never rewrite it during overview generation."""
+    if not Path(path).is_file():
+        return
+    source_targets = {row['relative_path'] for row in records}
+    condition_targets = {str(Path(*row['directory'].relative_to(project).parts[:3])) for row in records}
+    reviews = {}
+    for review in read_tsv(path):
+        target = review['target'].strip()
+        if target not in source_targets | condition_targets:
+            raise ValueError('Unknown review target: '+target)
+        if target in reviews:
+            raise ValueError('Duplicate review target: '+target)
+        assessment = review['assessment'].strip().lower()
+        if assessment not in ('', 'usable', 'review', 'exclude'):
+            raise ValueError('Review assessment must be blank, usable, review or exclude: '+target)
+        reviews[target] = (assessment, review['comment'].strip())
+    for row in records:
+        condition_target = str(Path(*row['directory'].relative_to(project).parts[:3]))
+        applicable = [reviews[target] for target in (condition_target, row['relative_path']) if target in reviews]
+        assessment = next((a for a,c in reversed(applicable) if a), '')
+        comments = [c for a,c in applicable if c]
+        row['user_assessment'] = assessment
+        row['user_comment'] = ' | '.join(comments)
+        if assessment == 'exclude':
+            row['exclusion'] = 'user excluded'+(': '+row['user_comment'] if row['user_comment'] else '')
+        elif assessment == 'usable':
+            row['exclusion'] = ''  # Explicit user acceptance overrides acquisition exclusions, not condition metadata.
+        if assessment or comments:
+            automatic = row['qc'][0]+'; '+row['qc'][1]
+            row['qc'] = ('user_'+assessment if assessment else row['qc'][0],
+                         ('user: '+row['user_comment']+'; ' if comments else '')+'automated: '+automatic)
+
+
+def read_tsv(path):
+    with Path(path).open(newline='') as handle:
+        reader = csv.DictReader(handle, delimiter='\t')
+        if reader.fieldnames != ['target', 'assessment', 'comment']:
+            raise ValueError('Review TSV columns must be target, assessment, comment')
+        rows = list(reader)
+    if any(None in row or any(value is None for value in row.values()) for row in rows):
+        raise ValueError('Incomplete review TSV row')
+    return rows
+
+
+def initialise_reviews(path, records):
+    path = Path(path)
+    if path.exists():
+        return
+    # Exclusive creation: even a file created since inventory is never overwritten.
+    try:
+        with path.open('x', newline='') as handle:
+            writer = csv.writer(handle, delimiter='\t', lineterminator='\n')
+            writer.writerow(['target', 'assessment', 'comment'])
+            for row in records:
+                writer.writerow([row['relative_path'], '', ''])
+    except FileExistsError:
+        return
+
+
 def native_members(archive):
     """Bytes of saved native fitter records; reporting must never alter these."""
     return {n: archive.read(n) for n in archive.namelist()
@@ -345,7 +406,8 @@ def row_flags(peak):
     if peak.get('warnings'): flags.append('fitter_warning')
     if numeric(peak.get('p_holm')) is not None and float(peak['p_holm']) < .05: flags.append('lack_of_fit')
     if truth(peak.get('duplicate_assignment')): flags.append('duplicate_assignment')
-    return sorted(set(flags))
+    return sorted({'error_adjusted_by_fitter' if flag == 'uncertainty_rescaled' else
+                   'lack_of_fit' if flag == 'original_noise_lack_of_fit' else flag for flag in flags})
 
 
 def peak_cells(peaks, mode):
@@ -365,22 +427,64 @@ def peak_cells(peaks, mode):
     return cells+[';'.join(sorted(set(flags)))]
 
 
+def first_height(peak):
+    return numeric(peak.get('plane_01_intensity', peak.get('I_ref')))
+
+
+def relative_noise_header(row):
+    counts = Counter(int(p['residue']) for p in row['rows'])
+    heights = []
+    for peak in row['rows']:
+        height = first_height(peak)
+        overlap = any(truth(peak.get(k)) for k in ('overlap', 'ref_overlap', 'NOE_overlap'))
+        if (height is not None and height != 0 and not overlap and counts[int(peak['residue'])] == 1 and
+                not truth(peak.get('duplicate_assignment')) and truth(peak.get('valid_fit', True))):
+            heights.append(abs(height))
+    if not heights:
+        return 'unavailable: no usable first-plane peak heights'
+    reference = statistics.median(heights)
+    raw = row['metadata'].get('plane_noise_sd', '')
+    if raw:
+        noises = [numeric(value.strip()) for value in raw.split(',')]
+        if any(v is None or v < 0 for v in noises):
+            raise ValueError('Invalid saved noise vector')
+        percentages = ', '.join(format(100*v/reference, '.3g')+'%' for v in noises)
+    elif row['mode'] == 'noe':
+        parts = []
+        for label, key in [('ref', 'I_ref_sd'), ('sat', 'I_NOE_sd')]:
+            noises = sorted({numeric(p.get(key)) for p in row['rows'] if numeric(p.get(key)) is not None})
+            if not noises:
+                parts.append(label+'=unknown')
+            else:
+                value = format(100*noises[0]/reference, '.3g')+'%'
+                if len(noises) > 1: value += '..'+format(100*noises[-1]/reference, '.3g')+'%'
+                parts.append(label+'='+value)
+        percentages = ', '.join(parts)
+    else:
+        return 'unavailable: no saved noise SD'
+    return percentages+'; median |first-plane height|='+format(reference, '.6g')+f' (n={len(heights)})'
+
+
 def header_cells(row, project):
     meta, peaks, protocol = row['metadata'], row['rows'], row['protocol']
-    source = row['relative_path']+'; date='+str(row.get('acquisition_date') or 'unknown')+'; '+os.path.relpath(row['numbers'], project)
+    source = row['relative_path']
     pulse = row['pulse']
     if row['mode'] == 'r1rho':
         pulse += '; spinlock_Hz='+str(protocol.get('spinlock_nominal_Hz') or 'unknown')
         if protocol.get('spinlock_offset_from_carrier_Hz'):
             pulse += '; offset_Hz='+protocol['spinlock_offset_from_carrier_Hz']
-    selection = 'not applicable (ratio)' if row['mode'] == 'noe' else (
-        meta.get('fit_basis', 'unknown')+'; excluded_shortest_s='+meta.get('excluded_shortest_delay_s', 'none')+
-        '; '+meta.get('selection_reason', 'no saved exclusion decision'))
-    noise = meta.get('plane_noise_sd', '')
-    if not noise and row['mode'] == 'noe':
-        noise = '; '.join(role+'='+', '.join(sorted({p.get(key, 'unknown') for p in peaks}))
-                          for role, key in [('ref_SD', 'I_ref_sd'), ('sat_SD', 'I_NOE_sd')])
-    if not noise: noise = 'unknown'
+    basis = meta.get('fit_basis', 'unknown')
+    if row['mode'] == 'noe':
+        selection = 'not applicable (ratio)'
+    elif basis == 'all_points':
+        selection = 'all delays used'
+    elif basis == 'exclude_shortest':
+        delay = numeric(meta.get('excluded_shortest_delay_s'))
+        label = format(delay*1000, '.6g')+' ms' if delay is not None else 'shortest'
+        selection = label+' delay omitted'
+    else:
+        selection = 'fit selection unknown'
+    noise = relative_noise_header(row)
     qc = row['qc'][0]+'; '+row['qc'][1]
     flagged = sum(bool(row_flags(p)) or any(truth(p.get(k)) for k in ('overlap','ref_overlap','NOE_overlap')) for p in peaks)
     valid = sum('invalid_fit' not in peak_cells([p],row['mode'])[-1] for p in peaks)
@@ -393,7 +497,7 @@ def header_cells(row, project):
     return [source, pulse, selection, noise, qc, fit]
 
 
-def write_overview(path, group, excluded, project):
+def write_overview(path, group, excluded, project, review_path=None):
     condition = group[0]['condition']; protein, construct, mode, salt, temp, field, additives = condition
     group = sorted(group, key=lambda r: (r.get('acquisition_date', ''),r['relative_path']))
     per = 4 if mode == 'noe' else 5
@@ -405,16 +509,25 @@ def write_overview(path, group, excluded, project):
         maps.append(residues)
     with Path(path).open('w', newline='') as handle:
         writer = csv.writer(handle, delimiter='\t', lineterminator='\n')
+        writer.writerow(['# generated', 'Automatically generated by condition_overview.py. DO NOT EDIT; use the persistent review TSV for assessments.'])
         writer.writerow(['# condition',f'{protein}; construct={construct}; {mode}; NaCl={salt}mM; nominal_T={temp}C; field={field}MHz'+(' ; '+additives if additives else '')])
         writer.writerow(['# units', 'ratio' if mode == 'noe' else 's^-1'])
         headers = [header_cells(row, project) for row in group]
-        for index,label in enumerate(['source', 'pulse / protocol', 'short-delay exclusion', 'noise SD', 'acquisition QC', 'fit assessment']):
+        for index,label in enumerate(['source', 'pulse / protocol', 'delays used', 'noise / median first-plane height', 'acquisition QC', 'fit assessment']):
             writer.writerow([label]+[cell for info in headers for cell in [info[index]]+['']*(per-1)])
-        labels = ['value', 'error', 'overlap']+([] if mode == 'noe' else ['reduced_chi2'])+['flags']
-        writer.writerow(['residue']+[f'acq{i:02d}.{label}' for i in range(1,len(group)+1) for label in labels])
-        for residue in sorted(set().union(*(set(m) for m in maps))):
+        parameter = {'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[mode]
+        labels = [parameter, 'error', 'overlap']+([] if mode == 'noe' else ['reduced_chi2'])+['flags']
+        writer.writerow(['residue']+labels*len(group))
+        observed = set().union(*(set(m) for m in maps))
+        for residue in range(min(observed), max(observed)+1):
             writer.writerow([residue]+[cell for m in maps for cell in peak_cells(m.get(residue, []), mode)])
         writer.writerow(['# flags','missing = no saved peak; multiple_peaks = ambiguous residue; blank value/error for invalid fits; review/not_assessed QC is not a clean-data certificate'])
+        writer.writerow(['# error', 'Reported fitter SD. error_adjusted_by_fitter means the error was adjusted using residual scatter; the fitted value is unchanged. This does not fix a poor fit.'])
+        writer.writerow(['# noise', 'Percentages = 100 x plane noise SD / median absolute first-plane height, using unique valid non-overlapping peaks; first acquisition plane even if omitted from fitting.'])
+        for row in group:
+            writer.writerow(['# numbers_file', row['relative_path'], os.path.relpath(row['numbers'], project), 'date='+str(row.get('acquisition_date') or 'unknown')])
+        if review_path:
+            writer.writerow(['# user_reviews', os.path.relpath(review_path, project), 'Editable input; never overwritten by this generator.'])
         for row in excluded:
             writer.writerow(['# excluded',row['relative_path'],row['exclusion']])
 
@@ -435,6 +548,8 @@ def destination_for(group, project):
 def run(args):
     project = Path(args.project_root).resolve()
     records = discover(args.catalog,project,args.data_root,args.fid_inventory,args.r1_qc,args.qc_decisions)
+    review_path = Path(getattr(args, 'user_reviews', None) or project/'condition-reviews.tsv').resolve()
+    read_user_reviews(review_path, records, project)
     groups, excluded = defaultdict(list), defaultdict(list)
     for row in records:
         if row['exclusion']:
@@ -453,13 +568,17 @@ def run(args):
             print(row['relative_path'], 'excluded: '+row['exclusion'] if row['exclusion'] else 'condition_review: '+row['pending'] if row['pending'] else 'included',flush=True)
         return counts
     with rt.run_directory(project,'overviews') as stage:
+        initialise_reviews(review_path, records)
+        review_before = review_path.read_bytes()
         for row in records:
-            status = refresh(row) if args.refresh_reports else 'not_requested'
+            status = refresh(row) if args.refresh_reports else (
+                'already_current' if row['metadata'].get('pulse_program') == row['pulse'] and
+                row['job'].get('report_refresh', {}).get('pulse_program') == row['pulse'] else 'not_requested')
             row['refresh_status'] = status
             print(row['relative_path']+': '+status,flush=True)
         for index,(key,group) in enumerate(sorted(groups.items()),1):
             path = destinations[key]; name = f'overview_{index}.tsv'
-            write_overview(stage/name, group, excluded[key], project)
+            write_overview(stage/name, group, excluded[key], project, review_path)
             with rt.run_directory(path.parent,'overview-publish') as local:
                 shutil.copyfile(stage/name,local/'overview.tsv')
                 if path.is_file():
@@ -468,17 +587,19 @@ def run(args):
                 rt.publish(local,path.parent,['overview.tsv'])
         index_name = 'condition-overviews.tsv'
         with (stage/index_name).open('w',newline='') as handle:
-            fields=['acquisition','protein','observable','disposition','reason','acquisition_QC','pulse_program','overview','numbers_file','report_refresh']
+            fields=['acquisition','protein','observable','disposition','reason','acquisition_QC','pulse_program','overview','numbers_file','report_refresh','user_assessment','user_comment']
             writer=csv.DictWriter(handle,fieldnames=fields,delimiter='\t',lineterminator='\n');writer.writeheader()
             for row in records:
                 writer.writerow(dict(acquisition=row['relative_path'],protein=row['protein'],observable=row['mode'],
                     disposition='excluded' if row['exclusion'] else 'condition_review' if row['pending'] else 'included',
                     reason=row['exclusion'] or row['pending'],acquisition_QC=row['qc'][0],pulse_program=row['pulse'],
                     overview=os.path.relpath(destinations[row['condition']],project) if row['condition'] in destinations else '',
-                    numbers_file=os.path.relpath(row['numbers'],project),report_refresh=row['refresh_status']))
+                    numbers_file=os.path.relpath(row['numbers'],project),report_refresh=row['refresh_status'],user_assessment=row.get('user_assessment',''),user_comment=row.get('user_comment','')))
         if (project/index_name).is_file():
             backup=project/'.report-backups'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
             backup.mkdir(parents=True);shutil.copy2(project/index_name,backup/index_name)
+        if review_path.read_bytes() != review_before:
+            raise ValueError('User review input changed while generating; rerun to incorporate changes')
         rt.publish(stage,project,[index_name])
     print('Delivery index: '+str(project/'condition-overviews.tsv'),flush=True)
     return counts
@@ -492,6 +613,7 @@ def main(argv=None):
     parser.add_argument('--fid-inventory',help='Reviewed R1rho FID inventory CSV')
     parser.add_argument('--r1-qc',help='Saved retained-range R1 FID screening CSV')
     parser.add_argument('--qc-decisions',help='Reviewed findings JSON with known_strong_growth_experiments / explicit exclusions')
+    parser.add_argument('--user-reviews',help='Editable target/assessment/comment TSV; defaults to PROJECT/condition-reviews.tsv; never overwritten')
     parser.add_argument('--refresh-reports',action='store_true')
     parser.add_argument('--dry-run',action='store_true',help='Read-only inventory and disposition summary')
     args=parser.parse_args(argv)

@@ -133,10 +133,10 @@ class OverviewTests(unittest.TestCase):
         records=self.records(a,b);records[0]['rows'].append(dict(records[0]['rows'][0],residue='9'))
         dest=self.root/'overview.tsv';co.write_overview(dest,records,[],self.project)
         with dest.open() as f:rows=list(csv.reader(f,delimiter='\t'))
-        self.assertEqual([r[0] for r in rows[2:8]],['source','pulse / protocol','short-delay exclusion','noise SD','acquisition QC','fit assessment'])
-        self.assertIn('collection/4',rows[2][1]);self.assertEqual(rows[8][0],'residue')
-        self.assertEqual([r[0] for r in rows[9:11]],['9','10'])
-        self.assertEqual(len(rows[8]),11);self.assertIn('not_assessed',rows[6][1])
+        self.assertEqual([r[0] for r in rows[3:9]],['source','pulse / protocol','delays used','noise / median first-plane height','acquisition QC','fit assessment'])
+        self.assertEqual('collection/4',rows[3][1]);self.assertEqual(rows[9][0],'residue')
+        self.assertEqual([r[0] for r in rows[10:12]],['9','10'])
+        self.assertEqual(len(rows[9]),11);self.assertIn('not_assessed',rows[7][1]);self.assertEqual(rows[9][1:3],['R1','error'])
     def test_decay_refresh_preserves_numbers_native_fits_original_provenance_and_backups(self):
         row=self.records(self.fixture())[0];old=row['numbers'].read_bytes()
         support=row['directory']/'sample_support.zip'
@@ -183,6 +183,83 @@ class OverviewTests(unittest.TestCase):
             self.fake_render(cmd,cwd,stdout);row['acqus_path'].write_text('##$PULPROG= <other>\n')
         with mock.patch.object(rt,'checked_run',side_effect=changed),self.assertRaisesRegex(ValueError,'input changed'):co.refresh(row)
         self.assertEqual(row['numbers'].read_bytes(),before)
+    def test_plain_parameter_headers_contiguous_residues_and_short_source(self):
+        row=self.records(self.fixture())[0]
+        row['rows'].append(dict(row['rows'][0],residue='13'))
+        path=self.root/'overview.tsv';co.write_overview(path,[row],[],self.project)
+        with path.open() as f:rows=list(csv.reader(f,delimiter='\t'))
+        self.assertEqual(rows[0][0],'# generated');self.assertIn('DO NOT EDIT',rows[0][1])
+        source=next(r for r in rows if r[0]=='source');self.assertEqual(source[1],'collection/3')
+        start=next(i for i,r in enumerate(rows) if r[0]=='residue')
+        self.assertEqual(rows[start],['residue','R1','error','overlap','reduced_chi2','flags'])
+        body=[r for r in rows[start+1:] if r[0].isdigit()]
+        self.assertEqual([r[0] for r in body],['10','11','12','13'])
+        self.assertEqual(body[1],['11','','','','','missing'])
+        self.assertTrue(any(r[0]=='# numbers_file' and r[1]=='collection/3' for r in rows))
+    def test_each_source_labels_its_own_parameter_block_after_date_ordering(self):
+        a=self.fixture(name='collection/3',date='2025-02-01')
+        b=self.fixture(name='collection/4',date='2025-01-01')
+        records=self.records(a,b)
+        for row in records:
+            if row['relative_path']=='collection/4':row['rows'][0]['rate_s-1']='9.123456789012345'
+        path=self.root/'overview.tsv';co.write_overview(path,list(reversed(records)),[],self.project)
+        with path.open() as f:lines=list(csv.reader(f,delimiter='\t'))
+        source=next(r for r in lines if r[0]=='source')
+        values=next(r for r in lines if r[0]=='10')
+        self.assertEqual((source[1],values[1]),('collection/4','9.123456789012345'))
+        self.assertEqual((source[6],values[6]),('collection/3','2.0'))
+        self.assertEqual(len([r for r in lines if r[0]=='# numbers_file']),2)
+
+    def test_delay_labels_only_state_what_was_used(self):
+        row=self.records(self.fixture())[0]
+        row['metadata'].update(fit_basis='all_points',selection_reason='shortest_residual_within_limit')
+        self.assertEqual(co.header_cells(row,self.project)[2],'all delays used')
+        row['metadata'].update(fit_basis='exclude_shortest',excluded_shortest_delay_s='0.001')
+        self.assertEqual(co.header_cells(row,self.project)[2],'1 ms delay omitted')
+    def test_relative_noise_uses_unique_valid_nonoverlap_absolute_first_heights(self):
+        row=self.records(self.fixture())[0]
+        row['rows']=[dict(residue='10',plane_01_intensity='100',valid_fit='True',overlap='False'),
+                     dict(residue='11',plane_01_intensity='-300',valid_fit='True',overlap='False'),
+                     dict(residue='12',plane_01_intensity='100000',valid_fit='True',overlap='True'),
+                     dict(residue='13',plane_01_intensity='1',valid_fit='False',overlap='False')]
+        row['metadata'].update(plane_noise_sd='2, 4',fit_basis='exclude_shortest')
+        text=co.relative_noise_header(row)
+        self.assertEqual(text,'1%, 2%; median |first-plane height|=200 (n=2)')
+        row['rows']=[dict(residue='10',plane_01_intensity='0',valid_fit='True')]
+        self.assertIn('unavailable',co.relative_noise_header(row))
+        noe=self.records(self.fixture(mode='noe',name='collection/4'))[0]
+        noe['rows'][0]['NOE_overlap']='False'
+        self.assertIn('ref=1%, sat=2%',co.relative_noise_header(noe))
+    def test_error_scaling_label_is_explained_without_changing_numbers(self):
+        peak={'uncertainty_rescaled':'True','flags':'original_noise_lack_of_fit;uncertainty_rescaled'}
+        self.assertEqual(co.row_flags(peak),['error_adjusted_by_fitter','lack_of_fit'])
+    def test_user_reviews_are_persistent_and_apply_condition_then_acquisition(self):
+        a,b=self.fixture(name='collection/3'),self.fixture(name='collection/4')
+        records=self.records(a,b);path=self.project/'condition-reviews.tsv'
+        co.initialise_reviews(path,records)
+        self.assertEqual(len(co.read_tsv(path)),2)
+        condition=str(Path(*records[0]['directory'].relative_to(self.project).parts[:3]))
+        with path.open('w',newline='') as f:
+            w=csv.writer(f,delimiter='\t');w.writerow(['target','assessment','comment'])
+            w.writerow([condition,'review','condition assessment'])
+            w.writerow(['collection/3','usable','my inspection: acceptable'])
+            w.writerow(['collection/4','exclude','damaged FID'])
+        before=path.read_bytes();co.read_user_reviews(path,records,self.project);co.initialise_reviews(path,records)
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(records[0]['user_assessment'],'usable')
+        self.assertIn('my inspection',records[0]['qc'][1]);self.assertIn('condition assessment',records[0]['qc'][1])
+        self.assertTrue(records[1]['exclusion']);self.assertEqual(records[1]['qc'][0],'user_exclude')
+        path.write_text('target\tassessment\tcomment\ncollection/3\tdelete\tbad\n')
+        with self.assertRaises(ValueError):co.read_user_reviews(path,records,self.project)
+    def test_generator_never_changes_existing_review_comments(self):
+        a=self.fixture();self.catalog_rows([a]);path=self.project/'condition-reviews.tsv'
+        path.write_text('target\tassessment\tcomment\ncollection/3\treview\tPreserve my comment, exactly.\n')
+        before=path.read_bytes()
+        args=argparse.Namespace(project_root=str(self.project),data_root=str(self.data),catalog=str(self.catalog),fid_inventory=None,r1_qc=None,qc_decisions=None,user_reviews=str(path),dry_run=False,refresh_reports=False)
+        co.run(args);self.assertEqual(path.read_bytes(),before)
+        overview=co.destination_for(self.records(a),self.project)
+        self.assertIn('Preserve my comment, exactly.',overview.read_text())
+
     def test_dry_run_has_no_writes_and_full_run_publishes_index(self):
         a=self.fixture();self.catalog_rows([a]);args=argparse.Namespace(project_root=str(self.project),data_root=str(self.data),catalog=str(self.catalog),fid_inventory=None,r1_qc=None,qc_decisions=None,dry_run=True,refresh_reports=False)
         with mock.patch.object(co,'refresh') as refresh:counts=co.run(args);refresh.assert_not_called()
