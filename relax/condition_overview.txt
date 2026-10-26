@@ -116,16 +116,35 @@ that index for persistent assessments.
 
 PERSISTENT USER REVIEWS
 
-condition-reviews.tsv in the project root is EDITABLE INPUT and is never rewritten
-by regeneration. It is created once, only if absent, with the columns:
-    target    assessment    comment
-Initial targets are the current collection/expno identifiers; assessment/comment
-are blank. Free-text comments are preserved byte-for-byte in this input file.
---user-reviews PATH selects a different input. New targets can be added manually;
-unknown/duplicate targets and invalid assessments raise an error without changing
-that file. Use a collection/expno target for an acquisition, or a project-relative
-condition directory (e.g. ANP32aIDR/25C/R1_500mM_600MHz) for a condition-wide note.
+condition-reviews.tsv in the project root is EDITABLE INPUT. Normal regeneration
+never rewrites it. It is created once with acquisition metadata and automatic
+assessment snapshots alongside separate user fields:
+    target, protein, experiment_type, pulse_program, acquisition_date,
+    NaCl_mM, nominal_temperature_C, field_MHz,
+    machine_disposition, machine_assessment, machine_reason,
+    delays_used, fit_assessment,
+    assessment, comment
 
+The machine columns show the existing reviewed QC and condition evidence; they
+are not user approvals and are not used as overrides. machine_disposition is
+included, excluded or condition_review; machine_assessment identifies the saved
+QC state (including review or not_assessed). Pending/provisional condition
+qualifications remain explicit in machine_reason. Metadata values are catalog
+snapshots, not new measurements or newly confirmed conditions.
+
+Edit assessment and comment for your own decisions. They start blank. --user-reviews
+PATH selects a different input. Old three-column target/assessment/comment files
+remain accepted; extra/custom columns are allowed and ignored as decisions.
+Use a collection/expno target for an acquisition, or a project-relative condition
+directory (e.g. ANP32aIDR/25C/R1_500mM_600MHz) for a condition-wide note.
+
+--update-review-context is an EXPLICIT opt-in to refresh the informational
+columns or upgrade a three-column sheet. It preserves existing row order, user
+assessment/comment values, custom columns and condition-wide notes; it appends
+new acquisitions with blank user cells. Existing sheets are backed up and
+replaced atomically, with a byte comparison to detect concurrent edits. Without
+this flag, an existing review sheet is left byte-for-byte untouched. The script
+never copies machine dispositions into the user's assessment column.
 Assessment is blank (comment only), usable, review or exclude. An acquisition
 assessment takes precedence over a condition-wide assessment; both comments are
 retained. Explicit usable acceptance overrides acquisition exclusions, while the

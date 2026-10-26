@@ -251,6 +251,66 @@ class OverviewTests(unittest.TestCase):
         self.assertTrue(records[1]['exclusion']);self.assertEqual(records[1]['qc'][0],'user_exclude')
         path.write_text('target\tassessment\tcomment\ncollection/3\tdelete\tbad\n')
         with self.assertRaises(ValueError):co.read_user_reviews(path,records,self.project)
+    def test_new_review_sheet_prefills_machine_context_and_keeps_user_cells_blank(self):
+        records=self.records(self.fixture())
+        path=self.project/'condition-reviews.tsv';co.initialise_reviews(path,records)
+        row=co.read_tsv(path)[0]
+        self.assertEqual(row['experiment_type'],'R1')
+        self.assertEqual(row['pulse_program'],'actual_sequence')
+        self.assertEqual(row['NaCl_mM'],'50')
+        self.assertEqual(row['nominal_temperature_C'],'25')
+        self.assertEqual(row['machine_disposition'],'included')
+        self.assertEqual(row['machine_assessment'],'not_assessed')
+        self.assertEqual(row['delays_used'],'all delays used')
+        self.assertEqual((row['assessment'],row['comment']),('',''))
+    def test_explicit_context_update_preserves_user_values_and_custom_condition_notes(self):
+        records=self.records(self.fixture());path=self.project/'condition-reviews.tsv'
+        condition=str(Path(*records[0]['directory'].relative_to(self.project).parts[:3]))
+        with path.open('w',newline='') as f:
+            w=csv.writer(f,delimiter='\t');w.writerow(['target','assessment','comment','custom_note'])
+            w.writerow(['collection/3','review','my "quoted" comment, with\nsecond line','keep this'])
+            w.writerow([condition,'','condition-wide note','also keep'])
+        before=path.read_bytes();co.read_user_reviews(path,records,self.project)
+        co.initialise_reviews(path,records,update_context=True)
+        rows=co.read_tsv(path)
+        self.assertEqual(rows[0]['assessment'],'review')
+        self.assertEqual(rows[0]['comment'],'my "quoted" comment, with\nsecond line')
+        self.assertEqual(rows[0]['custom_note'],'keep this')
+        self.assertEqual(rows[1]['comment'],'condition-wide note')
+        self.assertEqual(rows[1]['custom_note'],'also keep')
+        self.assertEqual(rows[0]['machine_assessment'],'not_assessed')
+        backups=list((self.project/'.report-backups').rglob('condition-reviews.tsv'))
+        self.assertEqual(len(backups),1);self.assertEqual(backups[0].read_bytes(),before)
+        current=path.read_bytes();co.initialise_reviews(path,records)
+        self.assertEqual(path.read_bytes(),current)
+    def test_machine_context_never_becomes_a_user_override(self):
+        records=self.records(self.fixture());records[0]['exclusion']='reviewed damage'
+        path=self.project/'condition-reviews.tsv';co.initialise_reviews(path,records)
+        rows=co.read_tsv(path);rows[0]['machine_disposition']='included'
+        with path.open('w',newline='') as f:
+            w=csv.DictWriter(f,fieldnames=co.REVIEW_FIELDS,delimiter='\t');w.writeheader();w.writerows(rows)
+        co.read_user_reviews(path,records,self.project)
+        self.assertEqual(records[0]['exclusion'],'reviewed damage')
+        self.assertEqual(records[0]['user_assessment'],'')
+    def test_context_snapshot_is_automated_even_after_user_acceptance(self):
+        records=self.records(self.fixture());records[0]['exclusion']='reviewed damage'
+        path=self.project/'condition-reviews.tsv'
+        path.write_text('target\tassessment\tcomment\ncollection/3\tusable\tI reviewed it.\n')
+        co.read_user_reviews(path,records,self.project)
+        self.assertEqual(records[0]['exclusion'],'')
+        co.initialise_reviews(path,records,update_context=True)
+        row=co.read_tsv(path)[0]
+        self.assertEqual(row['machine_disposition'],'excluded')
+        self.assertEqual(row['machine_assessment'],'not_assessed')
+        self.assertEqual(row['assessment'],'usable')
+        self.assertEqual(row['comment'],'I reviewed it.')
+    def test_review_reader_rejects_duplicate_headers_but_accepts_old_and_enriched_tables(self):
+        path=self.project/'review.tsv'
+        path.write_text('target\tassessment\tcomment\ncollection/3\t\told note\n')
+        self.assertEqual(co.read_tsv(path)[0]['comment'],'old note')
+        path.write_text('target\tassessment\tcomment\tcomment\ncollection/3\t\tnote\tnote\n')
+        with self.assertRaises(ValueError):co.read_tsv(path)
+
     def test_generator_never_changes_existing_review_comments(self):
         a=self.fixture();self.catalog_rows([a]);path=self.project/'condition-reviews.tsv'
         path.write_text('target\tassessment\tcomment\ncollection/3\treview\tPreserve my comment, exactly.\n')

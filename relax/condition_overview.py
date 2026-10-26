@@ -18,6 +18,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 import relax_tools as rt
@@ -27,6 +28,11 @@ MODES = {'15N T1': 'r1', '15N T1rho': 'r1rho', '1H-15N hetNOE': 'noe',
          'r1': 'r1', 'r1rho': 'r1rho', 'noe': 'noe'}
 SAMPLE_NAMES = {'ANP32A': 'ANP32aIDR', 'SeV Ntail': 'SeVNtail',
                 'HeTDR1 (folder/title evidence)': 'HeTDR1', 'heTDR1': 'HeTDR1'}
+REVIEW_FIELDS = ['target', 'protein', 'experiment_type', 'pulse_program',
+                 'acquisition_date', 'NaCl_mM', 'nominal_temperature_C', 'field_MHz',
+                 'machine_disposition', 'machine_assessment', 'machine_reason',
+                 'delays_used', 'fit_assessment', 'assessment', 'comment']
+
 
 
 def load_json(path):
@@ -222,6 +228,8 @@ def discover(catalog, project, data_root, fid_inventory=None, r1_qc=None, decisi
 
 def read_user_reviews(path, records, project):
     """Read editable input; never rewrite it during overview generation."""
+    for row in records:
+        row.setdefault('machine_review_context', machine_review_context(row))
     if not Path(path).is_file():
         return
     source_targets = {row['relative_path'] for row in records}
@@ -257,27 +265,77 @@ def read_user_reviews(path, records, project):
 def read_tsv(path):
     with Path(path).open(newline='') as handle:
         reader = csv.DictReader(handle, delimiter='\t')
-        if reader.fieldnames != ['target', 'assessment', 'comment']:
-            raise ValueError('Review TSV columns must be target, assessment, comment')
+        if (not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames) or
+                not {'target', 'assessment', 'comment'}.issubset(reader.fieldnames)):
+            raise ValueError('Review TSV must contain target, assessment, comment; context columns are optional')
         rows = list(reader)
     if any(None in row or any(value is None for value in row.values()) for row in rows):
         raise ValueError('Incomplete review TSV row')
     return rows
 
 
-def initialise_reviews(path, records):
+def machine_review_context(row):
+    """Snapshot of automated evidence, kept separate from user decisions."""
+    disposition = 'excluded' if row['exclusion'] else 'condition_review' if row['pending'] else 'included'
+    reasons = list(dict.fromkeys(value for value in (row['exclusion'], row['pending'], row['qc'][1]) if value))
+    header = header_cells(row, row['directory'])
+    return dict(target=row['relative_path'], protein=row['protein'],
+                experiment_type={'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[row['mode']],
+                pulse_program=row['pulse'], acquisition_date=row.get('acquisition_date') or 'unknown',
+                NaCl_mM=row.get('NaCl_mM') or 'unknown',
+                nominal_temperature_C=row.get('temperature_C') or 'unknown',
+                field_MHz=row.get('field_MHz') or 'unknown', machine_disposition=disposition,
+                machine_assessment=row['qc'][0], machine_reason='; '.join(reasons),
+                delays_used=header[2], fit_assessment=header[5])
+
+
+def initialise_reviews(path, records, update_context=False):
     path = Path(path)
-    if path.exists():
+    if path.exists() and not update_context:
         return
-    # Exclusive creation: even a file created since inventory is never overwritten.
-    try:
-        with path.open('x', newline='') as handle:
-            writer = csv.writer(handle, delimiter='\t', lineterminator='\n')
-            writer.writerow(['target', 'assessment', 'comment'])
-            for row in records:
-                writer.writerow([row['relative_path'], '', ''])
-    except FileExistsError:
-        return
+    before = path.read_bytes() if path.exists() else None
+    existing = read_tsv(path) if before is not None else []
+    contexts = {row['relative_path']: row.get('machine_review_context') or machine_review_context(row)
+                for row in records}
+    fields = list(REVIEW_FIELDS)
+    for row in existing:
+        fields += [key for key in row if key not in fields]
+    output, seen = [], set()
+    for row in existing:
+        target = row['target'].strip()
+        if target in seen:
+            raise ValueError('Duplicate review target: '+target)
+        seen.add(target)
+        # Preserve user assessment/comment and any custom columns verbatim.
+        enriched = dict(row)
+        if target in contexts:
+            enriched.update(contexts[target])
+        output.append(enriched)
+    for row in records:
+        target = row['relative_path']
+        if target not in seen:
+            output.append(dict(contexts[target], assessment='', comment=''))
+    if before is None:
+        # Exclusive creation never clobbers a concurrently created user input.
+        try:
+            with path.open('x', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', lineterminator='\n')
+                writer.writeheader(); writer.writerows(output)
+        except FileExistsError:
+            return
+    else:
+        # Only an explicit context update rewrites an existing review sheet.
+        with tempfile.TemporaryDirectory(prefix='.review-context-', dir=path.parent) as folder:
+            stage = Path(folder)
+            with (stage/path.name).open('w', newline='') as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', lineterminator='\n')
+                writer.writeheader(); writer.writerows(output)
+            if path.read_bytes() != before:
+                raise ValueError('User review input changed during context update')
+            backup = path.parent/'.report-backups'/('review-context-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+            backup.mkdir(parents=True)
+            shutil.copy2(path, backup/path.name)
+            rt.publish(stage, path.parent, [path.name])
 
 
 def native_members(archive):
@@ -568,7 +626,7 @@ def run(args):
             print(row['relative_path'], 'excluded: '+row['exclusion'] if row['exclusion'] else 'condition_review: '+row['pending'] if row['pending'] else 'included',flush=True)
         return counts
     with rt.run_directory(project,'overviews') as stage:
-        initialise_reviews(review_path, records)
+        initialise_reviews(review_path, records, update_context=getattr(args, 'update_review_context', False))
         review_before = review_path.read_bytes()
         for row in records:
             status = refresh(row) if args.refresh_reports else (
@@ -614,6 +672,7 @@ def main(argv=None):
     parser.add_argument('--r1-qc',help='Saved retained-range R1 FID screening CSV')
     parser.add_argument('--qc-decisions',help='Reviewed findings JSON with known_strong_growth_experiments / explicit exclusions')
     parser.add_argument('--user-reviews',help='Editable target/assessment/comment TSV; defaults to PROJECT/condition-reviews.tsv; never overwritten')
+    parser.add_argument('--update-review-context',action='store_true',help='Explicitly refresh informational review columns, preserving all user assessments/comments and backing up the sheet')
     parser.add_argument('--refresh-reports',action='store_true')
     parser.add_argument('--dry-run',action='store_true',help='Read-only inventory and disposition summary')
     args=parser.parse_args(argv)
