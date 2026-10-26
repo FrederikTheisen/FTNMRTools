@@ -269,11 +269,11 @@ class OverviewTests(unittest.TestCase):
     def test_brief_machine_reasons_keep_counts_and_unassessed_rows_blank(self):
         row=self.records(self.fixture())[0]
         row['qc']=('review', "retained-range trace flags: {'direct_startup_discontinuity_review': 8, 'water_frequency_change_review': 3}")
-        self.assertEqual(co.brief_machine_reason(row),'FID start discontinuity (8 traces); water-region frequency outlier (3 traces)')
+        self.assertEqual(co.brief_machine_reason(row),'water-region frequency outlier (3 traces)')
         row['pending']='nominal temperature provisional'
         row['exclusion']='reviewed strong late-FID growth: findings.json'
         row['qc']=('review','Strong water-dominated late-FID growth at 150,200 ms; 14 direct-startup review traces; ADC overflow recorded')
-        self.assertEqual(co.brief_machine_reason(row),'late-FID growth (150,200 ms); condition pending; FID start discontinuity (14 traces); ADC overflow')
+        self.assertEqual(co.brief_machine_reason(row),'late-FID growth (150,200 ms); condition pending; ADC overflow')
         row['qc']=('not_assessed','no saved acquisition-level FID screen')
         self.assertEqual(co.brief_machine_reason(row),'')
         self.assertEqual(co.machine_review_context(row)['machine_disposition'],'excluded')
@@ -299,7 +299,7 @@ class OverviewTests(unittest.TestCase):
         definitions=[r for r in preamble if r]
         self.assertEqual(len(definitions),len(co.REVIEW_LOOKUP))
         self.assertTrue(all(len(r)==2 and r[0].startswith('# ') and '\n' not in r[1] for r in definitions))
-        self.assertIn(['# FID start discontinuity',dict(co.REVIEW_LOOKUP)['FID start discontinuity']],definitions)
+        self.assertIn(['# later FID discontinuity',dict(co.REVIEW_LOOKUP)['later FID discontinuity']],definitions)
         rows=co.read_tsv(path);rows[0]['comment']='one line\n# this is my comment, not a lookup row'
         with path.open('w',newline='') as handle:
             w=csv.writer(handle,delimiter='\t');w.writerows(preamble)
@@ -341,9 +341,39 @@ class OverviewTests(unittest.TestCase):
         row['qc']=('review',"retained-range trace flags: {'isolated_direct_discontinuity_review': 2, 'isolated_water_amplitude_change_review': 1}")
         self.assertEqual(co.brief_machine_reason(row),'later FID discontinuity (2 traces); water-region amplitude outlier (1 trace)')
         lookup=dict(co.REVIEW_LOOKUP)
-        self.assertIn('first 0.5 ms',lookup['FID start discontinuity'])
+        self.assertNotIn('FID start discontinuity',lookup)
         self.assertIn('after 0.5 ms',lookup['later FID discontinuity'])
         self.assertIn('across 15N increments',lookup['water-region frequency outlier'])
+    def test_startup_only_is_omitted_without_residual_review_or_clean_claim(self):
+        row=self.records(self.fixture())[0]
+        for note in ("retained-range trace flags: {'direct_startup_discontinuity_review': 20}",
+                     'startup_pattern_only; 20 direct-startup review traces (maximum jump <=0.5 ms)'):
+            row['qc']=('review',note)
+            before=row['qc']
+            context=co.machine_review_context(row)
+            self.assertEqual(context['machine_assessment'],'screened_no_retained_flags')
+            self.assertEqual(context['machine_reason'],'')
+            self.assertEqual(row['qc'],before)
+            self.assertEqual(context['machine_disposition'],'included')
+    def test_omitting_startup_preserves_mixed_flags_and_reviewed_exclusions(self):
+        row=self.records(self.fixture())[0]
+        row['qc']=('review',"retained-range trace flags: {'direct_startup_discontinuity_review': 20, 'water_frequency_change_review': 2}")
+        self.assertEqual(co.review_machine_assessment(row),'review')
+        self.assertEqual(co.brief_machine_reason(row),'water-region frequency outlier (2 traces)')
+        row['qc']=('review','startup_pattern_only; 20 direct-startup review traces')
+        row['exclusion']='reviewed strong late-FID growth: findings.json'
+        context=co.machine_review_context(row)
+        self.assertEqual(context['machine_disposition'],'excluded')
+        self.assertEqual(context['machine_assessment'],'review')
+        self.assertEqual(context['machine_reason'],'late-FID growth')
+    def test_unknown_or_malformed_flags_remain_review(self):
+        row=self.records(self.fixture())[0]
+        for note in ("retained-range trace flags: {'direct_startup_discontinuity_review': 20, 'unrecognised_flag': 2}",
+                     'retained-range trace flags: malformed',
+                     "retained-range trace flags: {'direct_startup_discontinuity_review': 'unknown'}"):
+            row['qc']=('review',note)
+            self.assertEqual(co.review_machine_assessment(row),'review')
+            self.assertEqual(co.brief_machine_reason(row),'QC review')
     def test_explicit_context_update_preserves_user_values_and_custom_condition_notes(self):
         records=self.records(self.fixture());path=self.project/'condition-reviews.tsv'
         condition=str(Path(*records[0]['directory'].relative_to(self.project).parts[:3]))

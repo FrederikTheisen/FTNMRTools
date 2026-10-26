@@ -5,6 +5,7 @@ No spectrum processing, intensity extraction, peak matching or fitting occurs.
 See condition_overview.txt. Python standard library plus gnuplot for PDFs.
 """
 import argparse
+import ast
 from collections import Counter, defaultdict
 import csv
 from datetime import datetime, timezone
@@ -43,10 +44,11 @@ REVIEW_LOOKUP = [
     ('excluded', 'A reviewed exclusion applies. A blank machine_reason for an unassessed acquisition does not cancel that decision.'),
     ('not_assessed', 'No saved acquisition-level QC screen is available. machine_reason is intentionally blank.'),
     ('screened_no_major_flags', 'The saved acquisition-level screen found no major flags; this is not proof of clean intensities.'),
+    ('screened_no_retained_flags', 'No remaining flags in the saved acquisition screen after omitting the initial-FID check.'),
+    ('omitted check', 'Initial-FID startup screening is omitted from this assessment. Original screening records are preserved.'),
     ('screen scope', 'Automatic review of stored time-domain FIDs. Flags describe signal features; their cause and effect on amide intensities are not established.'),
     ('trace counts', 'A trace is one stored direct-dimension FID at a relaxation delay, 15N evolution increment and echo/antiecho channel. Counts are flagged traces, not residues or independent repeats.'),
-    ('FID start discontinuity', 'An unusually large change between adjacent complex FID samples occurs within the first 0.5 ms of the screened direct-time window, after digital-filter cropping. Startup alone is not evidence of damage.'),
-    ('later FID discontinuity', 'The same adjacent-sample screen flags a change after 0.5 ms of the screened direct-time window; cause is unassigned.'),
+    ('later FID discontinuity', 'An unusually large adjacent-sample change is flagged after 0.5 ms of the screened direct-time window; cause is unassigned.'),
     ('water-region frequency outlier', 'The strongest Fourier feature near water has an unusual frequency across 15N increments at the same delay and echo/antiecho channel. This is a feature outlier, not a confirmed physical frequency jump.'),
     ('water-region amplitude outlier', 'The water-region signal amplitude is unusual relative to other 15N increments at the same delay and echo/antiecho channel.'),
     ('trace review', 'Isolated or modest trace features need review; they are not treated as confirmed corruption.'),
@@ -312,6 +314,26 @@ def read_tsv(path):
     return rows
 
 
+def review_machine_assessment(row):
+    """Omit startup-only warnings from the sheet without changing saved QC."""
+    status, note = row['qc']
+    if status != 'review' or row['exclusion']:
+        return status
+    if note.split(';', 1)[0].strip() == 'startup_pattern_only':
+        return 'screened_no_retained_flags'
+    prefix = 'retained-range trace flags: '
+    if note.startswith(prefix):
+        try:
+            flags = ast.literal_eval(note[len(prefix):])
+            if (isinstance(flags, dict) and flags.get('direct_startup_discontinuity_review', 0) > 0 and
+                    all(isinstance(n, (int, float)) and n >= 0 for n in flags.values()) and
+                    not any(n > 0 for flag, n in flags.items() if flag != 'direct_startup_discontinuity_review')):
+                return 'screened_no_retained_flags'
+        except (ValueError, SyntaxError, TypeError):
+            pass  # Unrecognised notes retain their existing review status.
+    return status
+
+
 def brief_machine_reason(row):
     """Display recurring screen findings using the lookup terms, not long notes."""
     if row['qc'][0] == 'not_assessed':
@@ -326,18 +348,12 @@ def brief_machine_reason(row):
             reasons.append('reviewed exclusion')
     if row['pending']:
         reasons.append('condition pending')
-    for flag, label in [('direct_startup_discontinuity_review', 'FID start discontinuity'),
-                        ('isolated_direct_discontinuity_review', 'later FID discontinuity'),
+    for flag, label in [('isolated_direct_discontinuity_review', 'later FID discontinuity'),
                         ('water_frequency_change_review', 'water-region frequency outlier'),
                         ('isolated_water_amplitude_change_review', 'water-region amplitude outlier')]:
         count = re.search(r"['\"]"+flag+r"['\"]\s*:\s*(\d+)", note)
         if count:
             reasons.append(label+' ('+count[1]+(' trace)' if int(count[1]) == 1 else ' traces)'))
-    startup = re.search(r'(\d+) direct-startup review traces', note)
-    if startup:
-        reasons.append('FID start discontinuity ('+startup[1]+(' trace)' if int(startup[1]) == 1 else ' traces)'))
-    elif 'startup_pattern_only' in note:
-        reasons.append('FID start discontinuity')
     for fragment, label in [('isolated_or_modest_signature_review', 'trace review'),
                              ('Median late/early >1', 'water growth'),
                              ('Persistent near-flat/slightly growing water FID', 'water growth'),
@@ -345,7 +361,7 @@ def brief_machine_reason(row):
                              ('Shared water-amplitude increment', 'water increment')]:
         if fragment in note:
             reasons.append(label)
-    if not reasons and row['qc'][0] != 'screened_no_major_flags':
+    if not reasons and review_machine_assessment(row) == 'review':
         reasons.append('QC review')
     return '; '.join(dict.fromkeys(reasons))
 
@@ -360,7 +376,7 @@ def machine_review_context(row):
                 nominal_temperature_C=row.get('temperature_C') or 'unknown',
                 field=(f"{numeric(row.get('field_MHz')):.0f} MHz" if numeric(row.get('field_MHz')) is not None else 'unknown'),
                 machine_disposition=disposition,
-                machine_assessment=row['qc'][0], machine_reason=brief_machine_reason(row))
+                machine_assessment=review_machine_assessment(row), machine_reason=brief_machine_reason(row))
 
 
 def initialise_reviews(path, records, update_context=False):

@@ -138,7 +138,7 @@ snapshots, not new measurements or newly confirmed conditions.
 A lookup section precedes the table: one # term / explanation TSV row per
 reason or useful definition. The reader skips these initial records and accepts
 older files without them. Reasons use short lookup phrases such as
-"FID start discontinuity (8 traces)"; parentheses count flagged traces. Detailed
+"water-region frequency outlier (3 traces)"; parentheses count flagged traces. Detailed
 evidence remains in the saved acquisition-screen records. Unassessed rows have
 blank machine_reason cells; their condition/disposition still applies
 independently. Rows with no major acquisition-screen flags need no reason.
@@ -150,9 +150,15 @@ screened. Edit decisions in the table below it. Explicit context refresh also
 removes the former generated delays_used and fit_assessment columns, preserving
 user assessments, comments and custom columns.
 
-FID start discontinuity means the adjacent-sample screen flagged a change within
-the first 0.5 ms of the screened direct-time window after digital-filter cropping;
-later FID discontinuity uses the same screen after 0.5 ms. Water-region frequency
+Initial-FID startup checks are omitted from the editable assessment sheet,
+including startup counts in mixed findings. Startup-only screens are labelled
+screened_no_retained_flags with no QC reason, rather than retaining a generic
+review warning or claiming clean data. Other flagged features, unknown/error
+states, user comments and reviewed exclusions are retained. The original screen
+records and other existing reports are unchanged.
+
+Later FID discontinuity uses the adjacent-sample screen after 0.5 ms of the
+screened direct-time window after digital-filter cropping. Water-region frequency
 outlier means the strongest Fourier feature near water differed unusually across
 15N increments within the same delay and echo/antiecho channel. It does not
 establish a physical frequency jump. A trace is one stored direct-dimension FID,
