@@ -31,7 +31,9 @@ SAMPLE_NAMES = {'ANP32A': 'ANP32aIDR', 'SeV Ntail': 'SeVNtail',
 REVIEW_FIELDS = ['target', 'protein', 'experiment_type', 'pulse_program',
                  'acquisition_date', 'NaCl_mM', 'nominal_temperature_C', 'field',
                  'machine_disposition', 'machine_assessment', 'machine_reason',
-                 'delays_used', 'fit_assessment', 'assessment', 'comment']
+                 'assessment', 'comment']
+
+RETIRED_REVIEW_FIELDS = {'field_MHz', 'delays_used', 'fit_assessment'}
 
 REVIEW_LOOKUP = [
     ('edit', 'Edit assessment and comment. Machine columns are saved evidence, not your decisions; ordinary regeneration leaves this file unchanged.'),
@@ -39,12 +41,14 @@ REVIEW_LOOKUP = [
     ('included', 'Condition is assigned and no reviewed exclusion applies. Inclusion does not mean QC passed.'),
     ('condition_review', 'Condition assignment is unresolved or provisional; not included in a confirmed-condition overview.'),
     ('excluded', 'A reviewed exclusion applies. A blank machine_reason for an unassessed acquisition does not cancel that decision.'),
-    ('not_assessed', 'No saved acquisition-level QC screen is available. machine_reason is intentionally blank; fit assessment is separate.'),
+    ('not_assessed', 'No saved acquisition-level QC screen is available. machine_reason is intentionally blank.'),
     ('screened_no_major_flags', 'The saved acquisition-level screen found no major flags; this is not proof of clean intensities.'),
-    ('startup', 'Direct-dimension startup discontinuity; numbers in parentheses count flagged traces. Startup alone does not establish an acquisition-time event.'),
-    ('direct jump', 'An isolated direct-dimension discontinuity was flagged; parentheses count flagged traces.'),
-    ('water shift', 'Water-frequency changes were flagged; parentheses count flagged traces. This does not by itself establish acquisition damage.'),
-    ('water jump', 'Isolated water-amplitude changes were flagged; parentheses count flagged traces.'),
+    ('screen scope', 'Automatic review of stored time-domain FIDs. Flags describe signal features; their cause and effect on amide intensities are not established.'),
+    ('trace counts', 'A trace is one stored direct-dimension FID at a relaxation delay, 15N evolution increment and echo/antiecho channel. Counts are flagged traces, not residues or independent repeats.'),
+    ('FID start discontinuity', 'An unusually large change between adjacent complex FID samples occurs within the first 0.5 ms of the screened direct-time window, after digital-filter cropping. Startup alone is not evidence of damage.'),
+    ('later FID discontinuity', 'The same adjacent-sample screen flags a change after 0.5 ms of the screened direct-time window; cause is unassigned.'),
+    ('water-region frequency outlier', 'The strongest Fourier feature near water has an unusual frequency across 15N increments at the same delay and echo/antiecho channel. This is a feature outlier, not a confirmed physical frequency jump.'),
+    ('water-region amplitude outlier', 'The water-region signal amplitude is unusual relative to other 15N increments at the same delay and echo/antiecho channel.'),
     ('trace review', 'Isolated or modest trace features need review; they are not treated as confirmed corruption.'),
     ('late-FID growth', 'Reviewed strong water-dominated growth late in the FID; an existing exclusion applies. Any stated milliseconds identify affected sampled delays.'),
     ('reviewed exclusion', 'An explicit saved exclusion applies; consult the reviewed acquisition records for its original reason.'),
@@ -54,9 +58,6 @@ REVIEW_LOOKUP = [
     ('condition pending', 'Salt, nominal temperature, field, construct or another reviewed condition remains unresolved/provisional. Unknown values are not inferred from controller settings.'),
     ('QC review', 'Other saved screening notes require review; consult the original FID-screen records for the detailed evidence.'),
     ('field', 'Field is rounded to the nearest MHz for display only; condition grouping retains the reviewed numerical value.'),
-    ('fit assessment', 'Valid/flagged are peak counts, not acquisition QC. Holm is the number of adjusted per-peak tests flagging departures / the number tested.'),
-    ('departures_detected', 'The saved decay assessment found departures at supplied noise levels. This does not establish a multiexponential mechanism.'),
-    ('delays used', 'All delays used means an all-delay fit. Otherwise the omitted shortest delay is stated; the saved fit selection is unchanged.'),
 ]
 
 
@@ -325,18 +326,18 @@ def brief_machine_reason(row):
             reasons.append('reviewed exclusion')
     if row['pending']:
         reasons.append('condition pending')
-    for flag, label in [('direct_startup_discontinuity_review', 'startup'),
-                        ('isolated_direct_discontinuity_review', 'direct jump'),
-                        ('water_frequency_change_review', 'water shift'),
-                        ('isolated_water_amplitude_change_review', 'water jump')]:
+    for flag, label in [('direct_startup_discontinuity_review', 'FID start discontinuity'),
+                        ('isolated_direct_discontinuity_review', 'later FID discontinuity'),
+                        ('water_frequency_change_review', 'water-region frequency outlier'),
+                        ('isolated_water_amplitude_change_review', 'water-region amplitude outlier')]:
         count = re.search(r"['\"]"+flag+r"['\"]\s*:\s*(\d+)", note)
         if count:
-            reasons.append(label+' ('+count[1]+')')
+            reasons.append(label+' ('+count[1]+(' trace)' if int(count[1]) == 1 else ' traces)'))
     startup = re.search(r'(\d+) direct-startup review traces', note)
     if startup:
-        reasons.append('startup ('+startup[1]+')')
+        reasons.append('FID start discontinuity ('+startup[1]+(' trace)' if int(startup[1]) == 1 else ' traces)'))
     elif 'startup_pattern_only' in note:
-        reasons.append('startup')
+        reasons.append('FID start discontinuity')
     for fragment, label in [('isolated_or_modest_signature_review', 'trace review'),
                              ('Median late/early >1', 'water growth'),
                              ('Persistent near-flat/slightly growing water FID', 'water growth'),
@@ -352,7 +353,6 @@ def brief_machine_reason(row):
 def machine_review_context(row):
     """Snapshot of automated evidence, kept separate from user decisions."""
     disposition = 'excluded' if row['exclusion'] else 'condition_review' if row['pending'] else 'included'
-    header = header_cells(row, row['directory'])
     return dict(target=row['relative_path'], protein=row['protein'],
                 experiment_type={'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[row['mode']],
                 pulse_program=row['pulse'], acquisition_date=row.get('acquisition_date') or 'unknown',
@@ -360,8 +360,7 @@ def machine_review_context(row):
                 nominal_temperature_C=row.get('temperature_C') or 'unknown',
                 field=(f"{numeric(row.get('field_MHz')):.0f} MHz" if numeric(row.get('field_MHz')) is not None else 'unknown'),
                 machine_disposition=disposition,
-                machine_assessment=row['qc'][0], machine_reason=brief_machine_reason(row),
-                delays_used=header[2], fit_assessment=header[5])
+                machine_assessment=row['qc'][0], machine_reason=brief_machine_reason(row))
 
 
 def initialise_reviews(path, records, update_context=False):
@@ -374,7 +373,7 @@ def initialise_reviews(path, records, update_context=False):
                 for row in records}
     fields = list(REVIEW_FIELDS)
     for row in existing:
-        fields += [key for key in row if key not in fields and key != 'field_MHz']
+        fields += [key for key in row if key not in fields and key not in RETIRED_REVIEW_FIELDS]
     output, seen = [], set()
     for row in existing:
         target = row['target'].strip()
@@ -384,6 +383,8 @@ def initialise_reviews(path, records, update_context=False):
         # Preserve user assessment/comment and any custom columns verbatim.
         enriched = dict(row)
         old_field = enriched.pop('field_MHz', '')  # Previous generated display column.
+        enriched.pop('delays_used', None)
+        enriched.pop('fit_assessment', None)
         if old_field and not enriched.get('field'):
             value = numeric(old_field)
             enriched['field'] = f'{value:.0f} MHz' if value is not None else old_field

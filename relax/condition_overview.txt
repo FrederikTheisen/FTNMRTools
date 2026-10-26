@@ -122,8 +122,11 @@ assessment snapshots alongside separate user fields:
     target, protein, experiment_type, pulse_program, acquisition_date,
     NaCl_mM, nominal_temperature_C, field,
     machine_disposition, machine_assessment, machine_reason,
-    delays_used, fit_assessment,
     assessment, comment
+
+This file concerns acquisition QC and reviewed conditions. It contains no peak
+counts, decay-fit results, goodness-of-fit tests or analysis delay selections.
+Those remain in the generated numerical reports and condition overviews.
 
 The machine columns show the existing reviewed QC and condition evidence; they
 are not user approvals and are not used as overrides. machine_disposition is
@@ -135,15 +138,28 @@ snapshots, not new measurements or newly confirmed conditions.
 A lookup section precedes the table: one # term / explanation TSV row per
 reason or useful definition. The reader skips these initial records and accepts
 older files without them. Reasons use short lookup phrases such as
-"startup (8); water shift (3)"; parentheses count flagged traces. Detailed
+"FID start discontinuity (8 traces)"; parentheses count flagged traces. Detailed
 evidence remains in the saved acquisition-screen records. Unassessed rows have
-blank machine_reason cells; their condition/disposition and fit assessment still
-apply independently. Rows with no major acquisition-screen flags need no reason.
+blank machine_reason cells; their condition/disposition still applies
+independently. Rows with no major acquisition-screen flags need no reason.
 The field column is display-only, rounded to the nearest MHz with units (e.g.
 600 MHz); grouping retains the original reviewed field value. Explicit context
 updates replace the previous generated field_MHz column with this display field.
-The lookup also explains inclusion versus QC, pending conditions, delay usage
-and the saved fit-assessment counts. Edit decisions in the table below it.
+The lookup explains inclusion versus QC, pending conditions and what was
+screened. Edit decisions in the table below it. Explicit context refresh also
+removes the former generated delays_used and fit_assessment columns, preserving
+user assessments, comments and custom columns.
+
+FID start discontinuity means the adjacent-sample screen flagged a change within
+the first 0.5 ms of the screened direct-time window after digital-filter cropping;
+later FID discontinuity uses the same screen after 0.5 ms. Water-region frequency
+outlier means the strongest Fourier feature near water differed unusually across
+15N increments within the same delay and echo/antiecho channel. It does not
+establish a physical frequency jump. A trace is one stored direct-dimension FID,
+not a residue or an independent replicate. These are saved descriptive review
+flags; causes and effects on amide intensities have not been established. The
+reporting command neither reruns screening nor converts these flags into new
+acquisition exclusions.
 
 Edit assessment and comment for your own decisions. They start blank. --user-reviews
 PATH selects a different input. Old three-column target/assessment/comment files

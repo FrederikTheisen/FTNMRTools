@@ -262,17 +262,18 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(row['field'],'600 MHz')
         self.assertEqual(row['machine_disposition'],'included')
         self.assertEqual(row['machine_assessment'],'not_assessed')
-        self.assertEqual(row['delays_used'],'all delays used')
+        self.assertNotIn('delays_used',row)
+        self.assertNotIn('fit_assessment',row)
         self.assertEqual((row['assessment'],row['comment']),('',''))
         self.assertEqual(row['machine_reason'],'')
     def test_brief_machine_reasons_keep_counts_and_unassessed_rows_blank(self):
         row=self.records(self.fixture())[0]
         row['qc']=('review', "retained-range trace flags: {'direct_startup_discontinuity_review': 8, 'water_frequency_change_review': 3}")
-        self.assertEqual(co.brief_machine_reason(row),'startup (8); water shift (3)')
+        self.assertEqual(co.brief_machine_reason(row),'FID start discontinuity (8 traces); water-region frequency outlier (3 traces)')
         row['pending']='nominal temperature provisional'
         row['exclusion']='reviewed strong late-FID growth: findings.json'
         row['qc']=('review','Strong water-dominated late-FID growth at 150,200 ms; 14 direct-startup review traces; ADC overflow recorded')
-        self.assertEqual(co.brief_machine_reason(row),'late-FID growth (150,200 ms); condition pending; startup (14); ADC overflow')
+        self.assertEqual(co.brief_machine_reason(row),'late-FID growth (150,200 ms); condition pending; FID start discontinuity (14 traces); ADC overflow')
         row['qc']=('not_assessed','no saved acquisition-level FID screen')
         self.assertEqual(co.brief_machine_reason(row),'')
         self.assertEqual(co.machine_review_context(row)['machine_disposition'],'excluded')
@@ -298,7 +299,7 @@ class OverviewTests(unittest.TestCase):
         definitions=[r for r in preamble if r]
         self.assertEqual(len(definitions),len(co.REVIEW_LOOKUP))
         self.assertTrue(all(len(r)==2 and r[0].startswith('# ') and '\n' not in r[1] for r in definitions))
-        self.assertIn(['# startup',dict(co.REVIEW_LOOKUP)['startup']],definitions)
+        self.assertIn(['# FID start discontinuity',dict(co.REVIEW_LOOKUP)['FID start discontinuity']],definitions)
         rows=co.read_tsv(path);rows[0]['comment']='one line\n# this is my comment, not a lookup row'
         with path.open('w',newline='') as handle:
             w=csv.writer(handle,delimiter='\t');w.writerows(preamble)
@@ -316,6 +317,33 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(co.brief_machine_reason(row),'QC review')
         row['qc']=('screened_no_major_flags','retained-range trace flags: none')
         self.assertEqual(co.brief_machine_reason(row),'')
+    def test_review_context_needs_no_peak_results_or_fit_headers(self):
+        row=self.records(self.fixture())[0]
+        for key in ('rows','metadata','directory'):
+            row.pop(key)
+        with mock.patch.object(co,'header_cells',side_effect=AssertionError('Review must not prepare fit summaries')):
+            context=co.machine_review_context(row)
+        self.assertNotIn('fit_assessment',context)
+        self.assertNotIn('delays_used',context)
+        self.assertEqual(context['experiment_type'],'R1')
+    def test_review_refresh_drops_old_analysis_columns_preserving_user_notes(self):
+        records=self.records(self.fixture());path=self.project/'review.tsv'
+        path.write_text('target\tdelays_used\tfit_assessment\tassessment\tcomment\tcustom\ncollection/3\tall delays used\t144 valid peaks; Holm=10/20\treview\tkeep my assessment\tkeep custom note\n')
+        co.initialise_reviews(path,records,update_context=True)
+        row=co.read_tsv(path)[0]
+        self.assertNotIn('delays_used',row);self.assertNotIn('fit_assessment',row)
+        self.assertEqual((row['assessment'],row['comment'],row['custom']),('review','keep my assessment','keep custom note'))
+        text=path.read_text()
+        self.assertNotIn('Holm',text);self.assertNotIn('valid peaks',text)
+        self.assertNotIn('departures_detected',text)
+    def test_screen_reason_labels_distinguish_fid_time_and_increment_features(self):
+        row=self.records(self.fixture())[0]
+        row['qc']=('review',"retained-range trace flags: {'isolated_direct_discontinuity_review': 2, 'isolated_water_amplitude_change_review': 1}")
+        self.assertEqual(co.brief_machine_reason(row),'later FID discontinuity (2 traces); water-region amplitude outlier (1 trace)')
+        lookup=dict(co.REVIEW_LOOKUP)
+        self.assertIn('first 0.5 ms',lookup['FID start discontinuity'])
+        self.assertIn('after 0.5 ms',lookup['later FID discontinuity'])
+        self.assertIn('across 15N increments',lookup['water-region frequency outlier'])
     def test_explicit_context_update_preserves_user_values_and_custom_condition_notes(self):
         records=self.records(self.fixture());path=self.project/'condition-reviews.tsv'
         condition=str(Path(*records[0]['directory'].relative_to(self.project).parts[:3]))
