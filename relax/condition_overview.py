@@ -29,9 +29,35 @@ MODES = {'15N T1': 'r1', '15N T1rho': 'r1rho', '1H-15N hetNOE': 'noe',
 SAMPLE_NAMES = {'ANP32A': 'ANP32aIDR', 'SeV Ntail': 'SeVNtail',
                 'HeTDR1 (folder/title evidence)': 'HeTDR1', 'heTDR1': 'HeTDR1'}
 REVIEW_FIELDS = ['target', 'protein', 'experiment_type', 'pulse_program',
-                 'acquisition_date', 'NaCl_mM', 'nominal_temperature_C', 'field_MHz',
+                 'acquisition_date', 'NaCl_mM', 'nominal_temperature_C', 'field',
                  'machine_disposition', 'machine_assessment', 'machine_reason',
                  'delays_used', 'fit_assessment', 'assessment', 'comment']
+
+REVIEW_LOOKUP = [
+    ('edit', 'Edit assessment and comment. Machine columns are saved evidence, not your decisions; ordinary regeneration leaves this file unchanged.'),
+    ('assessment', 'Blank keeps saved decisions; usable accepts an acquisition; review requests inspection; exclude removes it from condition overviews.'),
+    ('included', 'Condition is assigned and no reviewed exclusion applies. Inclusion does not mean QC passed.'),
+    ('condition_review', 'Condition assignment is unresolved or provisional; not included in a confirmed-condition overview.'),
+    ('excluded', 'A reviewed exclusion applies. A blank machine_reason for an unassessed acquisition does not cancel that decision.'),
+    ('not_assessed', 'No saved acquisition-level QC screen is available. machine_reason is intentionally blank; fit assessment is separate.'),
+    ('screened_no_major_flags', 'The saved acquisition-level screen found no major flags; this is not proof of clean intensities.'),
+    ('startup', 'Direct-dimension startup discontinuity; numbers in parentheses count flagged traces. Startup alone does not establish an acquisition-time event.'),
+    ('direct jump', 'An isolated direct-dimension discontinuity was flagged; parentheses count flagged traces.'),
+    ('water shift', 'Water-frequency changes were flagged; parentheses count flagged traces. This does not by itself establish acquisition damage.'),
+    ('water jump', 'Isolated water-amplitude changes were flagged; parentheses count flagged traces.'),
+    ('trace review', 'Isolated or modest trace features need review; they are not treated as confirmed corruption.'),
+    ('late-FID growth', 'Reviewed strong water-dominated growth late in the FID; an existing exclusion applies. Any stated milliseconds identify affected sampled delays.'),
+    ('reviewed exclusion', 'An explicit saved exclusion applies; consult the reviewed acquisition records for its original reason.'),
+    ('water growth', 'Flat or growing water FIDs were noted at some delays; the effect on short-delay intensities is unresolved.'),
+    ('ADC overflow', 'ADC overflow was logged; its buffer number has not been assigned to a delay plane.'),
+    ('water increment', 'A shared water-amplitude increment is a candidate observation; cause and physical time are unresolved.'),
+    ('condition pending', 'Salt, nominal temperature, field, construct or another reviewed condition remains unresolved/provisional. Unknown values are not inferred from controller settings.'),
+    ('QC review', 'Other saved screening notes require review; consult the original FID-screen records for the detailed evidence.'),
+    ('field', 'Field is rounded to the nearest MHz for display only; condition grouping retains the reviewed numerical value.'),
+    ('fit assessment', 'Valid/flagged are peak counts, not acquisition QC. Holm is the number of adjusted per-peak tests flagging departures / the number tested.'),
+    ('departures_detected', 'The saved decay assessment found departures at supplied noise levels. This does not establish a multiexponential mechanism.'),
+    ('delays used', 'All delays used means an all-delay fit. Otherwise the omitted shortest delay is stated; the saved fit selection is unchanged.'),
+]
 
 
 
@@ -264,28 +290,77 @@ def read_user_reviews(path, records, project):
 
 def read_tsv(path):
     with Path(path).open(newline='') as handle:
-        reader = csv.DictReader(handle, delimiter='\t')
-        if (not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames) or
-                not {'target', 'assessment', 'comment'}.issubset(reader.fieldnames)):
+        records = csv.reader(handle, delimiter='\t')
+        # Read the preamble as TSV records, so a quoted multiline user comment
+        # beginning with "#" inside the table is never mistaken for a lookup row.
+        for fields in records:
+            if fields and not fields[0].startswith('# '):
+                break
+        else:
+            fields = []
+        if (not fields or len(set(fields)) != len(fields) or
+                not {'target', 'assessment', 'comment'}.issubset(fields)):
             raise ValueError('Review TSV must contain target, assessment, comment; context columns are optional')
-        rows = list(reader)
-    if any(None in row or any(value is None for value in row.values()) for row in rows):
-        raise ValueError('Incomplete review TSV row')
+        rows = []
+        for values in records:
+            if not values:
+                continue
+            if len(values) != len(fields):
+                raise ValueError('Incomplete review TSV row')
+            rows.append(dict(zip(fields, values)))
     return rows
+
+
+def brief_machine_reason(row):
+    """Display recurring screen findings using the lookup terms, not long notes."""
+    if row['qc'][0] == 'not_assessed':
+        return ''
+    reasons = []
+    note = row['qc'][1]
+    if row['exclusion']:
+        if 'late-FID growth' in row['exclusion']:
+            growth = re.search(r'Strong water-dominated late-FID growth at ([\d, ]+) ms', note)
+            reasons.append('late-FID growth'+(' ('+growth[1]+' ms)' if growth else ''))
+        else:
+            reasons.append('reviewed exclusion')
+    if row['pending']:
+        reasons.append('condition pending')
+    for flag, label in [('direct_startup_discontinuity_review', 'startup'),
+                        ('isolated_direct_discontinuity_review', 'direct jump'),
+                        ('water_frequency_change_review', 'water shift'),
+                        ('isolated_water_amplitude_change_review', 'water jump')]:
+        count = re.search(r"['\"]"+flag+r"['\"]\s*:\s*(\d+)", note)
+        if count:
+            reasons.append(label+' ('+count[1]+')')
+    startup = re.search(r'(\d+) direct-startup review traces', note)
+    if startup:
+        reasons.append('startup ('+startup[1]+')')
+    elif 'startup_pattern_only' in note:
+        reasons.append('startup')
+    for fragment, label in [('isolated_or_modest_signature_review', 'trace review'),
+                             ('Median late/early >1', 'water growth'),
+                             ('Persistent near-flat/slightly growing water FID', 'water growth'),
+                             ('ADC overflow', 'ADC overflow'),
+                             ('Shared water-amplitude increment', 'water increment')]:
+        if fragment in note:
+            reasons.append(label)
+    if not reasons and row['qc'][0] != 'screened_no_major_flags':
+        reasons.append('QC review')
+    return '; '.join(dict.fromkeys(reasons))
 
 
 def machine_review_context(row):
     """Snapshot of automated evidence, kept separate from user decisions."""
     disposition = 'excluded' if row['exclusion'] else 'condition_review' if row['pending'] else 'included'
-    reasons = list(dict.fromkeys(value for value in (row['exclusion'], row['pending'], row['qc'][1]) if value))
     header = header_cells(row, row['directory'])
     return dict(target=row['relative_path'], protein=row['protein'],
                 experiment_type={'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[row['mode']],
                 pulse_program=row['pulse'], acquisition_date=row.get('acquisition_date') or 'unknown',
                 NaCl_mM=row.get('NaCl_mM') or 'unknown',
                 nominal_temperature_C=row.get('temperature_C') or 'unknown',
-                field_MHz=row.get('field_MHz') or 'unknown', machine_disposition=disposition,
-                machine_assessment=row['qc'][0], machine_reason='; '.join(reasons),
+                field=(f"{numeric(row.get('field_MHz')):.0f} MHz" if numeric(row.get('field_MHz')) is not None else 'unknown'),
+                machine_disposition=disposition,
+                machine_assessment=row['qc'][0], machine_reason=brief_machine_reason(row),
                 delays_used=header[2], fit_assessment=header[5])
 
 
@@ -299,7 +374,7 @@ def initialise_reviews(path, records, update_context=False):
                 for row in records}
     fields = list(REVIEW_FIELDS)
     for row in existing:
-        fields += [key for key in row if key not in fields]
+        fields += [key for key in row if key not in fields and key != 'field_MHz']
     output, seen = [], set()
     for row in existing:
         target = row['target'].strip()
@@ -308,6 +383,10 @@ def initialise_reviews(path, records, update_context=False):
         seen.add(target)
         # Preserve user assessment/comment and any custom columns verbatim.
         enriched = dict(row)
+        old_field = enriched.pop('field_MHz', '')  # Previous generated display column.
+        if old_field and not enriched.get('field'):
+            value = numeric(old_field)
+            enriched['field'] = f'{value:.0f} MHz' if value is not None else old_field
         if target in contexts:
             enriched.update(contexts[target])
         output.append(enriched)
@@ -315,12 +394,17 @@ def initialise_reviews(path, records, update_context=False):
         target = row['relative_path']
         if target not in seen:
             output.append(dict(contexts[target], assessment='', comment=''))
+    def write_sheet(handle):
+        lookup = csv.writer(handle, delimiter='\t', lineterminator='\n')
+        lookup.writerows([['# '+term, explanation] for term, explanation in REVIEW_LOOKUP])
+        lookup.writerow([])
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', lineterminator='\n')
+        writer.writeheader(); writer.writerows(output)
     if before is None:
         # Exclusive creation never clobbers a concurrently created user input.
         try:
             with path.open('x', newline='') as handle:
-                writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', lineterminator='\n')
-                writer.writeheader(); writer.writerows(output)
+                write_sheet(handle)
         except FileExistsError:
             return
     else:
@@ -328,8 +412,7 @@ def initialise_reviews(path, records, update_context=False):
         with tempfile.TemporaryDirectory(prefix='.review-context-', dir=path.parent) as folder:
             stage = Path(folder)
             with (stage/path.name).open('w', newline='') as handle:
-                writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t', lineterminator='\n')
-                writer.writeheader(); writer.writerows(output)
+                write_sheet(handle)
             if path.read_bytes() != before:
                 raise ValueError('User review input changed during context update')
             backup = path.parent/'.report-backups'/('review-context-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))

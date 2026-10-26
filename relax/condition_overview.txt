@@ -120,7 +120,7 @@ condition-reviews.tsv in the project root is EDITABLE INPUT. Normal regeneration
 never rewrites it. It is created once with acquisition metadata and automatic
 assessment snapshots alongside separate user fields:
     target, protein, experiment_type, pulse_program, acquisition_date,
-    NaCl_mM, nominal_temperature_C, field_MHz,
+    NaCl_mM, nominal_temperature_C, field,
     machine_disposition, machine_assessment, machine_reason,
     delays_used, fit_assessment,
     assessment, comment
@@ -131,6 +131,19 @@ included, excluded or condition_review; machine_assessment identifies the saved
 QC state (including review or not_assessed). Pending/provisional condition
 qualifications remain explicit in machine_reason. Metadata values are catalog
 snapshots, not new measurements or newly confirmed conditions.
+
+A lookup section precedes the table: one # term / explanation TSV row per
+reason or useful definition. The reader skips these initial records and accepts
+older files without them. Reasons use short lookup phrases such as
+"startup (8); water shift (3)"; parentheses count flagged traces. Detailed
+evidence remains in the saved acquisition-screen records. Unassessed rows have
+blank machine_reason cells; their condition/disposition and fit assessment still
+apply independently. Rows with no major acquisition-screen flags need no reason.
+The field column is display-only, rounded to the nearest MHz with units (e.g.
+600 MHz); grouping retains the original reviewed field value. Explicit context
+updates replace the previous generated field_MHz column with this display field.
+The lookup also explains inclusion versus QC, pending conditions, delay usage
+and the saved fit-assessment counts. Edit decisions in the table below it.
 
 Edit assessment and comment for your own decisions. They start blank. --user-reviews
 PATH selects a different input. Old three-column target/assessment/comment files

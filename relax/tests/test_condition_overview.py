@@ -259,10 +259,63 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(row['pulse_program'],'actual_sequence')
         self.assertEqual(row['NaCl_mM'],'50')
         self.assertEqual(row['nominal_temperature_C'],'25')
+        self.assertEqual(row['field'],'600 MHz')
         self.assertEqual(row['machine_disposition'],'included')
         self.assertEqual(row['machine_assessment'],'not_assessed')
         self.assertEqual(row['delays_used'],'all delays used')
         self.assertEqual((row['assessment'],row['comment']),('',''))
+        self.assertEqual(row['machine_reason'],'')
+    def test_brief_machine_reasons_keep_counts_and_unassessed_rows_blank(self):
+        row=self.records(self.fixture())[0]
+        row['qc']=('review', "retained-range trace flags: {'direct_startup_discontinuity_review': 8, 'water_frequency_change_review': 3}")
+        self.assertEqual(co.brief_machine_reason(row),'startup (8); water shift (3)')
+        row['pending']='nominal temperature provisional'
+        row['exclusion']='reviewed strong late-FID growth: findings.json'
+        row['qc']=('review','Strong water-dominated late-FID growth at 150,200 ms; 14 direct-startup review traces; ADC overflow recorded')
+        self.assertEqual(co.brief_machine_reason(row),'late-FID growth (150,200 ms); condition pending; startup (14); ADC overflow')
+        row['qc']=('not_assessed','no saved acquisition-level FID screen')
+        self.assertEqual(co.brief_machine_reason(row),'')
+        self.assertEqual(co.machine_review_context(row)['machine_disposition'],'excluded')
+    def test_field_display_rounding_and_legacy_column_migration(self):
+        records=self.records(self.fixture());row=records[0]
+        for value,expected in [('599.8','600 MHz'),('950.23','950 MHz'),('unknown','unknown')]:
+            row['field_MHz']=value
+            self.assertEqual(co.machine_review_context(row)['field'],expected)
+        row['field_MHz']='700.13'
+        path=self.project/'review.tsv'
+        path.write_text('target\tfield_MHz\tassessment\tcomment\ncollection/3\t599.8\treview\tmy note\n')
+        co.initialise_reviews(path,records,update_context=True)
+        result=co.read_tsv(path)[0]
+        self.assertEqual(result['field'],'700 MHz')
+        self.assertNotIn('field_MHz',result)
+        self.assertEqual((result['assessment'],result['comment']),('review','my note'))
+    def test_lookup_rows_precede_header_and_quoted_hash_comments_survive(self):
+        records=self.records(self.fixture());path=self.project/'review.tsv'
+        co.initialise_reviews(path,records)
+        with path.open(newline='') as handle:
+            physical=list(csv.reader(handle,delimiter='\t'))
+        preamble=physical[:physical.index(co.REVIEW_FIELDS)]
+        definitions=[r for r in preamble if r]
+        self.assertEqual(len(definitions),len(co.REVIEW_LOOKUP))
+        self.assertTrue(all(len(r)==2 and r[0].startswith('# ') and '\n' not in r[1] for r in definitions))
+        self.assertIn(['# startup',dict(co.REVIEW_LOOKUP)['startup']],definitions)
+        rows=co.read_tsv(path);rows[0]['comment']='one line\n# this is my comment, not a lookup row'
+        with path.open('w',newline='') as handle:
+            w=csv.writer(handle,delimiter='\t');w.writerows(preamble)
+            w.writerow(co.REVIEW_FIELDS);w.writerows([[row.get(k,'') for k in co.REVIEW_FIELDS] for row in rows])
+        before=path.read_bytes()
+        co.read_user_reviews(path,records,self.project)
+        self.assertIn('# this is my comment',records[0]['user_comment'])
+        co.initialise_reviews(path,records)
+        self.assertEqual(path.read_bytes(),before)
+        co.initialise_reviews(path,records,update_context=True)
+        self.assertEqual(co.read_tsv(path)[0]['comment'],rows[0]['comment'])
+    def test_unknown_qc_notes_are_reviewed_and_no_major_flags_need_no_reason(self):
+        row=self.records(self.fixture())[0]
+        row['qc']=('review','saved screening error needing inspection')
+        self.assertEqual(co.brief_machine_reason(row),'QC review')
+        row['qc']=('screened_no_major_flags','retained-range trace flags: none')
+        self.assertEqual(co.brief_machine_reason(row),'')
     def test_explicit_context_update_preserves_user_values_and_custom_condition_notes(self):
         records=self.records(self.fixture());path=self.project/'condition-reviews.tsv'
         condition=str(Path(*records[0]['directory'].relative_to(self.project).parts[:3]))
