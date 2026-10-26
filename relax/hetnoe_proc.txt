@@ -1,0 +1,136 @@
+INTERLEAVED HetNOE PROCESSING
+
+Keep hetnoe_proc.com, hetnoe_proc.py and relax_tools.py together.
+Requirements: Python 3.8+, tcsh, NMRPipe (including its configured macros and
+specStat.com), and pipe2ucsf. The helper uses the Python standard library only.
+The existing processing/analyzing scripts and experiment copies are unchanged.
+
+Run from the ORIGINAL interleaved experiment, for example:
+
+    cd /path/to/20250512_15N_hANP32a_50mMNaCl/5
+    tcsh /path/to/FTNMRTools/relax/hetnoe_proc.com
+
+This processes both states in one invocation. No TopSpin split or new Bruker
+expnos are needed. Edit the common H/N phases, zero-fill sizes and baseline
+orders at the top of hetnoe_proc.com. Zero phases are starting settings; tune
+on the reference plane before quantitative use. TopSpin phase values are not
+automatically transferable. Use the SAME phase settings for both planes.
+Absolute-path invocation is recommended; PATH entrypoints and symlinks work.
+
+For a READ-ONLY acquisition check (does not process):
+
+    python3 /path/to/hetnoe_proc.py inspect --experiment /path/to/collection/5
+
+Or process with explicit settings and destination:
+
+    python3 /path/to/hetnoe_proc.py process --experiment /path/to/collection/5 \
+        --h-p0 0 --h-p1 0 --n-p0 0 --n-p1 0 \
+        --n-baseline-order 4 --h-baseline-order 4 \
+        --output-dir /path/to/test-output
+
+ACQUISITION AND PLANE ORDER
+
+Reviewed programs: 15N_HETNOE and N15HetNoe_rk.nl, packed 2D DQD /
+echo-antiecho (FnMODE 6) acquisitions with alternating reference/saturation
+FID records inside each echo/antiecho pair. The saved pulse program's
+initial state and loop order are checked. Split copies, unknown layouts,
+NUS acquisition, incomplete records and mismatched row counts are rejected.
+
+Plane 1 = reference (NONOE, saturation off).
+Plane 2 = saturated (NOE, saturation on).
+
+Whole FID records are demultiplexed in a temporary directory. Each state is
+converted using bruk2pipe -yMODE Echo-AntiEcho, which performs Rance-Kay
+shuffling once. No second macro, States-TPPI alternation, or etaXY-specific
+axis correction is applied. See the NMRPipe reference for conversion and
+interleaved data:
+https://spin.niddk.nih.gov/NMRPipe/newdocs/ref/
+
+Both int32 (DTYPA 0) and float64 (DTYPA 2) raw files are supported in either
+byte order, with 1024-byte record padding. Float64 is converted to native
+float32 in temporary files before bruk2pipe -noi2f. No intensity rescaling
+is applied. Nonfinite/out-of-range values are rejected.
+
+Some existing folders have raw lengths inconsistent with acqu2s TD, including
+cases where editable acqu2 differs from saved status acqu2s. The script never
+silently selects one or truncates the raw data. After reviewing the acquisition,
+--raw-rows N explicitly selects the FULL file's row count. N must match the
+file exactly and be a positive multiple of four. This override is recorded.
+The int32 May 12 experiment 5 matches status metadata without an override.
+
+PROCESSING AND THE 15N BASELINE
+
+Both planes use the same recipe:
+    H: SOL; SP .4/.98/2/.5; ZF; FT; left-half extraction; PS -di.
+    Transpose to N.
+    N: SP .4/.98/2/.5; ZF; FT; PS -di; POLY -auto -ord 4.
+    Transpose back to H; POLY -auto -ord 4.
+
+The explicit N baseline correction is applied WHILE N IS THE ACTIVE
+DIMENSION, after N phasing and before the final transpose. A final POLY after
+that transpose acts on H alone and does not replace the N correction.
+Baseline orders are editable independently; the N step is always present.
+The actual orders and phases are saved in processing.txt.
+
+POLY -auto estimates baseline regions separately on each spectrum. Inspect
+both strong reference and weak/negative NOE peaks: broad real signal and
+crowded spectra can complicate automated baseline selection. Baseline
+correction removes baseline structure; it does not eliminate every source
+of random noise or coherent t1 artifacts. Signed peaks are retained, with
+no magnitude operation, clipping, sign repair or per-plane normalization.
+Noise is estimated separately AFTER both baseline corrections.
+
+OUTPUTS AND ANALYSIS
+
+All generated spectra stay in a dedicated hetnoe_processed/ directory:
+    planes/plane_01.ft2   reference, ordinary 2D NMRPipe
+    planes/plane_02.ft2   saturated, ordinary 2D NMRPipe
+    m.ft3                two-plane pseudo-3D NMRPipe stack
+    proc.ucsf            the same series for viewing
+    vEstNoise.txt        count followed by reference/saturated noise SDs
+    relax_header.txt     "2 0 1"; fitter state codes, NOT delays
+    processing.txt       source folder, expno, plane roles and settings
+
+Export ONE assigned peak list on the well-phased reference plane; use its
+fixed coordinates in both planes. Peaks can have negative saturated heights.
+The ordinary ratio is I_saturated / I_reference; never use absolute values.
+
+The existing v2 analyzer accepts the stack, header and per-plane noise file.
+Run analysis from the ORIGINAL experiment folder so source provenance names
+the collection/expno correctly, and include HetNOE in the peak-list filename:
+
+    python3 /path/to/relax_tools.py analyze --peaks ANP32A_HetNOE.list \
+        --peak-format sparky2d --data hetnoe_processed/m.ft3 \
+        --header hetnoe_processed/relax_header.txt \
+        --noise hetnoe_processed/vEstNoise.txt
+
+For a stack-exported list with a dummy third coordinate, use sparky3d.
+The v2 analyzer retains its PDF, slim numbers CSV and support ZIP outputs.
+This processor does not run extraction or analysis itself.
+
+FAILED RUNS AND CHECKS
+
+Every conversion and pipeline stage is checked. Both planes and positive
+noise estimates must pass validation before output publication. A shared
+output-directory lock prevents concurrent processing; staging and rollback
+preserve previous outputs on failure. Original raw files, existing TopSpin
+processed spectra and CCPN projects are untouched.
+
+    python3 -m unittest discover -s relax/tests -p 'test_hetnoe_proc.py' -v
+
+An optional installed-tools smoke test uses SYNTHETIC DATA ONLY:
+
+    env FTNMR_RUN_NMRPIPE_TESTS=1 python3 -m unittest discover \
+        -s relax/tests -p 'test_hetnoe_proc.py' -v
+
+Run the optional check within your configured NMRPipe environment. It verifies
+that negative NOE scaling is preserved through both baseline corrections and
+that int32 / big-endian float64 versions produce identical spectrum payloads.
+Other tests cover byte order, record padding, reference/NOE roles, N versus H
+baseline placement, modified/unknown acquisitions, counts, intermediate
+pipeline failures, input changes, old-output preservation and entrypoint paths.
+
+Read-only real-data validation (2026-10-26): May 12 experiment 5 demultiplexes
+to EXACTLY the existing 10005/10006 raw files, byte for byte. This validates
+record/state separation, not final phase or baseline quality on real data.
+No real dataset was processed or fitted while adding this script.

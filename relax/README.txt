@@ -204,3 +204,13 @@ reason. A malformed candidate or failed external command aborts publication,
 leaving previous outputs intact. Invalid non-cohort candidate fits remain
 invalid if the experiment-wide candidate is selected; they never silently
 borrow an all-point rate.
+
+Interleaved HetNOE processing
+---------------------------
+
+Use hetnoe_proc.com on the original 15N_HETNOE / N15HetNoe_rk.nl acquisition
+without creating TopSpin split experiment numbers. It writes matched reference
+and saturated planes in hetnoe_processed/, including an explicit POLY baseline
+correction along 15N before the final transpose, then correction along H.
+Both planes share the same editable phases/windows/baseline orders.
+See hetnoe_proc.txt for acquisition checks, plane roles, noise and analysis.
