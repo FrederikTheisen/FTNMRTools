@@ -106,7 +106,10 @@ def profile(folder, raw_rows=None):
     row_bytes = ((td*word_bytes+1023)//1024)*1024
     size = (folder/'ser').stat().st_size
     observed, remainder = divmod(size, row_bytes)
-    rows = metadata_rows if raw_rows is None else raw_rows
+    inferred_interleaved_rows = (raw_rows is None and
+                                 program in ('15N_HETNOE', 'N15HetNoe_rk.nl') and
+                                 observed == 2*metadata_rows)
+    rows = (observed if inferred_interleaved_rows else metadata_rows) if raw_rows is None else raw_rows
     if rows <= 0 or rows % 4:
         raise ValueError('Raw row count must be a positive multiple of four (two states x echo/antiecho)')
     if remainder or observed != rows:
@@ -121,7 +124,8 @@ def profile(folder, raw_rows=None):
     number(acq, 'GRPDLY')
     return dict(folder=folder, acq=acq, indirect=indirect, program=program, pulse_path=pulse_path, td=td,
                 rows=rows, metadata_rows=metadata_rows, row_bytes=row_bytes,
-                datatype=datatype, byte_order=byte_order, raw_rows_override=raw_rows is not None)
+                datatype=datatype, byte_order=byte_order, raw_rows_override=raw_rows is not None,
+                raw_rows_inferred_interleaved=inferred_interleaved_rows)
 
 
 def split_raw(p, directory):
@@ -262,6 +266,7 @@ def process(args):
             f"plane_roles: {', '.join(ROLES)}\nplane_codes: 0, 1\n"
             f"raw_type: {'int32' if p['datatype'] == 0 else 'float64 -> native float32, no normalization'}\n"
             f"metadata_TD1: {p['metadata_rows']}\nraw_rows: {p['rows']}\nraw_rows_override: {p['raw_rows_override']}\n"
+            f"raw_rows_inferred_interleaved: {p['raw_rows_inferred_interleaved']}\n"
             f"h_phase: {args.h_p0}, {args.h_p1}\nn_phase: {args.n_p0}, {args.n_p1}\n"
             f"zero_fill: {args.h_zf}, {args.n_zf}\n"
             f"15N_baseline: POLY -auto -ord {args.n_baseline_order} (after N PS -di, before TP)\n"
@@ -293,7 +298,9 @@ def main(argv=None):
         if args.command == 'inspect':
             p = profile(args.experiment, args.raw_rows)
             print(f"{p['folder']}\nPulse program: {p['program']}\n"
-                  f"Raw rows: {p['rows']} (acqu2s TD={p['metadata_rows']}; explicit override={p['raw_rows_override']})\n"
+                  f"Raw rows: {p['rows']} (acqu2s TD={p['metadata_rows']}; "
+                  f"interleaved count inferred={p['raw_rows_inferred_interleaved']}; "
+                  f"explicit override={p['raw_rows_override']})\n"
                   f"{p['rows']//4} complex N points per plane; echo/antiecho\n"
                   'Plane 1: reference; plane 2: saturated.\n'
                   'Plan: common phasing/windows, explicit 15N baseline correction, then H baseline correction.')
