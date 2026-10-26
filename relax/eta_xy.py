@@ -193,7 +193,7 @@ def write_numbers(path, peaks, extracted, noises, profile, peak_name, spectrum_n
         metadata = dict(source_folder=profile.get('source_folder',profile['folder'].parent.name),
                         expno=profile.get('expno',profile['folder'].name),
                         experiment_type='eta_xy', peak_list=peak_name, source_spectrum=spectrum_name,
-                        pulse_program='nico_nnh_tr_noSE', evolution_time_s=profile['time'],
+                        pulse_program=profile['acq']['PULPROG'], evolution_time_s=profile['time'],
                         plane_roles=', '.join(ROLES), plane_noise_sd=', '.join(map(str,noises)),
                         rate_convention='magnitude', noise_propagation='first_order_independent_planes',
                         **shared)
@@ -208,7 +208,8 @@ def plot_script(stage, prefix, results, profile, peak_name):
     q = rt.gnuplot_string
     residues = [r['peak']['residue'] for r in results]
     low, high = min(residues)-2, max(residues)+2
-    title = profile.get('source_folder',profile['folder'].parent.name)+'/'+profile.get('expno',profile['folder'].name)+' | '+peak_name
+    title = (profile.get('source_folder',profile['folder'].parent.name)+'/'+profile.get('expno',profile['folder'].name)+' | '+peak_name+
+             '\nPulse sequence: '+profile['acq']['PULPROG'])
     valid = [r for r in results if r['valid']]
     note = (f"T = {profile['time']:.6g} s (D20); {len(valid)}/{len(results)} valid; "
             f"{sum(r['peak']['overlap'] for r in results)} overlaps. |etaXY| = atanh(q)/T (magnitude).\n"
@@ -285,6 +286,8 @@ def analyze(args):
                         origin[key] = value
             if not {'source_folder','expno','peak_list','source_spectrum','evolution_time_s'}.issubset(origin):
                 raise ValueError('Saved extraction lacks its source/timing metadata')
+            if origin.get('pulse_program', profile['acq']['PULPROG']) != profile['acq']['PULPROG']:
+                raise ValueError('Saved extraction pulse program disagrees with acquisition PULPROG')
             if float(origin['evolution_time_s']) != profile['time']:
                 raise ValueError('Saved extraction time disagrees with acquisition D20')
             if (profile['folder']/'ser').exists() and (origin['source_folder'],origin['expno']) != (
@@ -298,7 +301,7 @@ def analyze(args):
             with raw.open('a') as handle:
                 for key,value in dict(source_folder=profile['folder'].parent.name,expno=profile['folder'].name,
                                       peak_list=peak_name,source_spectrum=spectrum_name,
-                                      evolution_time_s=profile['time']).items():
+                                      evolution_time_s=profile['time'],pulse_program=profile['acq']['PULPROG']).items():
                     text=str(value).replace('\r','\\r').replace('\n','\\n')
                     handle.write(f'# {key}: {text}\n')
         extracted = rt.parse_extracted(raw.read_text(),peaks,4)

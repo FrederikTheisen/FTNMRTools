@@ -186,6 +186,10 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.calls[0][self.calls[0].index('-pfmt')+1],'sparky2d')
         text=(self.root/'eta_numbers.csv').read_text()
         self.assertIn('# plane_noise_sd: 1.0, 2.0, 3.0, 4.0',text)
+        self.assertIn('# pulse_program: nico_nnh_tr_noSE',text)
+        with zipfile.ZipFile(self.root/'eta_support.zip') as archive:
+            self.assertIn('Pulse sequence: nico_nnh_tr_noSE',archive.read('plot.gnu').decode())
+            self.assertIn('# pulse_program: nico_nnh_tr_noSE',archive.read('extracted_ids.out').decode())
         self.assertNotIn('analysis_id',text)
         self.assertIn('# coordinates_source: reference.list',text)
         self.assertIn('# purpose: actual-data test',text)

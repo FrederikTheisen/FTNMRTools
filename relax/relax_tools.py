@@ -451,7 +451,7 @@ LEGACY_TRACE_FIELDS = ['schema_version', 'analysis_id', 'source_collection', 'so
                 'fit_output_sha256', 'noise_sha256']
 TRACE_FIELDS = ['schema_version', 'analysis_id', 'source_collection', 'source_experiment',
                 'peak_list', 'output_prefix', 'pdf_name', 'experiment_type', 'fit_model',
-                'fit_origin', 'report_version']
+                'fit_origin', 'report_version', 'pulse_program']
 CSV_FIELDS = TRACE_FIELDS + [
     'peak_index', 'peak_id', 'assignment', 'residue', 'w1', 'w2', 'w3', 'overlap',
     'duplicate_assignment', 'valid_fit', 'plane_index', 'delay_s', 'plane_code',
@@ -651,6 +651,10 @@ def fit_with_early_test(stage, peaks, extracted, times, noises, mode, policy='au
 
 # Schema 1 is accepted only as an input format. Its obsolete trace fields and
 # methods prose are never carried into new reports and are not used as hashes.
+PRE_PULSE_TRACE_FIELDS = [field for field in TRACE_FIELDS if field != 'pulse_program']
+PRE_PULSE_CSV_FIELDS = [field for field in CSV_FIELDS if field != 'pulse_program']
+PRE_PULSE_EARLY_CSV_FIELDS = [field for field in EARLY_CSV_FIELDS if field != 'pulse_program']
+
 LEGACY_CSV_FIELDS = LEGACY_TRACE_FIELDS + CSV_FIELDS[len(TRACE_FIELDS):]
 LEGACY_CSV_FIELDS.insert(LEGACY_CSV_FIELDS.index('dataset_conclusion'), 'assessment_method')
 LEGACY_EARLY_CSV_FIELDS = LEGACY_CSV_FIELDS + EARLY_CSV_FIELDS[len(CSV_FIELDS):]
@@ -738,6 +742,38 @@ def residual_summary(values):
                 sign_fraction=signs, bias=bias, n=len(values))
 
 
+def pulse_program_from_text(text, source='acqus'):
+    """Read only saved PULPROG, without interpreting pulse names as fit types."""
+    matches = re.findall(r'^##\$PULPROG=([^\n\r]*)', text, re.M)
+    if not matches:
+        return 'unknown'
+    if len(matches) != 1:
+        raise ValueError(f'{source}: duplicate PULPROG')
+    value = matches[0].split('$$', 1)[0].strip()
+    if value.startswith('<') and value.endswith('>'):
+        value = value[1:-1].strip()
+    if not value or any(ord(c) < 32 for c in value) or '<' in value or '>' in value:
+        raise ValueError(f'{source}: invalid PULPROG')
+    return value
+
+
+def acquisition_pulse_program(folder):
+    path = Path(folder)/'acqus'
+    return pulse_program_from_text(path.read_text(), path) if path.is_file() else 'unknown'
+
+
+def add_acquisition_pulse(context, folder):
+    """Enrich saved reports only from the matching acquisition directory."""
+    folder = Path(folder)
+    if (folder.parent.name, folder.name) != (context['source_collection'], context['source_experiment']):
+        return
+    pulse = acquisition_pulse_program(folder)
+    previous = context.get('pulse_program', 'unknown')
+    if pulse != 'unknown' and previous not in ('unknown', '', pulse):
+        raise ValueError('Saved pulse program disagrees with acquisition PULPROG')
+    context['pulse_program'] = pulse if pulse != 'unknown' else previous
+
+
 def report_context(mode, prefix, pdf_name, run_tag, **extra):
     parts = run_tag.rsplit('/', 1)
     context = dict(schema_version=REPORT_SCHEMA, source_collection=parts[0],
@@ -745,7 +781,7 @@ def report_context(mode, prefix, pdf_name, run_tag, **extra):
                    peak_list=prefix + '.list', output_prefix=prefix, pdf_name=pdf_name,
                    experiment_type=mode, fit_model='noe' if mode == 'noe' else 'exp2',
                    fit_origin='saved-results', analysis_id=str(uuid.uuid4()),
-                   report_version=REPORT_VERSION)
+                   report_version=REPORT_VERSION, pulse_program='unknown')
     context.update(extra)
     context['report_version'] = REPORT_VERSION
     return context
@@ -979,7 +1015,7 @@ def write_numbers_csv(path, report):
         metadata = dict(source_folder=context['source_collection'],
                         expno=context['source_experiment'], experiment_type=mode,
                         peak_list=context['peak_list'], fit_model=context['fit_model'],
-                        fit_origin=context['fit_origin'])
+                        fit_origin=context['fit_origin'], pulse_program=context.get('pulse_program', 'unknown'))
         if mode != 'noe':
             metadata.update(fit_basis=audit.get('fit_basis', 'all_points'))
             if audit:
@@ -1040,18 +1076,21 @@ def load_analysis_csv(path):
     with Path(path).open(newline='') as handle:
         reader = csv.DictReader(handle)
         input_fields = reader.fieldnames
-        if input_fields not in (CSV_FIELDS, EARLY_CSV_FIELDS, LEGACY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS):
+        if input_fields not in (CSV_FIELDS, EARLY_CSV_FIELDS, LEGACY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS,
+                                PRE_PULSE_CSV_FIELDS, PRE_PULSE_EARLY_CSV_FIELDS):
             raise ValueError('Unsupported or incomplete analysis CSV schema')
         schema_fields = reader.fieldnames
-        early = schema_fields in (EARLY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS)
+        early = 'early_point_audit_json' in schema_fields
         records = list(reader)
     if not records or any(None in row or None in row.values() for row in records):
         raise ValueError('Empty or incomplete analysis CSV')
     legacy = input_fields in (LEGACY_CSV_FIELDS, LEGACY_EARLY_CSV_FIELDS)
-    trace_fields = (LEGACY_TRACE_FIELDS if legacy else TRACE_FIELDS) + (['early_point_audit_json'] if early else [])
+    trace_fields = [key for key in (LEGACY_TRACE_FIELDS if legacy else TRACE_FIELDS)
+                    if key in input_fields] + (['early_point_audit_json'] if early else [])
     if records[0]['schema_version'] != ('2' if legacy and early else '1' if legacy else REPORT_SCHEMA):
         raise ValueError('Unsupported analysis CSV schema version')
     context = {key: records[0][key] for key in (EARLY_TRACE_FIELDS if early else TRACE_FIELDS) if key in records[0]}
+    context.setdefault('pulse_program', 'unknown')
     if legacy:
         context.update(schema_version=REPORT_SCHEMA, analysis_id='', report_version=REPORT_VERSION)
     else:
@@ -1146,6 +1185,7 @@ def load_analysis_csv(path):
     for record in records:
         wanted = expected[(record['peak_index'],record['plane_index'])]
         for key in (EARLY_CSV_FIELDS if early else CSV_FIELDS):
+            if key == 'pulse_program' and key not in input_fields: continue
             if legacy and key in ('schema_version','analysis_id','report_version'): continue
             actual = record[key]; value = wanted.get(key)
             if legacy and key=='early_point_audit_json':
@@ -1254,7 +1294,8 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
         schema=mappings[0]['schema_version']
         if schema not in ('1', REPORT_SCHEMA):
             raise ValueError('Unsupported saved diagnostics schema')
-        trace_fields=LEGACY_TRACE_FIELDS if schema=='1' else TRACE_FIELDS
+        trace_fields=(LEGACY_TRACE_FIELDS if schema=='1' else
+                      TRACE_FIELDS if 'pulse_program' in mappings[0] else PRE_PULSE_TRACE_FIELDS)
         if any(any(key not in row for key in trace_fields) for row in mappings):
             raise ValueError('Incomplete saved diagnostics provenance')
         previous={key:mappings[0][key] for key in trace_fields}
@@ -1263,6 +1304,7 @@ def load_saved_analysis(source, prefix, mode, peak_list_name=None):
         if previous['fit_model']!=context['fit_model'] or previous['output_prefix']!=prefix:
             raise ValueError('Saved diagnostics model/prefix mismatch')
         context.update({key:previous[key] for key in ('source_collection','source_experiment','fit_origin')})
+        context['pulse_program'] = previous.get('pulse_program', 'unknown')
         if schema==REPORT_SCHEMA:
             context['analysis_id']=validate_analysis_id(previous['analysis_id'])
     return dict(peaks=peaks,extracted=extracted,fit_text=fit_text,times=times,noises=noises,context=context)
@@ -1409,6 +1451,8 @@ def refresh_report(args):
         else:
             raise ValueError('No saved fitter files or support archive found')
         bundle=load_saved_analysis(native_source,args.saved_prefix,args.experiment_type,args.peak_list_name)
+        if (source/'acqus').is_file():
+            watched.append(source/'acqus')
     destination=Path(args.output_dir).resolve() if args.output_dir else source
     if not destination.is_dir():raise ValueError('Report output directory must already exist')
     try:
@@ -1421,6 +1465,8 @@ def refresh_report(args):
             else:
                 bundle=load_saved_analysis(native_source,args.saved_prefix,args.experiment_type,args.peak_list_name)
             c=bundle['context'];mode=c['experiment_type']
+            if not args.csv:
+                add_acquisition_pulse(c, source)
             internal_names=prepare_reports(stage,bundle['peaks'],bundle['extracted'],bundle['fit_text'],
                               bundle['times'],bundle['noises'],mode,c['output_prefix'],c['pdf_name'],
                               c['source_collection']+'/'+c['source_experiment'],context=c,
@@ -1501,6 +1547,7 @@ def report_intro(report):
     lines = [CONCLUSIONS[report['conclusion']],
              'Dataset: ' + c['source_collection'] + '/' + c['source_experiment'],
              'Peak list: ' + c['peak_list'],
+             'Pulse sequence: ' + c.get('pulse_program', 'unknown'),
              f"{len(rows)} peaks; {len(report['times'])} acquisition planes; {len(set(report['times']))} distinct plane values"]
     if mode != 'noe':
         lines += [f"Assessment: {report['primary_count']} eligible; {len(rows)-report['primary_count']} excluded",
@@ -1578,6 +1625,7 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
     context = dict(context) if context is not None else report_context(mode, prefix, pdf_name, run_tag)
     early_selection = early_selection or context.pop('_early_point_selection',None)
     context = {key:value for key,value in context.items() if key in TRACE_FIELDS}
+    context.setdefault('pulse_program', 'unknown')
     context['schema_version'] = REPORT_SCHEMA
     context['analysis_id'] = validate_analysis_id(context.get('analysis_id') or str(uuid.uuid4()))
     context['report_version'] = REPORT_VERSION
@@ -1754,6 +1802,9 @@ def analyze(args):
     pdf_name = peak_path.name + '_intensity.pdf'
     run_tag = source.parent.name + '/' + source.name
     with run_directory(source, 'analyze') as stage:
+        acq_path = source/'acqus'
+        acq_before = acq_path.read_bytes() if acq_path.is_file() else None
+        pulse = pulse_program_from_text(acq_before.decode(), acq_path) if acq_before is not None else 'unknown'
         clean = stage / 'peaks.list'
         clean.write_text('assignment ' + ' '.join(f'w{i}' for i in range(1, len(peaks[0]['coordinates']) + 1)) + '\n' +
                          ''.join(p['peak_id'] + ' ' + ' '.join(p['coordinates']) + '\n' for p in peaks))
@@ -1781,7 +1832,7 @@ def analyze(args):
         names = prepare_reports(stage, peaks, extracted, (stage / 'rlx_dfit.out').read_text(),
                                 times, noises, mode, prefix, pdf_name, run_tag,
                                 context=report_context(mode, prefix, pdf_name, run_tag,
-                                    peak_list=peak_path.name, fit_origin='analysis'),
+                                    peak_list=peak_path.name, fit_origin='analysis', pulse_program=pulse),
                                 early_selection=early_selection)
         restored = ''.join(p['assignment'] + ' ' + ' '.join(f'{v:.17g}' for v in extracted[p['peak_id']]) + '\n' for p in peaks)
         (stage / 'data_xtr.out').write_text(restored)
@@ -1792,6 +1843,8 @@ def analyze(args):
         native_names=['data_xtr.out','rlx_dfit.inp','rlx_dfit.out','vEstNoise.txt',
                       'relax_header.txt']+artifact_names
         write_support_archive(stage/support_name,prefix,stage,stage,native_names,names)
+        if acq_before is not None and acq_path.read_bytes() != acq_before:
+            raise ValueError('Acquisition PULPROG input changed during analysis')
         publish(stage,source,[pdf_name,numbers_name,support_name])
 
 

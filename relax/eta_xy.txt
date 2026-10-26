@@ -138,3 +138,7 @@ VERIFICATION WITHOUT DATA PROCESSING
 
 Tests use synthetic acquisition/data files and stub external commands. Writing
 the scripts and running these tests does not process experimental spectra.
+
+The pulse sequence name (saved acqus PULPROG) is shown in the PDF and stored
+once in the numbers CSV footer, as well as in saved extraction provenance.
+A saved-extraction sequence conflict is rejected before analysis.

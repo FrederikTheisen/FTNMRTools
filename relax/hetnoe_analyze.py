@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import relax_tools as rt
 import json
 import math
 import re
@@ -9,7 +10,7 @@ from collections import defaultdict
 def read_peak_file(path):
     """Read compact noise comments, preserving the peak table bytes."""
     data = Path(path).read_bytes()
-    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region', 'source_folder'}
+    names = {'noise_sd', 'noise_method', 'spectrum_scale', 'noise_region', 'source_folder', 'pulse_program'}
     fields = {}
     table_lines = []
     in_footer = False
@@ -167,7 +168,29 @@ def compute_ratio_and_error(A_noe, B_ref, sigma, allow_zero_ref=False, sigma_ref
     sigma_R = math.hypot(sigma / B_ref, R * ref_sd / B_ref)
     return (R, sigma_R)
 
-def write_out(path, rows, simple=True):
+def peak_pulse_program(path, explicit=None):
+    path = Path(path).resolve()
+    values = [line.split(':', 1)[1].strip() for line in path.read_text().splitlines()
+              if line.lstrip().startswith('# pulse_program:')]
+    if len(values) > 1 or (values and not values[0]):
+        raise ValueError(f'{path}: invalid/duplicate pulse_program metadata')
+    recorded = values[0] if values else 'unknown'
+    for folder in path.parents:
+        if (folder/'acqus').is_file():
+            pulse = rt.acquisition_pulse_program(folder)
+            if pulse != 'unknown':
+                if recorded not in ('unknown', pulse):
+                    raise ValueError(f'{path}: pulse metadata disagrees with acquisition PULPROG')
+                recorded = pulse
+            break
+    if explicit:
+        if recorded not in ('unknown', explicit):
+            raise ValueError(f'{path}: --pulse-program disagrees with recorded pulse sequence')
+        recorded = explicit
+    return recorded
+
+
+def write_out(path, rows, simple=True, metadata=None):
     """
     rows: list of dicts with keys:
       resid, I_ref, I_noe, ratio, ratio_sigma, overlap_ref, overlap_noe
@@ -177,6 +200,9 @@ def write_out(path, rows, simple=True):
         for r in sorted(rows, key=lambda x: x["resid"]):
             if not simple: out.write(f'{r["resid"]:d} {r["I_ref"]:.5f} {r["I_noe"]: .6g} {r["ratio"]: .6g} {r["error"]: .6g} {int(r["overlap_ref"])} {int(r["overlap_noe"])}\n')
             else: out.write(f'{r["resid"]:d} {r["ratio"]:.5f} {r["error"]:.5f}\n')
+        for key, value in (metadata or {}).items():
+            text = str(value).replace('\r', '\\r').replace('\n', '\\n')
+            out.write(f'# {key}: {text}\n')
 
 
 def main():
@@ -187,7 +213,15 @@ def main():
                     help="Override noise SD for both spectra; otherwise read compact noise comments when present.", default=None)
     ap.add_argument("--allow-zero-ref", action="store_true",
                     help="If REF intensity is zero, use a tiny epsilon instead of returning NaN.")
+    ap.add_argument('--pulse-program', help='Pulse sequence name when acquisition files/peak metadata are unavailable')
     args = ap.parse_args()
+    try:
+        ref_pulse = peak_pulse_program(args.ref, args.pulse_program)
+        noe_pulse = peak_pulse_program(args.noe, args.pulse_program)
+    except ValueError as error:
+        ap.error(str(error))
+    pulse_metadata = (dict(pulse_program=ref_pulse) if ref_pulse == noe_pulse else
+                      dict(reference_pulse_program=ref_pulse, saturated_pulse_program=noe_pulse))
 
     ref = parse_sparky_list(args.ref)
     noe = parse_sparky_list(args.noe)
@@ -245,8 +279,8 @@ def main():
     out_all = Path(f"{out_prefix}_results.out")
     out_filtered = Path(f"{out_prefix}_results_filtered.out")
 
-    write_out(out_all, rows_all)
-    write_out(out_filtered, rows_filtered)
+    write_out(out_all, rows_all, metadata=pulse_metadata)
+    write_out(out_filtered, rows_filtered, metadata=pulse_metadata)
 
     print(f"# Wrote: {out_all}")
     print(f"# Wrote: {out_filtered}")

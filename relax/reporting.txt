@@ -53,3 +53,25 @@ shortest-delay comparison reports both fits and the selected fit basis; it does
 not establish a physical mechanism. Overlap and warning fields are review
 flags. Repeated delays remain separate measurements. NOE ratios are not treated
 as exponential decays.
+
+PULSE SEQUENCE
+
+The current analyzer reads the pulse-program name from PULPROG in the source
+experiment's saved acqus. This is independent of the experiment type inferred
+from the peak-list filename. The numbers CSV stores it ONCE as a trailing
+# pulse_program: NAME line, and the PDF summary names the pulse sequence.
+The support archive carries it in the portable report/diagnostics so standalone
+CSV-to-PDF rebuilds preserve it without access to the acquisition directory.
+Older saved CSV/diagnostics without this field remain readable. Saved-result
+refresh can enrich an unknown name from acqus in the matching source directory;
+it rejects a conflict with an already recorded name. When no record is
+available, the report explicitly says unknown rather than guessing from T1,
+T1rho, T2, NOE or the protein name. No extra user-facing output is added.
+
+etaXY already checks its saved PULPROG; it now shows that name in its PDF as
+well as the numbers footer and saved extraction metadata. The paired peak-list
+reader, hetnoe_analyze.py, reads # pulse_program: NAME from each peak list or
+an acquisition acqus beside/above it. For exported lists elsewhere, the optional
+--pulse-program NAME supplies a common fallback. Its result files append one
+pulse-program comment, or separate reference/saturated comments when the
+sequences differ. Numerical columns and calculations are unchanged.
