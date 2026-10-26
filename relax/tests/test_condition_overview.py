@@ -258,8 +258,10 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(records[0]['user_assessment'],'usable')
         self.assertIn('my inspection',records[0]['qc'][1]);self.assertIn('condition assessment',records[0]['qc'][1])
         self.assertTrue(records[1]['exclusion']);self.assertEqual(records[1]['qc'][0],'user_exclude')
-        path.write_text('target\tassessment\tcomment\ncollection/3\tdelete\tbad\n')
-        with self.assertRaises(ValueError):co.read_user_reviews(path,records,self.project)
+        path.write_text('target\tassessment\tcomment\ncollection/3\tBAD\tMy rating\n')
+        co.read_user_reviews(path,records,self.project)
+        self.assertEqual(records[0]['user_assessment'],'BAD')
+        self.assertFalse(records[0]['exclusion'])
     def test_new_review_sheet_prefills_machine_context_and_keeps_user_cells_blank(self):
         records=self.records(self.fixture())
         path=self.project/'condition-reviews.tsv';co.initialise_reviews(path,records)
@@ -492,7 +494,7 @@ class OverviewTests(unittest.TestCase):
             args.dry_run=False;co.run(args)
         result=co.read_tsv(path)[0]
         self.assertEqual((result['assessment'],result['comment']),('review','My etaXY assessment'))
-        self.assertEqual(result['machine_assessment'],'not_assessed')
+        self.assertEqual(path.read_bytes(),before)
         self.assertFalse((self.project/'condition-overviews.tsv').exists())
     def test_standard_overview_accepts_extra_review_targets_without_creating_extra_overviews(self):
         a=self.fixture();eta=self.review_fixture();water=self.review_fixture('water 1H T1','extra/7')
@@ -518,6 +520,83 @@ class OverviewTests(unittest.TestCase):
         eta['relative_path']='211@950/6';self.catalog_rows([eta])
         with self.assertRaisesRegex(ValueError,'protected'):
             co.discover_reviews(self.catalog,self.project,self.data)
+
+    def test_all_primary_relaxation_types_are_inventoried_without_completed_analysis(self):
+        entries=[]
+        for i,(mode,pulse,status) in enumerate([
+            ('15N T1','15N_T1_HSQC','blocked_inputs'),
+            ('15N T1rho','15N_T1rho','blocked_inputs'),
+            ('1H-15N hetNOE','15N_HETNOE','blocked_noe_inputs'),
+            ('15N CPMG','hsqcrexetf3gpsitc3d','blocked_method_inputs'),
+            ('15N T2','15N_T2_HSQC','pending_readiness'),
+            ('unresolved relaxation candidate','zg30','blocked_processed_only_review')],3):
+            entry=self.review_fixture(name=f'all/{i}')
+            entry.update(experiment_type=mode,pulse_program=pulse,status=status)
+            if mode=='unresolved relaxation candidate':entry['primary_record_status']='processed only; raw absent'
+            (self.data/entry['relative_path']/'acqus').write_text('##$PULPROG= <'+pulse+'>\n')
+            entries.append(entry)
+        self.catalog_rows(entries)
+        records=co.discover_reviews(self.catalog,self.project,self.data)
+        self.assertEqual(len(records),6)
+        self.assertEqual({co.machine_review_context(r)['experiment_type'] for r in records},
+                         {'R1','R1rho','hetNOE','15N CPMG','R2','unresolved relaxation'})
+        self.assertTrue(all(r['qc'][0]=='not_assessed' for r in records))
+    def test_append_preserves_edited_document_bytes_custom_columns_and_free_ratings(self):
+        a=self.review_fixture(name='extra/6');b=self.review_fixture('water 1H T1','extra/7')
+        self.catalog_rows([a,b]);records=co.discover_reviews(self.catalog,self.project,self.data)
+        path=self.project/'review.tsv'
+        before=(b'# My edited explanation\tkeep this\t\t\r\n\t\t\t\r\n'
+                b'target\tassessment\tcomment\tcustom\r\n'
+                b'extra/6\tOK\t"My comment\r\n# inside the comment"\tmy custom value\r\n'
+                b'\t\t\t\r\n')
+        path.write_bytes(before)
+        co.initialise_reviews(path,records,append_missing=True)
+        after=path.read_bytes();self.assertTrue(after.startswith(before))
+        rows=co.read_tsv(path)
+        self.assertEqual(len(rows),2)
+        self.assertEqual(rows[0],{'target':'extra/6','assessment':'OK','comment':'My comment\r\n# inside the comment','custom':'my custom value'})
+        self.assertEqual(rows[1],{'target':'extra/7','assessment':'','comment':'','custom':''})
+        co.initialise_reviews(path,records,append_missing=True)
+        self.assertEqual(path.read_bytes(),after)
+        backups=list((self.project/'.report-backups').rglob('review.tsv'))
+        self.assertEqual(len(backups),1);self.assertEqual(backups[0].read_bytes(),before)
+    def test_append_failures_and_concurrent_edit_leave_the_edited_document_untouched(self):
+        entry=self.review_fixture();self.catalog_rows([entry])
+        records=co.discover_reviews(self.catalog,self.project,self.data)
+        path=self.project/'review.tsv';before=b'target\tassessment\tcomment\n'
+        path.write_bytes(before)
+        with mock.patch.object(co.rt,'publish',side_effect=OSError('publication failed')):
+            with self.assertRaises(OSError):co.initialise_reviews(path,records,append_missing=True)
+        self.assertEqual(path.read_bytes(),before)
+        original=co.read_review_table
+        def edit_after_read(p):
+            result=original(p);p.write_bytes(before+b'extra/6\tBAD\tFresh edit\n');return result
+        with mock.patch.object(co,'read_review_table',side_effect=edit_after_read):
+            with self.assertRaisesRegex(ValueError,'changed during append'):
+                co.initialise_reviews(path,records,append_missing=True)
+        self.assertEqual(path.read_bytes(),before+b'extra/6\tBAD\tFresh edit\n')
+    def test_live_scan_adds_new_r1_and_r2_but_omits_split_and_known_copy_records(self):
+        existing=self.review_fixture();self.catalog_rows([existing])
+        def acquired(name,pulse,audit=''):
+            folder=self.data/name;folder.mkdir(parents=True)
+            (folder/'acqus').write_text('##$PULPROG= <'+pulse+'>\n##$BF1= 850.13\n')
+            (folder/'ser').write_bytes(b'raw file must never be processed')
+            if audit:(folder/'audita.txt').write_text(audit)
+        acquired('new/5','hsqct1etf3gpsitc3d.3')
+        acquired('new/6','15N_T2_HSQC')
+        acquired('new/10005','hsqct1etf3gpsitc3d.3','created by split 7: dataset 1 of 7 from EXPNO 5')
+        acquired('copy/5','hsqct1etf3gpsitc3d.3')
+        with self.catalog.with_name('source_record_dispositions.csv').open('w',newline='') as h:
+            w=csv.DictWriter(h,fieldnames=['relative_path','experiment_type','primary_record_status','status','related_primary_path'])
+            w.writeheader();w.writerow(dict(relative_path='copy/5',experiment_type='15N T1',primary_record_status='byte-identical raw copy',status='excluded_nonprimary',related_primary_path='new/5'))
+        with mock.patch.object(co.subprocess,'run',side_effect=AssertionError('No processing/extraction/fitting')):
+            records=co.discover_reviews(self.catalog,self.project,self.data)
+        targets={r['relative_path']:r for r in records}
+        self.assertEqual(set(targets),{'extra/6','new/5','new/6'})
+        self.assertEqual(targets['new/5']['mode'],'r1');self.assertEqual(targets['new/6']['mode'],'r2')
+        self.assertEqual(co.machine_review_context(targets['new/5'])['field'],'850 MHz')
+        self.assertEqual(targets['new/5']['qc'][0],'not_assessed')
+        self.assertTrue(targets['new/5']['pending'])
 
 
 if __name__=='__main__':unittest.main()

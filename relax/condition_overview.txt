@@ -22,27 +22,37 @@ to regenerate only the condition overviews from existing numbers files. The
 three QC arguments are optional; unavailable acquisition QC is not_assessed.
 
 Use the same arguments with --reviews-only (without --refresh-reports) to update
-only the editable assessment file. This reads acquisition metadata and saved QC,
-backs up the sheet, preserves user assessments/comments and adds any newly
-catalogued etaXY or water T1sat records. It requires no numerical results or
+only the editable assessment file. Existing document bytes are preserved in full:
+new acquisitions are appended using the existing columns and line endings.
+User ratings (including OK/BAD/POOR), comments, custom columns, lookup edits and
+spreadsheet-padded blank rows survive unchanged. A backup precedes publication;
+concurrent edits abort the append. It requires no numerical results or external
 plotting/extraction/fitting commands. --dry-run remains read-only.
 
 The catalog is the reviewed master acquisition CSV already used by the
-Electrostatics delivery. Only analysed R1, R1rho and HetNOE entries are selected.
+Electrostatics delivery. Numerical overviews select analysed R1, R1rho and HetNOE.
 It explicitly identifies each current report directory, avoiding directory-wide
 searches that could count archived/pilot/diagnostic reruns as extra acquisitions.
 Each selected directory must have exactly one *_numbers.csv. Duplicate source
 acquisitions, conflicting source/sequence metadata and unsafe destinations fail
 before publication. CPMG and other incompatible observables are not included.
-The assessment sheet additionally covers catalogued primary etaXY and water 1H
-T1 acquisitions (displayed as water T1sat). Their pulse programs are checked
-against saved acqus metadata. Reviewed nominal annotations are used for display;
-provisional/unknown conditions remain pending. Missing QC stays not_assessed.
-Retained processed-only etaXY/water records are marked processed_only_review,
-with no claim of an independent raw acquisition. Setup records, split components
-and catalogued raw copies are omitted. Historical analysis-readiness statuses
-do not become QC failures. No numerical overview/report is created for these
-additional observables; existing report selection and values are unchanged.
+The assessment inventory is independent of processing or analysis readiness.
+It includes every catalogued primary R1, R1rho, R2, HetNOE, CPMG, etaXY and water
+T1sat acquisition, including failed/incomplete/excluded acquisitions. Retained
+processed-only and unresolved relaxation candidates are included with review
+labels. Pulse programs are checked against saved acqus metadata; unknown or
+provisional conditions remain pending and missing QC stays not_assessed.
+
+The adjacent source_record_dispositions.csv is read when available to retain
+known split/setup/copy classifications. A read-only check of current collection/
+numeric-expno/acqus files finds newly added relaxation acquisitions missing from
+the catalog. It checks that raw files exist, without reading raw intensities,
+and rejects TopSpin audit records explicitly identifying split components.
+Unreviewed new conditions stay unknown; nominal temperature is never inferred
+from controller TE. New acquisition dates use DATE_START in Europe/Paris.
+Hidden/administrative directories, symlinks and protected 211@950 are skipped.
+Analysis input failures never remove an acquisition from the assessment.
+Existing numerical report selection, values and method requirements are unchanged.
 
 GROUPING AND QUALITY
 
@@ -132,7 +142,8 @@ that index for persistent assessments.
 PERSISTENT USER REVIEWS
 
 condition-reviews.tsv in the project root is EDITABLE INPUT. Normal regeneration
-never rewrites it. It is created once with acquisition metadata and automatic
+preserves all existing document bytes and only appends missing acquisitions.
+It is created once with acquisition metadata and automatic
 assessment snapshots alongside separate user fields:
     target, protein, experiment_type, pulse_program, acquisition_date,
     NaCl_mM, nominal_temperature_C, field,
@@ -193,16 +204,17 @@ columns or upgrade a three-column sheet. It preserves existing row order, user
 assessment/comment values, custom columns and condition-wide notes; it appends
 new acquisitions with blank user cells. Existing sheets are backed up and
 replaced atomically, with a byte comparison to detect concurrent edits. Without
-this flag, an existing review sheet is left byte-for-byte untouched. The script
+this flag, existing bytes stay untouched and only missing targets are appended. The script
 never copies machine dispositions into the user's assessment column.
-Assessment is blank (comment only), usable, review or exclude. An acquisition
+Any free-text user rating is retained and shown as supplied. Only explicit
+usable and exclude decisions change inclusion; OK/BAD/POOR remain user ratings,
+without silently excluding or accepting an acquisition. An acquisition
 assessment takes precedence over a condition-wide assessment; both comments are
 retained. Explicit usable acceptance overrides acquisition exclusions, while the
 automated QC evidence remains visible. review does not cancel an existing
 exclusion. Neither an assessment nor a free-text comment silently changes salt,
 temperature or other condition metadata; unresolved conditions stay pending until
-the reviewed condition catalog is updated. The script reads the review input
-without modifying it and propagates assessments/comments into the overview and
+the reviewed condition catalog is updated. The script propagates assessments/comments into the overview and
 index. Tests verify that comments survive repeated generation.
 
 REFRESH CONTRACT

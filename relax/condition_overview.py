@@ -14,6 +14,10 @@ import json
 import math
 import os
 from pathlib import Path
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python 3.8 can still inventory records; dates remain unknown.
+    ZoneInfo = None
 import re
 import shutil
 import statistics
@@ -27,9 +31,13 @@ import relax_tools as rt
 
 MODES = {'15N T1': 'r1', '15N T1rho': 'r1rho', '1H-15N hetNOE': 'noe',
          'r1': 'r1', 'r1rho': 'r1rho', 'noe': 'noe'}
-REVIEW_EXTRA_MODES = {'etaXY': 'eta_xy', 'water 1H T1': 'water_t1sat'}
+REVIEW_EXTRA_MODES = {'etaXY': 'eta_xy', 'water 1H T1': 'water_t1sat',
+                      '15N CPMG': 'cpmg', '15N T2': 'r2',
+                      'unresolved relaxation candidate': 'unresolved'}
+REVIEW_MODES = dict(MODES, **REVIEW_EXTRA_MODES)
 REVIEW_LABELS = {'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE',
-                 'eta_xy': 'etaXY', 'water_t1sat': 'water T1sat'}
+                 'eta_xy': 'etaXY', 'water_t1sat': 'water T1sat',
+                 'cpmg': '15N CPMG', 'r2': 'R2', 'unresolved': 'unresolved relaxation'}
 SAMPLE_NAMES = {'ANP32A': 'ANP32aIDR', 'SeV Ntail': 'SeVNtail',
                 'HeTDR1 (folder/title evidence)': 'HeTDR1', 'heTDR1': 'HeTDR1'}
 REVIEW_FIELDS = ['target', 'protein', 'experiment_type', 'pulse_program',
@@ -174,8 +182,7 @@ def confirmed_condition(row):
     if not construct: issues.append('construct unconfirmed')
     if issues:
         return None, '; '.join(dict.fromkeys(issues))
-    modes = dict(MODES, **REVIEW_EXTRA_MODES)
-    return (protein, construct, modes[row['experiment_type']], fmt(salt), fmt(temperature), fmt(field), str(additives)), ''
+    return (protein, construct, REVIEW_MODES[row['experiment_type']], fmt(salt), fmt(temperature), fmt(field), str(additives)), ''
 
 
 def qc_records(fid_inventory=None, r1_qc=None, decisions=None):
@@ -262,34 +269,40 @@ def discover(catalog, project, data_root, fid_inventory=None, r1_qc=None, decisi
 
 def discover_reviews(catalog, project, data_root, fid_inventory=None, r1_qc=None,
                      decisions=None, analysed_records=None):
-    """Review metadata without requiring numerical results for extra observables."""
+    """Inventory every primary relaxation record, independent of analysis status."""
     project, data_root = Path(project).resolve(), Path(data_root).resolve()
     qcs, _, excluded = qc_records(fid_inventory, r1_qc, decisions)
     result = list(analysed_records or [])
-    seen = {row['relative_path'] for row in result}
-    for source in read_csv(catalog):
-        extra = source.get('experiment_type') in REVIEW_EXTRA_MODES
-        if not extra and (analysed_records is not None or source.get('status') != 'analysed' or
-                          source.get('experiment_type') not in MODES):
+    existing = {row['relative_path'] for row in result}
+    seen = set()
+    sources = read_csv(catalog)
+    dispositions = Path(catalog).with_name('source_record_dispositions.csv')
+    if dispositions.is_file():
+        known = {row['relative_path'] for row in sources}
+        sources += [row for row in read_csv(dispositions) if row['relative_path'] not in known]
+    for source in sources:
+        if source.get('experiment_type') not in REVIEW_MODES:
             continue
         kind = source.get('primary_record_status', '')
         processed_only = kind.startswith('processed only')
-        if extra and (kind != 'primary raw acquisition' and not processed_only or
-                      source.get('related_primary_path') or
-                      source.get('status') in ('excluded_duplicate_raw', 'excluded_nonprimary')):
+        legacy_analysed = not kind and source.get('status') == 'analysed'
+        if ((kind != 'primary raw acquisition' and not processed_only and not legacy_analysed) or
+                source.get('related_primary_path') or
+                source.get('status') in ('excluded_duplicate_raw', 'excluded_nonprimary')):
             continue  # Split components, setup records and copies are not extra acquisitions.
         relative = str(safe_source(source['relative_path']))
         if relative in seen:
             raise ValueError('Duplicate assessment acquisition: '+relative)
         seen.add(relative)
+        if relative in existing:
+            continue  # Reuse report records so user reviews reach the numerical overviews.
         row = dict(source)
-        if extra:
-            conditions = json.loads(source.get('conditions') or '{}')
-            # The catalog's inventory-temperature column can represent controller
-            # grouping. Prefer the explicitly saved nominal annotation for display.
-            nominal = conditions.get('review_nominal_temperature', conditions.get('nominal_temperature_C'))
-            if nominal is not None:
-                row['temperature_C'] = nominal or 'unknown'
+        conditions = json.loads(source.get('conditions') or '{}')
+        # The inventory-temperature column can represent controller grouping.
+        # Prefer the saved nominal annotation, retaining provisional conditions.
+        nominal = conditions.get('review_nominal_temperature', conditions.get('nominal_temperature_C'))
+        if nominal is not None:
+            row['temperature_C'] = nominal or 'unknown'
         condition, pending = confirmed_condition(row)
         pulse = rt.acquisition_pulse_program(data_root/relative)
         recorded = source.get('pulse_program') or 'unknown'
@@ -302,13 +315,62 @@ def discover_reviews(catalog, project, data_root, fid_inventory=None, r1_qc=None
         directory = Path(source['output_directory']).resolve() if source.get('output_directory') else None
         if directory is not None:
             directory.relative_to(project)
-        mode = REVIEW_EXTRA_MODES[source['experiment_type']] if extra else MODES[source['experiment_type']]
+        mode = REVIEW_MODES[source['experiment_type']]
         row.update(relative_path=relative, mode=mode, directory=directory, condition=condition,
                    pending=pending, processed_only=processed_only, exclusion=exclusion,
                    pulse=pulse if pulse != 'unknown' else recorded,
                    qc=qcs.get(relative, ('not_assessed', 'no saved acquisition-level FID screen')))
         result.append(row)
+    result.extend(discover_new_relaxation(data_root, sources))
     return sorted(result, key=lambda r: (r.get('acquisition_date', ''), r['relative_path']))
+
+
+def discover_new_relaxation(data_root, sources):
+    """Find acquired relaxation datasets added since the reviewed catalog."""
+    known = {row['relative_path'] for row in sources}
+    by_collection = {}
+    for row in sources:
+        by_collection.setdefault(Path(row['relative_path']).parts[0], row)
+    result = []
+    for collection in sorted(Path(data_root).iterdir()):
+        if ('211@950' in collection.name or collection.name.startswith('.') or
+                collection.name in ('inventory', 'scripts') or collection.is_symlink() or not collection.is_dir()):
+            continue
+        for folder in sorted(collection.iterdir()):
+            if ('211@950' in folder.name or not folder.name.isdigit() or folder.is_symlink() or not folder.is_dir()):
+                continue
+            relative = str(folder.relative_to(data_root))
+            if relative in known or not (folder/'acqus').is_file():
+                continue
+            pulse = rt.acquisition_pulse_program(folder)
+            lower = pulse.lower()
+            mode = ('noe' if 'hetnoe' in lower else 'eta_xy' if 'nnh_tr' in lower
+                    else 'water_t1sat' if 't1sat' in lower else 'cpmg' if 'cpmg' in lower or 'rexet' in lower
+                    else 'r1rho' if 't1rho' in lower or 'hsqctret' in lower
+                    else 'r2' if 't2' in lower else 'r1' if 't1' in lower else None)
+            if mode is None or not any((folder/name).is_file() and (folder/name).stat().st_size > 0 for name in ('ser', 'fid')):
+                continue
+            audit = (folder/'audita.txt').read_text(errors='replace') if (folder/'audita.txt').is_file() else ''
+            if re.search(r'created by split\s+\d+:.*?from EXPNO\s+\d+', audit, re.I | re.S):
+                continue
+            text = (folder/'acqus').read_text(errors='replace')
+            def parameter(key):
+                match = re.search(r'^##\$'+key+r'=\s*([^\n]*)', text, re.M)
+                return match[1].strip() if match else ''
+            date = ''
+            timestamp = numeric(parameter('DATE_START'))
+            if timestamp is not None and timestamp > 0 and ZoneInfo is not None:
+                date = datetime.fromtimestamp(timestamp, ZoneInfo('Europe/Paris')).date().isoformat()
+            sibling = by_collection.get(collection.name, {})
+            protein = sibling.get('protein') or next((name for token, name in
+                [('anp32', 'ANP32A'), ('sev', 'SeV Ntail'), ('tdr1', 'heTDR1'), ('trd1', 'heTDR1')]
+                if token in collection.name.lower()), 'unknown')
+            result.append(dict(relative_path=relative, protein=protein, construct=sibling.get('construct', ''),
+                               mode=mode, pulse=pulse, acquisition_date=date, field_MHz=parameter('BF1'),
+                               NaCl_mM='unknown', temperature_C='unknown', directory=None, condition=None,
+                               pending='condition metadata not yet reviewed', processed_only=False,
+                               exclusion='', qc=('not_assessed', 'no saved acquisition-level FID screen')))
+    return result
 
 
 def review_condition_target(row, project):
@@ -331,9 +393,7 @@ def read_user_reviews(path, records, project):
             raise ValueError('Unknown review target: '+target)
         if target in reviews:
             raise ValueError('Duplicate review target: '+target)
-        assessment = review['assessment'].strip().lower()
-        if assessment not in ('', 'usable', 'review', 'exclude'):
-            raise ValueError('Review assessment must be blank, usable, review or exclude: '+target)
+        assessment = review['assessment'].strip()
         reviews[target] = (assessment, review['comment'].strip())
     for row in records:
         condition_target = review_condition_target(row, project)
@@ -342,9 +402,9 @@ def read_user_reviews(path, records, project):
         comments = [c for a,c in applicable if c]
         row['user_assessment'] = assessment
         row['user_comment'] = ' | '.join(comments)
-        if assessment == 'exclude':
+        if assessment.lower() == 'exclude':
             row['exclusion'] = 'user excluded'+(': '+row['user_comment'] if row['user_comment'] else '')
-        elif assessment == 'usable':
+        elif assessment.lower() == 'usable':
             row['exclusion'] = ''  # Explicit user acceptance overrides acquisition exclusions, not condition metadata.
         if assessment or comments:
             automatic = row['qc'][0]+'; '+row['qc'][1]
@@ -352,27 +412,33 @@ def read_user_reviews(path, records, project):
                          ('user: '+row['user_comment']+'; ' if comments else '')+'automated: '+automatic)
 
 
-def read_tsv(path):
+def read_review_table(path):
     with Path(path).open(newline='') as handle:
         records = csv.reader(handle, delimiter='\t')
         # Read the preamble as TSV records, so a quoted multiline user comment
         # beginning with "#" inside the table is never mistaken for a lookup row.
         for fields in records:
-            if fields and not fields[0].startswith('# '):
+            if any(value.strip() for value in fields) and not fields[0].lstrip('\ufeff').startswith('# '):
                 break
         else:
             fields = []
+        if fields:
+            fields[0] = fields[0].lstrip('\ufeff')
         if (not fields or len(set(fields)) != len(fields) or
                 not {'target', 'assessment', 'comment'}.issubset(fields)):
             raise ValueError('Review TSV must contain target, assessment, comment; context columns are optional')
         rows = []
         for values in records:
-            if not values:
+            if not any(value.strip() for value in values):
                 continue
             if len(values) != len(fields):
                 raise ValueError('Incomplete review TSV row')
             rows.append(dict(zip(fields, values)))
-    return rows
+    return fields, rows
+
+
+def read_tsv(path):
+    return read_review_table(path)[1]
 
 
 def review_machine_assessment(row):
@@ -441,9 +507,43 @@ def machine_review_context(row):
                 machine_assessment=review_machine_assessment(row), machine_reason=brief_machine_reason(row))
 
 
-def initialise_reviews(path, records, update_context=False):
+def append_missing_reviews(path, records):
+    """Preserve the entire edited document byte-for-byte; append new targets."""
+    path = Path(path)
+    before = path.read_bytes()
+    fields, existing = read_review_table(path)
+    targets = [row['target'].strip() for row in existing]
+    contexts = []
+    seen = set(targets)
+    for row in records:
+        target = row['relative_path']
+        if target not in seen:
+            context = row.get('machine_review_context') or machine_review_context(row)
+            contexts.append(dict(context, assessment='', comment=''))
+            seen.add(target)
+    if not contexts:
+        return
+    newline = '\r\n' if b'\r\n' in before else '\n'
+    added = io.StringIO(newline='')
+    writer = csv.DictWriter(added, fieldnames=fields, delimiter='\t', lineterminator=newline, extrasaction='ignore')
+    writer.writerows(contexts)
+    after = before + (b'' if before.endswith((b'\n', b'\r')) else newline.encode()) + added.getvalue().encode('utf-8')
+    with tempfile.TemporaryDirectory(prefix='.review-append-', dir=path.parent) as folder:
+        stage = Path(folder)
+        (stage/path.name).write_bytes(after)
+        if path.read_bytes() != before:
+            raise ValueError('User review input changed during append; rerun to include latest edits')
+        backup = path.parent/'.report-backups'/('review-append-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+        backup.mkdir(parents=True)
+        (backup/path.name).write_bytes(before)
+        rt.publish(stage, path.parent, [path.name])
+
+
+def initialise_reviews(path, records, update_context=False, append_missing=False):
     path = Path(path)
     if path.exists() and not update_context:
+        if append_missing:
+            append_missing_reviews(path, records)
         return
     before = path.read_bytes() if path.exists() else None
     existing = read_tsv(path) if before is not None else []
@@ -774,16 +874,17 @@ def run(args):
     review_records = discover_reviews(args.catalog, project, args.data_root, args.fid_inventory,
                                       args.r1_qc, args.qc_decisions, None if reviews_only else records)
     review_path = Path(getattr(args, 'user_reviews', None) or project/'condition-reviews.tsv').resolve()
-    read_user_reviews(review_path, review_records, project)
     if reviews_only:
         counts = dict(review_records=len(review_records), **dict(Counter(
-            row['machine_review_context']['machine_disposition'] for row in review_records)))
+            machine_review_context(row)['machine_disposition'] for row in review_records)))
         print(json.dumps(counts, sort_keys=True), flush=True)
         if not args.dry_run:
             with rt.run_directory(project, 'reviews'):
-                initialise_reviews(review_path, review_records, update_context=True)
+                initialise_reviews(review_path, review_records,
+                                   update_context=getattr(args, 'update_review_context', False), append_missing=True)
             print('Assessment file: '+str(review_path), flush=True)
         return counts
+    read_user_reviews(review_path, review_records, project)
     groups, excluded = defaultdict(list), defaultdict(list)
     for row in records:
         if row['exclusion']:
@@ -802,7 +903,7 @@ def run(args):
             print(row['relative_path'], 'excluded: '+row['exclusion'] if row['exclusion'] else 'condition_review: '+row['pending'] if row['pending'] else 'included',flush=True)
         return counts
     with rt.run_directory(project,'overviews') as stage:
-        initialise_reviews(review_path, review_records, update_context=getattr(args, 'update_review_context', False))
+        initialise_reviews(review_path, review_records, update_context=getattr(args, 'update_review_context', False), append_missing=True)
         review_before = review_path.read_bytes()
         for row in records:
             status = refresh(row) if args.refresh_reports else (
@@ -843,13 +944,13 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project-root',required=True)
     parser.add_argument('--data-root',required=True)
-    parser.add_argument('--catalog',required=True,help='Reviewed master acquisition CSV; assessments also include primary/processed-only etaXY and water T1sat records')
+    parser.add_argument('--catalog',required=True,help='Reviewed acquisition CSV; all primary relaxation records enter the assessment regardless of analysis status')
     parser.add_argument('--fid-inventory',help='Reviewed R1rho FID inventory CSV')
     parser.add_argument('--r1-qc',help='Saved retained-range R1 FID screening CSV')
     parser.add_argument('--qc-decisions',help='Reviewed findings JSON with known_strong_growth_experiments / explicit exclusions')
     parser.add_argument('--user-reviews',help='Editable review TSV; defaults to PROJECT/condition-reviews.tsv; normal overview regeneration leaves it unchanged')
     parser.add_argument('--update-review-context',action='store_true',help='Explicitly refresh informational review columns, preserving all user assessments/comments and backing up the sheet')
-    parser.add_argument('--reviews-only',action='store_true',help='Refresh only the assessment sheet from acquisition metadata, without numerical reports, spectra or fitting')
+    parser.add_argument('--reviews-only',action='store_true',help='Append missing relaxation acquisitions to the assessment, preserving the edited document without requiring analysis results')
     parser.add_argument('--refresh-reports',action='store_true')
     parser.add_argument('--dry-run',action='store_true',help='Read-only inventory and disposition summary')
     args=parser.parse_args(argv)
