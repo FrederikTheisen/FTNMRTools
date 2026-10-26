@@ -49,10 +49,26 @@ def profile(folder, raw_rows=None):
     folder = Path(folder).resolve()
     acq, indirect = scalars(folder/'acqus'), scalars(folder/'acqu2s')
     program = acq.get('PULPROG')
-    pulse = (folder/'pulseprogram').read_text()
+    pulse_path = next((path for path in (folder/'pulseprogram', folder/'pulseprogram.precomp',
+                                         folder/(str(program)+'.pp')) if path.is_file()), None)
+    if pulse_path is None:
+        raise FileNotFoundError(f'No saved pulse program found for {program!r} '
+                                '(checked pulseprogram, pulseprogram.precomp and <PULPROG>.pp)')
+    pulse = pulse_path.read_text()
     active = re.sub(r'\s+', '', ''.join(line.split(';', 1)[0] for line in pulse.splitlines()
                                       if not line.lstrip().startswith('#')))
-    if program == '15N_HETNOE':
+    if program == '15N_HETNOE' and 'F1I1CNT' in active and 'kronecker_delta' in active:
+        required = ['"l0=1"', 'if"l0%2==1"{d1', '}else{d2',
+                    '(p0ph1)5mloto4timesl4', 'wr#0if#0zdiu0',
+                    'lotoLBLF1I1timesF1I1CNT', '"ph1loop+=1*(1-kronecker_delta(1,td1))"',
+                    'lotoLBLF1timesF1CNT', '"t1loop+=1*(1-kronecker_delta(1,td1))"',
+                    'lotoLBLST1timesST1CNT', 'trunc(td1/2)']
+        ordered = ['wr#0if#0zdiu0', 'lotoLBLF1I1timesF1I1CNT',
+                   '"ph1loop+=1*(1-kronecker_delta(1,td1))"',
+                   'lotoLBLF1timesF1CNT', '"t1loop+=1*(1-kronecker_delta(1,td1))"',
+                   'lotoLBLST1timesST1CNT']
+        counter = 'l0'
+    elif program == '15N_HETNOE':
         required = ['"l0=1"', 'if"l0%2==1"{d1', '}else{d2',
                     '(p0ph1)5mloto4timesl4', 'wr#0if#0zdiu0',
                     'lotoLBLF1I1times2', '"ph1loop+=1"', 'lotoLBLF1times2',
@@ -103,7 +119,7 @@ def profile(folder, raw_rows=None):
     for key in ('DECIM', 'DSPFVS'):
         number(acq, key, positive=True)
     number(acq, 'GRPDLY')
-    return dict(folder=folder, acq=acq, indirect=indirect, program=program, td=td,
+    return dict(folder=folder, acq=acq, indirect=indirect, program=program, pulse_path=pulse_path, td=td,
                 rows=rows, metadata_rows=metadata_rows, row_bytes=row_bytes,
                 datatype=datatype, byte_order=byte_order, raw_rows_override=raw_rows is not None)
 
@@ -193,7 +209,7 @@ def process(args):
     if destination == p['folder'] or destination in p['folder'].parents:
         raise ValueError('Use a dedicated processing directory, not an acquisition or its parent')
     destination.mkdir(parents=True, exist_ok=True)
-    inputs = [p['folder']/name for name in ('ser', 'acqus', 'acqu2s', 'pulseprogram')]
+    inputs = [p['folder']/name for name in ('ser', 'acqus', 'acqu2s')] + [p['pulse_path']]
     if (p['folder']/'audita.txt').exists():
         inputs.append(p['folder']/'audita.txt')
     initial = {path: signature(path) for path in inputs}
