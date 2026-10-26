@@ -13,10 +13,11 @@ Run from the original interleaved Bruker experiment folder.
 
        tcsh /path/to/FTNMRTools/relax/hetnoe_proc.com
 
-The processor writes `hetnoe_processed/test%03d.ft3`. It follows the usual
-NMRPipe H and 15N processing order and applies `POLY -auto -ord 4` while 15N
-is active. Edit the H/N phases and baseline order at the top of the shared
-`.com` script. Use the same phase settings for both planes.
+The processor handles each Bruker-generated FID separately and writes the
+third-axis planes as separate 2D spectra under `hetnoe_processed/`. It follows
+the usual NMRPipe H and 15N processing order and applies `POLY -auto -ord 4`
+while 15N is active. Edit the H/N phases and baseline order at the top of the
+shared `.com` script. Use the same phase settings for both planes.
 
 No Python helper is required for this processing route. The Bruker-generated
 `fid.com` supplies the experiment-specific conversion parameters.
