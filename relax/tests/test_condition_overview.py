@@ -67,6 +67,15 @@ class OverviewTests(unittest.TestCase):
         return entry
     def records(self,*entries,**kw):
         self.catalog_rows(entries);return co.discover(self.catalog,self.project,self.data,**kw)
+    def review_fixture(self,mode='etaXY',name='extra/6',kind='primary raw acquisition'):
+        acq=self.data/name;acq.mkdir(parents=True,exist_ok=True)
+        pulse='nico_nnh_tr_noSE' if mode=='etaXY' else 'nico_t1sat_v2s'
+        (acq/'acqus').write_text('##$PULPROG= <'+pulse+'>\n')
+        return dict(relative_path=name,protein='SeV Ntail',construct='Ntail',experiment_type=mode,
+                    pulse_program=pulse,primary_record_status=kind,related_primary_path='',
+                    status='blocked_method_inputs',output_directory='',NaCl_mM='50',temperature_C='25',
+                    temperature_basis='reviewed nominal',field_MHz='600.48',acquisition_date='2025-06-01',
+                    conditions=json.dumps({'nominal_temperature_C':'25'}),investigator_exclusion='')
     def fake_render(self,cmd,cwd,stdout=None):
         self.assertEqual(cmd[0],'gnuplot','No processing/extraction/fitting executable may run')
         script=(Path(cwd)/'plot.gnu').read_text();import re
@@ -438,6 +447,77 @@ class OverviewTests(unittest.TestCase):
         args.dry_run=False;co.run(args)
         path=co.destination_for(self.records(a),self.project)
         self.assertTrue(path.is_file());self.assertTrue((self.project/'condition-overviews.tsv').is_file())
+
+    def test_extra_observables_need_no_numbers_and_show_pulse_nominal_conditions_and_qc(self):
+        eta=self.review_fixture();water=self.review_fixture('water 1H T1','extra/7')
+        water['protein']='heTDR1';water['NaCl_mM']=''
+        eta['temperature_C']='15';eta['temperature_basis']='provisional controller group'
+        self.catalog_rows([eta,water])
+        records=co.discover_reviews(self.catalog,self.project,self.data)
+        self.assertEqual(len(records),2)
+        contexts={r['relative_path']:co.machine_review_context(r) for r in records}
+        self.assertEqual(contexts['extra/6']['experiment_type'],'etaXY')
+        self.assertEqual(contexts['extra/6']['pulse_program'],'nico_nnh_tr_noSE')
+        self.assertEqual(contexts['extra/6']['nominal_temperature_C'],'25')
+        self.assertEqual(contexts['extra/6']['machine_disposition'],'condition_review')
+        self.assertEqual(contexts['extra/7']['experiment_type'],'water T1sat')
+        self.assertEqual(contexts['extra/7']['pulse_program'],'nico_t1sat_v2s')
+        self.assertTrue(all(c['machine_assessment']=='not_assessed' and c['machine_reason']=='' for c in contexts.values()))
+        self.assertFalse(any(self.project.rglob('*_numbers.csv')))
+    def test_extra_discovery_excludes_components_setups_and_duplicates_and_marks_processed_only(self):
+        entries=[self.review_fixture(name='extra/6'),
+                 self.review_fixture(name='extra/6001',kind='inferred split/derived product'),
+                 self.review_fixture(name='extra/9',kind='parameters only'),
+                 self.review_fixture(name='extra/17',kind='processed only; raw absent'),
+                 self.review_fixture(name='extra/18')]
+        entries[1]['related_primary_path']='extra/6';entries[-1]['status']='excluded_duplicate_raw'
+        self.catalog_rows(entries)
+        records=co.discover_reviews(self.catalog,self.project,self.data)
+        self.assertEqual({r['relative_path'] for r in records},{'extra/6','extra/17'})
+        only=next(r for r in records if r['relative_path']=='extra/17')
+        self.assertEqual(co.machine_review_context(only)['machine_disposition'],'processed_only_review')
+    def test_reviews_only_refresh_preserves_notes_and_never_reads_results_or_runs_commands(self):
+        eta=self.review_fixture();self.catalog_rows([eta])
+        path=self.project/'condition-reviews.tsv'
+        path.write_text('target\tassessment\tcomment\nextra/6\treview\tMy etaXY assessment\n')
+        args=argparse.Namespace(project_root=str(self.project),data_root=str(self.data),catalog=str(self.catalog),
+                               fid_inventory=None,r1_qc=None,qc_decisions=None,reviews_only=True,
+                               dry_run=True,refresh_reports=False)
+        before=path.read_bytes()
+        with mock.patch.object(co,'discover',side_effect=AssertionError('Must not read numerical reports')), \
+             mock.patch.object(co,'refresh',side_effect=AssertionError('Must not refresh results')), \
+             mock.patch.object(co.subprocess,'run',side_effect=AssertionError('No external commands')):
+            co.run(args);self.assertEqual(path.read_bytes(),before)
+            self.assertFalse((self.project/'.relax.lock').exists())
+            args.dry_run=False;co.run(args)
+        result=co.read_tsv(path)[0]
+        self.assertEqual((result['assessment'],result['comment']),('review','My etaXY assessment'))
+        self.assertEqual(result['machine_assessment'],'not_assessed')
+        self.assertFalse((self.project/'condition-overviews.tsv').exists())
+    def test_standard_overview_accepts_extra_review_targets_without_creating_extra_overviews(self):
+        a=self.fixture();eta=self.review_fixture();water=self.review_fixture('water 1H T1','extra/7')
+        self.catalog_rows([a,eta,water])
+        path=self.project/'condition-reviews.tsv'
+        path.write_text('target\tassessment\tcomment\nextra/6\treview\tKeep this note\n')
+        args=argparse.Namespace(project_root=str(self.project),data_root=str(self.data),catalog=str(self.catalog),
+                               fid_inventory=None,r1_qc=None,qc_decisions=None,update_review_context=True,
+                               dry_run=False,refresh_reports=False)
+        counts=co.run(args)
+        self.assertEqual(counts['acquisitions'],1);self.assertEqual(counts['overviews'],1)
+        records=co.read_tsv(path)
+        self.assertEqual(len(records),3)
+        self.assertEqual(next(r for r in records if r['target']=='extra/6')['comment'],'Keep this note')
+        self.assertEqual(len(list(self.project.rglob('overview.tsv'))),1)
+    def test_extra_duplicate_conflicting_pulse_and_protected_path_fail_before_update(self):
+        eta=self.review_fixture();self.catalog_rows([eta,eta])
+        with self.assertRaisesRegex(ValueError,'Duplicate assessment'):
+            co.discover_reviews(self.catalog,self.project,self.data)
+        eta['pulse_program']='wrong';self.catalog_rows([eta])
+        with self.assertRaisesRegex(ValueError,'Pulse-program conflict'):
+            co.discover_reviews(self.catalog,self.project,self.data)
+        eta['relative_path']='211@950/6';self.catalog_rows([eta])
+        with self.assertRaisesRegex(ValueError,'protected'):
+            co.discover_reviews(self.catalog,self.project,self.data)
 
 
 if __name__=='__main__':unittest.main()

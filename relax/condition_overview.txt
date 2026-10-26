@@ -21,6 +21,12 @@ Use --dry-run first for a read-only disposition summary. Omit --refresh-reports
 to regenerate only the condition overviews from existing numbers files. The
 three QC arguments are optional; unavailable acquisition QC is not_assessed.
 
+Use the same arguments with --reviews-only (without --refresh-reports) to update
+only the editable assessment file. This reads acquisition metadata and saved QC,
+backs up the sheet, preserves user assessments/comments and adds any newly
+catalogued etaXY or water T1sat records. It requires no numerical results or
+plotting/extraction/fitting commands. --dry-run remains read-only.
+
 The catalog is the reviewed master acquisition CSV already used by the
 Electrostatics delivery. Only analysed R1, R1rho and HetNOE entries are selected.
 It explicitly identifies each current report directory, avoiding directory-wide
@@ -28,6 +34,15 @@ searches that could count archived/pilot/diagnostic reruns as extra acquisitions
 Each selected directory must have exactly one *_numbers.csv. Duplicate source
 acquisitions, conflicting source/sequence metadata and unsafe destinations fail
 before publication. CPMG and other incompatible observables are not included.
+The assessment sheet additionally covers catalogued primary etaXY and water 1H
+T1 acquisitions (displayed as water T1sat). Their pulse programs are checked
+against saved acqus metadata. Reviewed nominal annotations are used for display;
+provisional/unknown conditions remain pending. Missing QC stays not_assessed.
+Retained processed-only etaXY/water records are marked processed_only_review,
+with no claim of an independent raw acquisition. Setup records, split components
+and catalogued raw copies are omitted. Historical analysis-readiness statuses
+do not become QC failures. No numerical overview/report is created for these
+additional observables; existing report selection and values are unchanged.
 
 GROUPING AND QUALITY
 

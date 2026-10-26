@@ -27,6 +27,9 @@ import relax_tools as rt
 
 MODES = {'15N T1': 'r1', '15N T1rho': 'r1rho', '1H-15N hetNOE': 'noe',
          'r1': 'r1', 'r1rho': 'r1rho', 'noe': 'noe'}
+REVIEW_EXTRA_MODES = {'etaXY': 'eta_xy', 'water 1H T1': 'water_t1sat'}
+REVIEW_LABELS = {'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE',
+                 'eta_xy': 'etaXY', 'water_t1sat': 'water T1sat'}
 SAMPLE_NAMES = {'ANP32A': 'ANP32aIDR', 'SeV Ntail': 'SeVNtail',
                 'HeTDR1 (folder/title evidence)': 'HeTDR1', 'heTDR1': 'HeTDR1'}
 REVIEW_FIELDS = ['target', 'protein', 'experiment_type', 'pulse_program',
@@ -41,6 +44,7 @@ REVIEW_LOOKUP = [
     ('assessment', 'Blank keeps saved decisions; usable accepts an acquisition; review requests inspection; exclude removes it from condition overviews.'),
     ('included', 'Condition is assigned and no reviewed exclusion applies. Inclusion does not mean QC passed.'),
     ('condition_review', 'Condition assignment is unresolved or provisional; not included in a confirmed-condition overview.'),
+    ('processed_only_review', 'Retained processed data have no original raw acquisition available; provenance needs review. This is not an additional confirmed raw acquisition.'),
     ('excluded', 'A reviewed exclusion applies. A blank machine_reason for an unassessed acquisition does not cancel that decision.'),
     ('not_assessed', 'No saved acquisition-level QC screen is available. machine_reason is intentionally blank.'),
     ('screened_no_major_flags', 'The saved acquisition-level screen found no major flags; this is not proof of clean intensities.'),
@@ -170,7 +174,8 @@ def confirmed_condition(row):
     if not construct: issues.append('construct unconfirmed')
     if issues:
         return None, '; '.join(dict.fromkeys(issues))
-    return (protein, construct, MODES[row['experiment_type']], fmt(salt), fmt(temperature), fmt(field), str(additives)), ''
+    modes = dict(MODES, **REVIEW_EXTRA_MODES)
+    return (protein, construct, modes[row['experiment_type']], fmt(salt), fmt(temperature), fmt(field), str(additives)), ''
 
 
 def qc_records(fid_inventory=None, r1_qc=None, decisions=None):
@@ -255,6 +260,62 @@ def discover(catalog, project, data_root, fid_inventory=None, r1_qc=None, decisi
     return sorted(result, key=lambda r: (r.get('acquisition_date', ''), r['relative_path']))
 
 
+def discover_reviews(catalog, project, data_root, fid_inventory=None, r1_qc=None,
+                     decisions=None, analysed_records=None):
+    """Review metadata without requiring numerical results for extra observables."""
+    project, data_root = Path(project).resolve(), Path(data_root).resolve()
+    qcs, _, excluded = qc_records(fid_inventory, r1_qc, decisions)
+    result = list(analysed_records or [])
+    seen = {row['relative_path'] for row in result}
+    for source in read_csv(catalog):
+        extra = source.get('experiment_type') in REVIEW_EXTRA_MODES
+        if not extra and (analysed_records is not None or source.get('status') != 'analysed' or
+                          source.get('experiment_type') not in MODES):
+            continue
+        kind = source.get('primary_record_status', '')
+        processed_only = kind.startswith('processed only')
+        if extra and (kind != 'primary raw acquisition' and not processed_only or
+                      source.get('related_primary_path') or
+                      source.get('status') in ('excluded_duplicate_raw', 'excluded_nonprimary')):
+            continue  # Split components, setup records and copies are not extra acquisitions.
+        relative = str(safe_source(source['relative_path']))
+        if relative in seen:
+            raise ValueError('Duplicate assessment acquisition: '+relative)
+        seen.add(relative)
+        row = dict(source)
+        if extra:
+            conditions = json.loads(source.get('conditions') or '{}')
+            # The catalog's inventory-temperature column can represent controller
+            # grouping. Prefer the explicitly saved nominal annotation for display.
+            nominal = conditions.get('review_nominal_temperature', conditions.get('nominal_temperature_C'))
+            if nominal is not None:
+                row['temperature_C'] = nominal or 'unknown'
+        condition, pending = confirmed_condition(row)
+        pulse = rt.acquisition_pulse_program(data_root/relative)
+        recorded = source.get('pulse_program') or 'unknown'
+        if pulse != 'unknown' and recorded not in ('unknown', pulse):
+            raise ValueError('Pulse-program conflict: '+relative)
+        exclusion = excluded.get(relative, '')
+        investigator = json.loads(source.get('investigator_exclusion') or '{}')
+        if investigator.get('exclude_from_primary_analysis'):
+            exclusion = investigator.get('assessment') or investigator.get('observation') or 'investigator exclusion'
+        directory = Path(source['output_directory']).resolve() if source.get('output_directory') else None
+        if directory is not None:
+            directory.relative_to(project)
+        mode = REVIEW_EXTRA_MODES[source['experiment_type']] if extra else MODES[source['experiment_type']]
+        row.update(relative_path=relative, mode=mode, directory=directory, condition=condition,
+                   pending=pending, processed_only=processed_only, exclusion=exclusion,
+                   pulse=pulse if pulse != 'unknown' else recorded,
+                   qc=qcs.get(relative, ('not_assessed', 'no saved acquisition-level FID screen')))
+        result.append(row)
+    return sorted(result, key=lambda r: (r.get('acquisition_date', ''), r['relative_path']))
+
+
+def review_condition_target(row, project):
+    directory = row.get('directory')
+    return str(Path(*directory.relative_to(project).parts[:3])) if directory is not None else None
+
+
 def read_user_reviews(path, records, project):
     """Read editable input; never rewrite it during overview generation."""
     for row in records:
@@ -262,7 +323,7 @@ def read_user_reviews(path, records, project):
     if not Path(path).is_file():
         return
     source_targets = {row['relative_path'] for row in records}
-    condition_targets = {str(Path(*row['directory'].relative_to(project).parts[:3])) for row in records}
+    condition_targets = {target for row in records if (target := review_condition_target(row, project)) is not None}
     reviews = {}
     for review in read_tsv(path):
         target = review['target'].strip()
@@ -275,7 +336,7 @@ def read_user_reviews(path, records, project):
             raise ValueError('Review assessment must be blank, usable, review or exclude: '+target)
         reviews[target] = (assessment, review['comment'].strip())
     for row in records:
-        condition_target = str(Path(*row['directory'].relative_to(project).parts[:3]))
+        condition_target = review_condition_target(row, project)
         applicable = [reviews[target] for target in (condition_target, row['relative_path']) if target in reviews]
         assessment = next((a for a,c in reversed(applicable) if a), '')
         comments = [c for a,c in applicable if c]
@@ -368,9 +429,10 @@ def brief_machine_reason(row):
 
 def machine_review_context(row):
     """Snapshot of automated evidence, kept separate from user decisions."""
-    disposition = 'excluded' if row['exclusion'] else 'condition_review' if row['pending'] else 'included'
+    disposition = ('excluded' if row['exclusion'] else 'processed_only_review' if row.get('processed_only')
+                   else 'condition_review' if row['pending'] else 'included')
     return dict(target=row['relative_path'], protein=row['protein'],
-                experiment_type={'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[row['mode']],
+                experiment_type=REVIEW_LABELS[row['mode']],
                 pulse_program=row['pulse'], acquisition_date=row.get('acquisition_date') or 'unknown',
                 NaCl_mM=row.get('NaCl_mM') or 'unknown',
                 nominal_temperature_C=row.get('temperature_C') or 'unknown',
@@ -705,9 +767,23 @@ def destination_for(group, project):
 
 def run(args):
     project = Path(args.project_root).resolve()
-    records = discover(args.catalog,project,args.data_root,args.fid_inventory,args.r1_qc,args.qc_decisions)
+    reviews_only = getattr(args, 'reviews_only', False)
+    if reviews_only and args.refresh_reports:
+        raise ValueError('--reviews-only cannot refresh numerical reports')
+    records = [] if reviews_only else discover(args.catalog,project,args.data_root,args.fid_inventory,args.r1_qc,args.qc_decisions)
+    review_records = discover_reviews(args.catalog, project, args.data_root, args.fid_inventory,
+                                      args.r1_qc, args.qc_decisions, None if reviews_only else records)
     review_path = Path(getattr(args, 'user_reviews', None) or project/'condition-reviews.tsv').resolve()
-    read_user_reviews(review_path, records, project)
+    read_user_reviews(review_path, review_records, project)
+    if reviews_only:
+        counts = dict(review_records=len(review_records), **dict(Counter(
+            row['machine_review_context']['machine_disposition'] for row in review_records)))
+        print(json.dumps(counts, sort_keys=True), flush=True)
+        if not args.dry_run:
+            with rt.run_directory(project, 'reviews'):
+                initialise_reviews(review_path, review_records, update_context=True)
+            print('Assessment file: '+str(review_path), flush=True)
+        return counts
     groups, excluded = defaultdict(list), defaultdict(list)
     for row in records:
         if row['exclusion']:
@@ -726,7 +802,7 @@ def run(args):
             print(row['relative_path'], 'excluded: '+row['exclusion'] if row['exclusion'] else 'condition_review: '+row['pending'] if row['pending'] else 'included',flush=True)
         return counts
     with rt.run_directory(project,'overviews') as stage:
-        initialise_reviews(review_path, records, update_context=getattr(args, 'update_review_context', False))
+        initialise_reviews(review_path, review_records, update_context=getattr(args, 'update_review_context', False))
         review_before = review_path.read_bytes()
         for row in records:
             status = refresh(row) if args.refresh_reports else (
@@ -767,12 +843,13 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project-root',required=True)
     parser.add_argument('--data-root',required=True)
-    parser.add_argument('--catalog',required=True,help='Reviewed master acquisition CSV; current analysed reports only')
+    parser.add_argument('--catalog',required=True,help='Reviewed master acquisition CSV; assessments also include primary/processed-only etaXY and water T1sat records')
     parser.add_argument('--fid-inventory',help='Reviewed R1rho FID inventory CSV')
     parser.add_argument('--r1-qc',help='Saved retained-range R1 FID screening CSV')
     parser.add_argument('--qc-decisions',help='Reviewed findings JSON with known_strong_growth_experiments / explicit exclusions')
-    parser.add_argument('--user-reviews',help='Editable target/assessment/comment TSV; defaults to PROJECT/condition-reviews.tsv; never overwritten')
+    parser.add_argument('--user-reviews',help='Editable review TSV; defaults to PROJECT/condition-reviews.tsv; normal overview regeneration leaves it unchanged')
     parser.add_argument('--update-review-context',action='store_true',help='Explicitly refresh informational review columns, preserving all user assessments/comments and backing up the sheet')
+    parser.add_argument('--reviews-only',action='store_true',help='Refresh only the assessment sheet from acquisition metadata, without numerical reports, spectra or fitting')
     parser.add_argument('--refresh-reports',action='store_true')
     parser.add_argument('--dry-run',action='store_true',help='Read-only inventory and disposition summary')
     args=parser.parse_args(argv)
