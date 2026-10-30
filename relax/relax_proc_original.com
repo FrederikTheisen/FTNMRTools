@@ -6,14 +6,31 @@ set delay_constant = 0.01
 set path2vc = "vclist"
 set path2vd = "vdlist"
 set path2ncyc = "ncyc_list"
+set path2vc2 = 'lists/vc/*.vc'
+set path2vd2 = 'lists/vd/*.vd'
+set path2vp = "vplist"
 
 #Modify calculation to fit pulse sequence
+rm delaylist
 if (-e "$path2vc") then
    cat "$path2vc" | awk 'NF {print '${delay_constant}'+$1*'${delay_block}'}' > delaylist
 else if (-e "$path2vd") then
    cat "$path2vd" | awk 'NF {unit=($1 ~ /us$/) ? 1000000 : ($1 ~ /m$/) ? 1000 : 1; print substr($1, 1, length($1)-1)/unit}' > delaylist
+else if (-e "$path2vp") then
+   cat "$path2vp" | awk 'NF {unit=($1 ~ /us$/) ? 1000000 : ($1 ~ /m$/) ? 1000 : 1; print substr($1, 1, length($1)-1)/unit}' > delaylist
 else if (-e "$path2ncyc") then
    cat "$path2ncyc" | awk 'NF {print $1}' > delaylist
+else if (-e "lists") then
+   if (-e "lists/vc") then
+      echo 'lists/vc list found'
+      cat $path2vc2 | awk 'NF {print '${delay_constant}'+$1*'${delay_block}'}' > delaylist
+   else if (-e "lists/vd") then
+      echo "lists/vd list found"
+      cat $path2vd2 | awk 'NF {unit=($1 ~ /us$/) ? 1000000 : ($1 ~ /m$/) ? 1000 : 1; print substr($1, 1, length($1)-1)/unit}' > delaylist
+   endif
+else
+   echo '### NO DELAY LIST FILE FOUND, EXITING ###'
+   exit
 endif
 
 echo '#########################'
@@ -128,8 +145,8 @@ series.com ft/test*.ft2
 
 xyz2pipe -in ft/test%03d.ft2 > m.ft3
 
-pipe2ucsf m.ft3 $out
-ucsfdata -a1 15N -o1 10. -sw1 100. -f1 100. -a2 15N $out
+# pipe2ucsf m.ft3 $out
+# ucsfdata -a1 15N -o1 10. -sw1 100. -f1 100. -a2 15N $out
 
 # Convert 2D planes to 2D spetra for ccpnmr analysis viewing/peak picking
 

@@ -852,6 +852,27 @@ def write_overview(path, group, excluded, project, review_path=None):
             writer.writerow(['# excluded',row['relative_path'],row['exclusion']])
 
 
+def overview_filename(condition):
+    """Name a table using reviewed conditions, independent of its directory."""
+    protein, construct, mode, salt, temperature, field, additives = condition
+    def token(value):
+        text = re.sub(r'[^A-Za-z0-9_.+-]+', '-', str(value)).strip('.')
+        if not text or text in ('.', '..'):
+            raise ValueError('Condition cannot be represented in an overview filename')
+        return text
+    sample = token(protein)
+    if construct and not re.sub(r'\W', '', protein).lower().endswith(re.sub(r'\W', '', construct).lower()):
+        sample += '_'+token(construct)
+    observable = {'r1': 'R1', 'r1rho': 'R1rho', 'noe': 'hetNOE'}[mode]
+    parts = [sample, observable, token(salt)+'mMNaCl', token(temperature)+'C', token(field)+'MHz']
+    if additives:
+        parts.append(token(additives))
+    name = '_'.join(parts)+'_overview.tsv'
+    if len(name.encode('utf-8')) > 255:
+        raise ValueError('Condition overview filename exceeds filesystem limit')
+    return name
+
+
 def destination_for(group, project):
     # The directory hierarchy is used only to PLACE already-reviewed groups.
     # Conditions themselves never come from these historical directory names.
@@ -862,7 +883,10 @@ def destination_for(group, project):
         parents.add(Path(project).joinpath(*parts[:3]))
     if len(parents) != 1:
         raise ValueError('Reviewed condition spans different output directories; explicit placement needed')
-    return next(iter(parents))/'overview.tsv'
+    conditions = {row['condition'] for row in group}
+    if len(conditions) != 1 or None in conditions:
+        raise ValueError('Overview filename requires one confirmed condition')
+    return next(iter(parents))/overview_filename(next(iter(conditions)))
 
 
 def run(args):
@@ -873,12 +897,17 @@ def run(args):
     records = [] if reviews_only else discover(args.catalog,project,args.data_root,args.fid_inventory,args.r1_qc,args.qc_decisions)
     review_records = discover_reviews(args.catalog, project, args.data_root, args.fid_inventory,
                                       args.r1_qc, args.qc_decisions, None if reviews_only else records)
-    review_path = Path(getattr(args, 'user_reviews', None) or project/'condition-reviews.tsv').resolve()
+    grist_snapshot = getattr(args, 'grist_review_snapshot', None)
+    if grist_snapshot and (getattr(args, 'user_reviews', None) or getattr(args, 'update_review_context', False)):
+        raise ValueError('--grist-review-snapshot cannot be combined with --user-reviews or --update-review-context')
+    review_path = Path(grist_snapshot or getattr(args, 'user_reviews', None) or project/'condition-reviews.tsv').resolve()
+    if grist_snapshot and not review_path.is_file():
+        raise ValueError('Grist review snapshot does not exist: '+str(review_path))
     if reviews_only:
         counts = dict(review_records=len(review_records), **dict(Counter(
             machine_review_context(row)['machine_disposition'] for row in review_records)))
         print(json.dumps(counts, sort_keys=True), flush=True)
-        if not args.dry_run:
+        if not args.dry_run and not grist_snapshot:
             with rt.run_directory(project, 'reviews'):
                 initialise_reviews(review_path, review_records,
                                    update_context=getattr(args, 'update_review_context', False), append_missing=True)
@@ -903,7 +932,8 @@ def run(args):
             print(row['relative_path'], 'excluded: '+row['exclusion'] if row['exclusion'] else 'condition_review: '+row['pending'] if row['pending'] else 'included',flush=True)
         return counts
     with rt.run_directory(project,'overviews') as stage:
-        initialise_reviews(review_path, review_records, update_context=getattr(args, 'update_review_context', False), append_missing=True)
+        if not grist_snapshot:
+            initialise_reviews(review_path, review_records, update_context=getattr(args, 'update_review_context', False), append_missing=True)
         review_before = review_path.read_bytes()
         for row in records:
             status = refresh(row) if args.refresh_reports else (
@@ -915,11 +945,11 @@ def run(args):
             path = destinations[key]; name = f'overview_{index}.tsv'
             write_overview(stage/name, group, excluded[key], project, review_path)
             with rt.run_directory(path.parent,'overview-publish') as local:
-                shutil.copyfile(stage/name,local/'overview.tsv')
+                shutil.copyfile(stage/name,local/path.name)
                 if path.is_file():
                     backup = path.parent/'.report-backups'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-                    backup.mkdir(parents=True);shutil.copy2(path,backup/'overview.tsv')
-                rt.publish(local,path.parent,['overview.tsv'])
+                    backup.mkdir(parents=True);shutil.copy2(path,backup/path.name)
+                rt.publish(local,path.parent,[path.name])
         index_name = 'condition-overviews.tsv'
         with (stage/index_name).open('w',newline='') as handle:
             fields=['acquisition','protein','observable','disposition','reason','acquisition_QC','pulse_program','overview','numbers_file','report_refresh','user_assessment','user_comment']
@@ -948,6 +978,7 @@ def main(argv=None):
     parser.add_argument('--fid-inventory',help='Reviewed R1rho FID inventory CSV')
     parser.add_argument('--r1-qc',help='Saved retained-range R1 FID screening CSV')
     parser.add_argument('--qc-decisions',help='Reviewed findings JSON with known_strong_growth_experiments / explicit exclusions')
+    parser.add_argument('--grist-review-snapshot',help='Read-only Grist review snapshot; disables legacy review writes')
     parser.add_argument('--user-reviews',help='Editable review TSV; defaults to PROJECT/condition-reviews.tsv; normal overview regeneration leaves it unchanged')
     parser.add_argument('--update-review-context',action='store_true',help='Explicitly refresh informational review columns, preserving all user assessments/comments and backing up the sheet')
     parser.add_argument('--reviews-only',action='store_true',help='Append missing relaxation acquisitions to the assessment, preserving the edited document without requiring analysis results')

@@ -79,7 +79,12 @@ residue-level flag, not automatic evidence of acquisition corruption.
 
 TSV LAYOUT
 
-Each condition gets overview.tsv at its existing condition-directory level.
+Each condition gets a descriptive filename at its existing condition-directory
+level, for example ANP32aIDR_R1_50mMNaCl_25C_600MHz_overview.tsv or
+SeVNtail_R1rho_500mMNaCl_25C_700MHz_overview.tsv. The name uses reviewed
+protein/construct, observable, salt, nominal temperature and field; recorded
+additives are included when present. Numerical field precision is retained.
+The project-root condition-overviews.tsv index contains the resulting paths.
 It is an AUTOMATICALLY GENERATED OUTPUT: do not edit its values or insert review
 comments. Regeneration replaces it, retaining a backup. A notice at the top
 states this; persistent comments belong in condition-reviews.tsv (see below).

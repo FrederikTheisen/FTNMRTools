@@ -509,7 +509,7 @@ class OverviewTests(unittest.TestCase):
         records=co.read_tsv(path)
         self.assertEqual(len(records),3)
         self.assertEqual(next(r for r in records if r['target']=='extra/6')['comment'],'Keep this note')
-        self.assertEqual(len(list(self.project.rglob('overview.tsv'))),1)
+        self.assertEqual(len(list(self.project.rglob('*_overview.tsv'))),1)
     def test_extra_duplicate_conflicting_pulse_and_protected_path_fail_before_update(self):
         eta=self.review_fixture();self.catalog_rows([eta,eta])
         with self.assertRaisesRegex(ValueError,'Duplicate assessment'):

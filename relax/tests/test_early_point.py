@@ -73,6 +73,38 @@ class DecisionTests(unittest.TestCase):
             b=synthetic(perturb=lambda i,t:rng.gauss(0,.0004))
             self.assertEqual(assess(b)['fit_basis'],'all_points')
 
+    def test_explicit_exclusion_omits_all_shortest_repeats_without_anomaly(self):
+        b=synthetic(count=3,times=[.1,0.,.2,0.,.3])
+        self.assertEqual(assess(b)['fit_basis'],'all_points')
+        result=assess(b,'exclude_shortest')
+        self.assertEqual(result['excluded_planes_1based'],[2,4])
+        self.assertEqual(result['fit_count'],3)
+        self.assertEqual(result['reason'],'user_requested_shortest_exclusion')
+        self.assertFalse(result['candidate_passed'])
+
+    def test_explicit_exclusion_rejects_insufficient_retained_data(self):
+        with self.assertRaisesRegex(ValueError,'retained observations'):
+            assess(synthetic(times=[0.,.1,.2]),'exclude_shortest')
+
+    def test_explicit_report_preserves_omitted_observations_and_both_fits(self):
+        peaks,data,times,noises=synthetic(count=3,times=[.1,0.,.2,0.,.3])
+        all_text=fit_text(peaks,data,times,noises)
+        retained=[i for i,t in enumerate(times) if t!=min(times)]
+        candidate_text=fit_text(peaks,{k:[v[i] for i in retained] for k,v in data.items()},
+                                [times[i] for i in retained],[noises[i] for i in retained])
+        audit=tools.evaluate_early_point(peaks,data,tools.fitted_rows(peaks,all_text,'r1rho'),
+                                         times,noises,'exclude_shortest',
+                                         tools.fitted_rows(peaks,candidate_text,'r1rho'))
+        selection=dict(audit=audit,all_fit_text=all_text,candidate_fit_text=candidate_text)
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)
+            tools.prepare_reports(path,peaks,data,candidate_text,times,noises,'r1rho','sample',
+                                  'sample_T1rho.list_intensity.pdf','collection/4',early_selection=selection)
+            with (path/'sample_analysis.csv').open() as handle:rows=list(csv.DictReader(handle))
+            self.assertEqual(len(rows),len(peaks)*len(times))
+            self.assertEqual({r['plane_index'] for r in rows if r['used_in_fit']=='False'},{'2','4'})
+            self.assertTrue(all(r['all_points_value'] and r['candidate_value'] for r in rows))
+
     def test_shared_excess_selects_shortest_not_first_plane(self):
         result=assess(synthetic(perturb=lambda i,t:.03 if t==.001 else 0))
         self.assertEqual(result['fit_basis'],'exclude_shortest')

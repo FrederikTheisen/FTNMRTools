@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nmr-register"
+version = "0.1.0"
+description = "Observation-only Bruker acquisition collector for a private Grist register"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+migration = ["openpyxl>=3.1"]
+test = ["pytest>=7"]
+
+[project.scripts]
+nmr-register = "nmr_register.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["nmr_register*"]

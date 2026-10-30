@@ -1,0 +1,10 @@
+[Unit]
+Description=Observe local NMR acquisitions and synchronize changed metadata to Grist
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/nmr-register sync
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

@@ -504,7 +504,7 @@ def early_groups(times, noises, extracted, cohort, fitted, normalization):
 def evaluate_early_point(peaks, extracted, full_rows, times, noises, policy='auto',
                          candidate_rows=None, config=None):
     """Deterministic selection heuristic. Never fits or discards measurements."""
-    if policy not in ('auto','report','off'):
+    if policy not in ('auto','report','off','exclude_shortest'):
         raise ValueError('Invalid early-point policy')
     cfg = dict(EARLY_DEFAULTS if config is None else config)
     if set(cfg) != set(EARLY_DEFAULTS) or any(not math.isfinite(v) for v in cfg.values()):
@@ -534,6 +534,23 @@ def evaluate_early_point(peaks, extracted, full_rows, times, noises, policy='aut
                  full_bins=[], candidate_bins=[], before_score=None, after_score=None,
                  score_reduction_fraction=None, median_absolute_rate_change_fraction=None)
     if policy == 'off': return audit
+    if policy == 'exclude_shortest':
+        # Explicit analysis policy, independent of the automatic residual test.
+        # All repeated observations at the minimum delay are omitted together.
+        if len(remaining) < 3 or audit['remaining_distinct_delays'] < 2:
+            raise ValueError('Shortest-delay exclusion needs at least three retained observations and two distinct delays')
+        if candidate_rows is None:
+            audit['reason'] = 'candidate_required'
+            return audit
+        candidate = {row['peak_id']:row for row in candidate_rows}
+        if set(candidate) != set(full):
+            raise ValueError('Candidate-fit identifiers differ from full fit')
+        if not any(row['valid'] for row in candidate_rows):
+            raise ValueError('No valid shortest-exclusion fits')
+        audit.update(reason='user_requested_shortest_exclusion', candidate_attempted=True,
+                     fit_basis='exclude_shortest', excluded_delay_s=shortest,
+                     excluded_planes_1based=proposed, fit_count=len(remaining))
+        return audit
     if len(cohort) < cfg['min_peaks']:
         audit['reason'] = 'insufficient_cohort'; return audit
     if audit['remaining_distinct_delays'] < cfg['min_remaining_delays']:
@@ -1879,7 +1896,8 @@ def main(argv=None):
                     help='deprecated consistency check; type is inferred from the peak-list filename')
     p.add_argument('--peak-format', choices=('sparky2d', 'sparky3d'), default='sparky3d')
     p.add_argument('--header', required=True); p.add_argument('--noise', required=True); p.add_argument('--prefix', default='')
-    p.add_argument('--early-point-policy', choices=('auto','report','off'),default='auto')
+    p.add_argument('--early-point-policy', choices=('auto','report','off','exclude_shortest'),default='auto',
+                   help='exclude_shortest explicitly omits every minimum-delay observation; auto uses the residual heuristic')
     p = commands.add_parser('report', help='Rebuild reports without extraction, processing or fitting')
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument('--csv'); group.add_argument('--saved-prefix')

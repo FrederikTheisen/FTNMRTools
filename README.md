@@ -3,6 +3,12 @@
 Various tools to handle NMR processing and analysis tasks.
 To download a file, open the file and right click the 'Raw' button in top right of the file area and click download archive.
 
+## NMR register pilot
+
+The private Grist register pilot and Linux collector operating notes are in
+[docs/nmr-register/README.md](docs/nmr-register/README.md). The pilot document
+is [Register NMR test](https://docs.getgrist.com/e259CYFK6mGK/registernmrtest).
+
 ## CEST
 
 Collection of tools and files needed to process and analyze CEST data in SBiNLab.

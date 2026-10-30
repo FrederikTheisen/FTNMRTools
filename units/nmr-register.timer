@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly NMR register synchronization while logged in
+
+[Timer]
+OnStartupSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=2min
+Unit=nmr-register.service
+
+[Install]
+WantedBy=default.target

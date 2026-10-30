@@ -159,9 +159,15 @@ Automatic shortest-delay test (v2)
 ---------------------------------
 
 relax_analyze_v2.com now sets EARLY_POINT_POLICY = auto. The helper accepts
---early-point-policy auto|report|off. auto can select a shortened fit; report
+--early-point-policy auto|report|off|exclude_shortest. auto can select a shortened fit; report
 runs the same checks and candidate fit but keeps all-point rates; off keeps
 all-point rates without attempting a candidate. NOE bypasses this feature.
+exclude_shortest explicitly applies the investigator's fixed exclusion policy,
+even when the automatic residual test would keep all points. It fits and saves
+both alternatives, omits every observation at the minimum numerical delay,
+and records user_requested_shortest_exclusion as the reason. It requires at
+least three retained observations at two distinct delays. This policy does
+not claim that the automatic test established an artefact.
 The independent original relax_analyze.com remains unchanged.
 
 The shortest numerical delay is tested, not the first acquisition plane.
