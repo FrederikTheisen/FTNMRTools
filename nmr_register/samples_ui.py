@@ -6,7 +6,7 @@ LEGACY_STORAGE_FORMULA = '''slot = (str($StorageRow) + str($StorageColumn)) if $
 return " / ".join(part for part in [$StorageBox, slot] if part)'''
 STORAGE_FORMULA = '(str($StorageRow) + str($StorageColumn)) if $StorageRow and $StorageColumn else ""'
 
-TABLE_FIELDS = ['SampleID','Protein','Isotope','Buffer','NaCl_mM','StorageDisplay','Available']
+TABLE_FIELDS = ['SampleID','Protein','Protein_uM','Isotope','Buffer','NaCl_mM','StorageDisplay','Available']
 DETAIL_FIELDS = ['SampleID','PreparationDateDisplay','Protein','Isotope','Protein_uM',
                  'Buffer','pH','NaCl_mM','StorageDisplay','CurrentLocation','Available']
 EXTRA_FIELDS = ['SampleID','PreparedAt','Series','Protein','Construct','Isotope',
@@ -17,7 +17,7 @@ LABELS = {'SampleID':'Sample ID','Isotope':'Labelling','NaCl_mM':'NaCl (mM)',
           'Available':'Tube status','CurrentLocation':'Current location','OtherConditions':'Other conditions',
           'PreparedAt':'Preparation date',
           'StorageRow':'Storage column','StorageColumn':'Storage row'}
-WIDTHS = {'SampleID':240,'Protein':110,'Isotope':90,'Buffer':150,'NaCl_mM':100,'StorageDisplay':140,'Available':115}
+WIDTHS = {'SampleID':240,'Protein':110,'Protein_uM':110,'Isotope':90,'Buffer':150,'NaCl_mM':100,'StorageDisplay':140,'Available':115}
 
 
 STATUS_ROW_STYLES = (
