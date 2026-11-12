@@ -1192,6 +1192,8 @@ def apply_electrostatics_ui(client,doc_id):
     from .navigation import apply_experiment_navigation
     result=install_coverage_matrix(client,doc_id)
     result['experiment_navigation']=apply_experiment_navigation(client,dry_run=False)
+    from .electrostatics_assessment import install_electrostatics_assessment
+    result['assessment']=install_electrostatics_assessment(client,doc_id)
     return result
 
 

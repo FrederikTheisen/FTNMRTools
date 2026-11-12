@@ -391,7 +391,10 @@ In Experiments, select a row in the main list and open Assess experiment in the
 tray beside Register experiment. The tray edits that same experiment. Enter the
 six ratings and optional note, save, then close the tray. Overall `Assessment`
 remains visible in the main table; the tray shows the selected acquisition's
-source and title comments. The six choices are human-entered; the collector,
+source and title comments. Electrostatics also has an Assess experiment tray:
+select a map cell, choose a row in Individual acquisitions, then open the tray.
+Both pages edit the same experiment and calculated assessment.
+The six choices are human-entered; the collector,
 CSV presence, and `AnalysisStatus` do not automatically mark a criterion as good.
 
 For a discovered acquisition with a verified sample and a unique, consistent
