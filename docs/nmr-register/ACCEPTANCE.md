@@ -71,7 +71,60 @@ that repository with:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s relax/tests -v
 ```
 
-The full migration remains disabled until the user completes the Mac browser
-walkthrough. Acquisition replacement/copy cases remain flagged for review until
+As of the 2026-10-30 acceptance record, full migration remained disabled until
+the user completed the Mac browser walkthrough. Acquisition replacement/copy cases remain flagged for review until
 the collector acknowledgement workflow is implemented and reviewed; do not
 clear machine-generated reconciliation fields by hand.
+
+## Current update — 2026-11-02
+
+The Mac browser walkthrough passed. Two reviewed batches added 745 exact-key
+experiments, bringing the register to 42 Samples, 757 Experiments and 16 internal
+attachments. All 62 experiments present before the expansion retained their
+stored values, human fields, assessments and prior result pointers. Eleven newly
+selected CSVs were attached; the full restore verified 14 selected CSV byte
+hashes. No sample links, studies, or QC ratings were inferred.
+
+The collector has 757 exact targets, with 753 currently observed and four
+absent. The current sync created no records and reported zero conflicts,
+metadata warnings, pending work, or pending results. A repeated import plan
+proposed zero inserts. Another 414 scan datasets remain held for review; these
+are not verified independent acquisitions. The complete restore and package
+suite passed (228 tests, four optional skips), and the hourly timer was restored.
+
+The historical notes above describe the 2026-10-30 state. Broad migration,
+legacy-QC reconciliation and the report review-writing cutover remain incomplete;
+replacement/copy candidates stay excluded pending review.
+
+## Current update — 2026-11-04
+
+The current full desktop scan found 1,081 acquisitions, all linked in Grist.
+The 79 reviewed workbook/acquisition merges preserved every nonformula field
+according to the conflict and ownership contract. All prior nonblank effective
+assessments survived, sample links and notes transferred without replacing
+conflicting human values, and selected result pointers stayed on their linked
+acquisitions. The current document has 1,132 experiment records and 54 internal
+attachments. A full backup restored with the experiment records, layout and all
+attachment bytes unchanged; original workbook bytes and collector state were
+unchanged. The hourly collector timer was restored.
+
+There are 51 visible, unlinked workbook rows: 35 missing EXPNOs,
+four effective-assessment conflicts, seven identities needing
+correction, two setup-only matches, and three absent acquisitions. Each has a
+specific migration action in Needs attention. These are reconciliation cases;
+there is no undisclosed hold on the 1,081 desktop acquisitions. The earlier
+historical counts and rollout holds above do not describe the current state.
+
+The reconciliation regression tests cover real zero values, unset references,
+source-fact ownership, assessment conflicts and masked imported decisions,
+selected-result conflicts, reference rewrites, fresh-edit guards, atomic retry
+recognition, and removal of obsolete generated migration warnings.
+
+The user-confirmed follow-up reconciled eight 2026-04-22 HeTDR1 entries as
+30 bp DNA and five 2026-03-02 SeV Ntail entries as 250 mM NaCl. The original
+workbook explicitly names the existing 30 bp tube for the eight DNA acquisitions;
+those now link to that sample with frozen preparation conditions. The salt
+acquisitions retain the existing 250 mM tube and frozen snapshots. The separate
+50 mM sample record was unchanged. All current assessments, complementary noise
+notes, and the existing shared-fingerprint warning were preserved. A fresh full
+backup retained all 54 attachment byte hashes. The original workbook was unchanged.

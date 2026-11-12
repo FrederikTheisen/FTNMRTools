@@ -1,0 +1,119 @@
+"""Guarded Dummy schema upgrade and native experiment presentation."""
+import json
+from .schema import columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA
+from .setup import _mcp
+
+ROW_STYLES = (
+    {'formula':'$AcquisitionStatus == "Dummy"','style':{'fillColor':'#F0F1F2','textColor':'#697078'}},
+    {'formula':'$AcquisitionStatus != "Dummy" and $NeedsAttention','style':{'fillColor':'#FFF6D8','textColor':'#433B22'}},
+)
+LINK_STYLE = {'formula':'$DesktopLink == "Not linked"','style':{'textColor':'#456A85'}}
+
+
+def upgrade_dummy_schema(client, apply=False):
+    """Accept only the exact shipped formulas; leave user metadata intact."""
+    tables=[r for r in client.records('_grist_Tables') if r['fields'].get('tableId')=='Experiments']
+    if len(tables)!=1: raise ValueError('Experiments table missing or ambiguous')
+    table=tables[0]['id']
+    existing={r['fields'].get('colId'):r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId')==table}
+    wanted={c['id']:c for c in columns()['Experiments']}
+    actions=[]
+    for name,previous in [('AttentionReason',PRE_DUMMY_ATTENTION_FORMULA),('EffectiveAcquisitionStatus',PRE_DUMMY_EFFECTIVE_FORMULA)]:
+        current=existing[name]; fields=current['fields'];target=wanted[name]['formula']
+        if not fields.get('isFormula') or fields.get('formula') not in ((previous,target,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA) if name=='AttentionReason' else (previous,target)): raise ValueError(name+' formula requires review')
+        if fields['formula']!=target:actions.append(['ModifyColumn','Experiments',name,{'formula':target}])
+    status=existing['AcquisitionStatus']['fields']
+    if status.get('isFormula') or status.get('formula') or status.get('type') not in ('Text','Choice'):raise ValueError('AcquisitionStatus requires review')
+    options=json.loads(status.get('widgetOptions') or '{}');choices=options.get('choices',[])
+    if not isinstance(choices,list) or any(not isinstance(c,str) for c in choices):raise ValueError('Status choices require review')
+    if 'Dummy' not in choices:actions.append(['ModifyColumn','Experiments','AcquisitionStatus',{'type':'Choice','widgetOptions':json.dumps({**options,'choices':choices+['Dummy']})}])
+    link=wanted['DesktopLink']
+    if 'DesktopLink' not in existing:actions.append(['AddColumn','Experiments','DesktopLink',{k:v for k,v in link.items() if k!='id'}])
+    elif any(existing['DesktopLink']['fields'].get(k)!=link[k] for k in ('formula','isFormula','type')):raise ValueError('DesktopLink requires review')
+    else:
+        metadata={}
+        if not existing['DesktopLink']['fields'].get('untieColIdFromLabel'):metadata['untieColIdFromLabel']=True
+        if not existing['DesktopLink']['fields'].get('description'):metadata['description']=link['description']
+        if metadata:actions.append(['UpdateRecord','_grist_Tables_column',existing['DesktopLink']['id'],metadata])
+    if apply and actions:
+        client.apply(actions)
+        if 'DesktopLink' not in existing:
+            # AddColumn may discard presentation metadata. Pin it after the new
+            # column has a real metadata ID, without guessing that ID in dry runs.
+            added=[r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId')==table and r['fields'].get('colId')=='DesktopLink']
+            if len(added)!=1:raise ValueError('New DesktopLink column missing or ambiguous')
+            metadata={}
+            if not added[0]['fields'].get('untieColIdFromLabel'):metadata['untieColIdFromLabel']=True
+            if not added[0]['fields'].get('description'):metadata['description']=link['description']
+            if metadata:
+                followup=['UpdateRecord','_grist_Tables_column',added[0]['id'],metadata]
+                client.apply([followup]);actions.append(followup)
+    return actions
+
+
+def apply_experiment_styles(client,doc_id):
+    """Append native rules without changing custom rules or column options."""
+    call=lambda name,**kw:_mcp(client,name,{'doc_id':doc_id,**kw})
+    result=call('grist_get_table_conditional_styles',table_id='Experiments')
+    styles=result.get('styles',result)
+    rows=styles.get('rowRules',[]);cols=styles.get('columnRules',{})
+    if not isinstance(rows,list) or not isinstance(cols,dict):raise ValueError('Unexpected experiment styles')
+    updated=list(rows);updated_cols={**cols}
+    for rule in ROW_STYLES:
+        matching=[r for r in updated if r.get('formula')==rule['formula']]
+        if matching and matching!=[rule]:raise ValueError('Experiment rule requires review')
+        if not matching:updated.append(rule)
+    links=list(cols.get('DesktopLink',[]))
+    matching=[r for r in links if r.get('formula')==LINK_STYLE['formula']]
+    if matching and matching!=[LINK_STYLE]:raise ValueError('Desktop link style requires review')
+    if not matching:links.append(LINK_STYLE)
+    updated_cols['DesktopLink']=links
+    target={'rowRules':updated,'columnRules':updated_cols}
+    if target!={'rowRules':rows,'columnRules':cols}:call('grist_set_table_conditional_styles',table_id='Experiments',styles=target)
+    return target
+
+
+def editable_experiment_status(client,apply=False):
+    """Replace the displayed effective status in experiment grids in place."""
+    tables={r['id']:r['fields'].get('tableId') for r in client.records('_grist_Tables')}
+    cols={r['fields'].get('colId'):r['id'] for r in client.records('_grist_Tables_column') if tables.get(r['fields'].get('parentId'))=='Experiments'}
+    sections={r['id'] for r in client.records('_grist_Views_section') if tables.get(r['fields'].get('tableRef'))=='Experiments' and r['fields'].get('parentKey')=='record'}
+    fields=client.records('_grist_Views_section_field');actions=[]
+    for sid in sections:
+        group=[r for r in fields if r['fields'].get('parentId')==sid]
+        if any(r['fields'].get('colRef')==cols['AcquisitionStatus'] for r in group):continue
+        for r in group:
+            if r['fields'].get('colRef')==cols['EffectiveAcquisitionStatus']:actions.append(['UpdateRecord','_grist_Views_section_field',r['id'],{'colRef':cols['AcquisitionStatus']}])
+    if apply and actions:client.apply(actions)
+    return actions
+
+
+def display_partial_assessment(client, apply=False):
+    """Show the display formula in human experiment views, preserving field metadata."""
+    tables = [r for r in client.records('_grist_Tables') if r['fields'].get('tableId') == 'Experiments']
+    if len(tables) != 1:
+        raise ValueError('Experiments table missing or ambiguous')
+    table_id = tables[0]['id']
+    columns = [r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId') == table_id]
+    ids = {}
+    for name in ('Assessment', 'AssessmentDisplay'):
+        matches = [r['id'] for r in columns if r['fields'].get('colId') == name]
+        if len(matches) != 1:
+            raise ValueError(name + ' column missing or ambiguous')
+        ids[name] = matches[0]
+    sections = {r['id'] for r in client.records('_grist_Views_section')
+                if r['fields'].get('tableRef') == table_id
+                and r['fields'].get('parentId', 0) > 0
+                and r['fields'].get('parentKey') in ('record', 'single')}
+    actions = []
+    for row in client.records('_grist_Views_section_field'):
+        fields = row['fields']
+        if fields.get('parentId') in sections and fields.get('colRef') == ids['Assessment']:
+            updates = {'colRef': ids['AssessmentDisplay']}
+            width = fields.get('width')
+            if isinstance(width, (int, float)) and not isinstance(width, bool) and width < 220:
+                updates['width'] = 220
+            actions.append(['UpdateRecord', '_grist_Views_section_field', row['id'], updates])
+    if apply and actions:
+        client.apply(actions)
+    return actions

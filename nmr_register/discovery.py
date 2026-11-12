@@ -1,8 +1,10 @@
 """Directory traversal with protected paths pruned before any inspection."""
 import os
+import math
 import stat
 from pathlib import Path
 from .bruker import observe
+from .split import is_derived_split
 
 
 def safe_read_path(path):
@@ -33,7 +35,63 @@ def acquisition_key(source_id, folder, expno):
     return source_id+':'+(folder+'/' if folder else '')+str(expno)
 
 
-def scan_source(source):
+def resolve_folder_sample_defaults(observations):
+    """Resolve explicit defaults only across acquisitions already in this scan.
+
+    No filesystem inspection, cached inheritance, parent-folder matching, sample
+    creation, or human-link writes happen here. A direct valid tag always wins.
+    """
+    groups = {}
+    for record in observations:
+        key = (record.get('ObservedSourceID'),record.get('ObservedFolder'))
+        if not isinstance(key[0],str) or not key[0] or not isinstance(key[1],str):
+            continue
+        groups.setdefault(key,[]).append(record)
+    for records in groups.values():
+        declared = [r for r in records if r.get('_FolderSampleEvidence')]
+        if not declared:
+            continue  # Preserve legacy observations/signatures byte-for-byte.
+        defaults = {r['_FolderSampleID'] for r in declared if r.get('_FolderSampleID')}
+        problems = []
+        for record in records:
+            issue = record.get('_FolderSampleIssue','')
+            # Unreadable titles could hide another explicit declaration. Missing
+            # titles alone remain eligible for a readable sibling's default.
+            if not issue and 'Title' not in record and record.get('ObservedSampleTagIssue'):
+                issue = record['ObservedSampleTagIssue']
+            if issue:
+                problems.append('EXPNO '+str(record.get('ObservedExpno',''))+': '+issue)
+        if len(defaults)>1:
+            problems.append('Conflicting SAMPLE_ID_FOLDER defaults in monitored folder')
+        origin = '; '.join('EXPNO '+str(r.get('ObservedExpno',''))+': '+r['_FolderSampleEvidence'] for r in declared[:8])
+        if len(declared)>8:
+            origin += '; ... ('+str(len(declared))+' declaring acquisitions)'
+        evidence = 'SAMPLE_ID_FOLDER default from '+origin
+        for record in records:
+            if record.get('ObservedSampleID') and not record.get('ObservedSampleTagIssue'):
+                continue  # Acquisition-local SAMPLE_ID has explicit priority.
+            if record.get('ObservedSampleTagIssue'):
+                continue  # Invalid direct evidence is never replaced by a guess.
+            if problems or len(defaults)!=1:
+                record['ObservedSampleID'] = ''
+                record['ObservedSampleTagIssue'] = '; '.join(problems[:8]) or 'No coherent SAMPLE_ID_FOLDER default'
+                record['ObservedSampleTagEvidence'] = evidence
+            else:
+                record['ObservedSampleID'] = next(iter(defaults))
+                record['ObservedSampleTagEvidence'] = evidence
+    return observations
+
+
+def match_instrument(frequency, profiles=()):
+    """Return the unique raw proton-frequency match; ambiguity stays unresolved."""
+    if isinstance(frequency, bool) or not isinstance(frequency, (int, float)) or not math.isfinite(frequency) or frequency <= 0:
+        return None
+    matches = [profile for profile in profiles
+               if abs(frequency - profile.proton_mhz) <= profile.tolerance_mhz]
+    return matches[0] if len(matches) == 1 else None
+
+
+def scan_source(source, instrument_profiles=()):
     """Return observations and errors. Missing roots never mean deletion.
 
     scandir names are filtered BEFORE is_dir/is_symlink/stat or descent. Every
@@ -75,11 +133,22 @@ def scan_source(source):
                         folder = relative.parent.as_posix()
                         if folder == '.': folder = ''
                         fields = observe(path)
+                        if is_derived_split(fields):
+                            continue
                         fields.update(AcquisitionKey=acquisition_key(source.id,folder,entry.name),
                                       SourcePath=str(path),ObservedSourceID=source.id,
                                       ObservedFolder=folder,ObservedExpno=entry.name)
                         if source.instrument:
                             fields['ObservedInstrument'] = source.instrument
+                        else:
+                            profile = match_instrument(fields.get('ObservedField_MHz'), instrument_profiles)
+                            if profile is not None:
+                                fields['ObservedInstrument'] = profile.id
+                                evidence = (f'instrument={profile.id} from proton frequency '
+                                            f'{fields["ObservedField_MHz"]:g} MHz; configured match '
+                                            f'±{profile.tolerance_mhz:g} MHz')
+                                previous = fields.get('ObservedProtocolEvidence', '')
+                                fields['ObservedProtocolEvidence'] = previous+'; '+evidence if previous else evidence
                         observations.append(fields)
                         continue
                 if entry.name not in ('pdata',):
@@ -87,4 +156,5 @@ def scan_source(source):
             except OSError as error:
                 errors.append(f'{source.id}: cannot observe {entry.name} ({error.__class__.__name__})')
     walk(root)
+    resolve_folder_sample_defaults(observations)
     return observations, errors

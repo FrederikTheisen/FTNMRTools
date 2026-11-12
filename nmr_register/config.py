@@ -1,11 +1,12 @@
 """Non-secret collector configuration."""
 from dataclasses import dataclass, field, asdict
 import json
+import math
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-DEFAULT_DOC = 'https://docs.getgrist.com/e259CYFK6mGK/registernmrtest'
+DEFAULT_DOC = 'https://theisen.getgrist.com/3oWrbb4osxG8/registernmrtest'
 
 def default_home():
     return Path(os.environ.get('NMR_REGISTER_HOME', Path.home()/'.local/share/nmr-register'))
@@ -19,6 +20,23 @@ class Source:
     targets: list | None = None
 
 @dataclass
+class InstrumentProfile:
+    id: str
+    proton_mhz: float
+    nominal_mhz: float
+    tolerance_mhz: float = 0.05
+
+    def validate(self):
+        if not isinstance(self.id, str) or not self.id.strip() or self.id != self.id.strip():
+            raise ValueError('Instrument profile IDs must be nonempty strings without surrounding whitespace')
+        for name in ('proton_mhz', 'nominal_mhz', 'tolerance_mhz'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError('Instrument profile '+name+' must be a finite positive number')
+        return self
+
+
+@dataclass
 class Config:
     doc_url: str = DEFAULT_DOC
     sources: list = field(default_factory=list)
@@ -29,6 +47,7 @@ class Config:
     credential_file: str = ''
     timeout: float = 30
     batch_size: int = 100
+    instrument_profiles: list = field(default_factory=list)
 
     @property
     def home(self):
@@ -48,6 +67,15 @@ class Config:
 
     def validate(self):
         self.api_base
+        if not isinstance(self.instrument_profiles, list):
+            raise ValueError('Instrument profiles must be a list')
+        for profile in self.instrument_profiles:
+            if not isinstance(profile, InstrumentProfile):
+                raise ValueError('Expected an InstrumentProfile')
+            profile.validate()
+        profile_ids = [profile.id for profile in self.instrument_profiles]
+        if len(profile_ids) != len(set(profile_ids)):
+            raise ValueError('Instrument profile IDs must be unique')
         ids = [s.id for s in self.sources]
         if len(ids) != len(set(ids)) or any(not i or ':' in i or '/' in i for i in ids):
             raise ValueError('Source IDs must be unique, nonempty and contain no colon or slash')
@@ -64,6 +92,12 @@ class Config:
 def load_config(path=None):
     path = Path(path) if path else default_home()/'config.json'
     value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError('Config must be a JSON object')
+    profiles = value.get('instrument_profiles', [])
+    if not isinstance(profiles, list) or any(not isinstance(profile, dict) for profile in profiles):
+        raise ValueError('Instrument profiles must be a list of objects')
+    value['instrument_profiles'] = [InstrumentProfile(**profile) for profile in profiles]
     value['sources'] = [Source(**source) for source in value.get('sources', [])]
     return Config(**value).validate()
 

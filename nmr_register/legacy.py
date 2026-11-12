@@ -31,6 +31,8 @@ def review_snapshot(source_path, experiments, source_id=None):
         seen.add(target)
         if target not in rows: continue
         decision=fields.get('Assessment') or ''; reason=(fields.get('AssessmentReason') or '').strip()
+        if decision in ('Limited use','Do not use') and not reason:
+            reason=(fields.get('AssessmentExplanation') or '').strip()
         if fields.get('ReconciliationReason') or fields.get('MigrationIssue') or fields.get('MetadataDifference'):
             raise ValueError('Unresolved experiment cannot be exported: '+target)
         if decision and (decision not in TO_LEGACY or (decision != 'Use' and not reason)):

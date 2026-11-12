@@ -34,17 +34,95 @@ class SyncTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.state=State(Path(self.tmp.name)/'state')
     def tearDown(self): self.state.close();self.tmp.cleanup()
 
-    def test_human_fields_never_overwritten_exact_manual_binding(self):
+    def test_verified_identity_create_and_cached_blank_repair_are_idempotent(self):
+        incoming=fields();self.state.observe([incoming]);client=Fake()
+        flush(self.state,client)
+        saved=client.rows[0]['fields']
+        expected={'SourceID':'local','Folder':'sample','Expno':'1'}
+        self.assertEqual({k:saved[k] for k in expected},expected)
+        self.assertEqual(flush(self.state,client)['updated'],0)
+        # Simulate an older collector row with unchanged, acknowledged cache.
+        saved.update(SourceID='',Folder='',Expno='')
+        self.assertFalse(self.state.pending())
+        result=flush(self.state,client)
+        self.assertEqual(result['updated'],1)
+        self.assertEqual({k:saved[k] for k in expected},expected)
+        self.assertEqual(flush(self.state,client)['updated'],0)
+        self.assertFalse(self.state.pending())
+
+    def test_partial_matching_identity_fills_blanks_without_overwriting_human(self):
+        incoming=fields();self.state.observe([incoming])
+        client=Fake([{'id':1,'fields':{**incoming,'SourceID':'local','Folder':'','Expno':None,'Notes':'keep'}}])
+        flush(self.state,client)
+        self.assertEqual(client.rows[0]['fields']['Folder'],'sample')
+        self.assertEqual(client.rows[0]['fields']['Expno'],'1')
+        self.assertEqual(client.rows[0]['fields']['Notes'],'keep')
+        self.assertNotIn('SourceID',client.patches[0]['fields'])
+
+    def test_hard_conflicts_do_not_fill_any_identity_component(self):
+        for changes in ({'SourceID':'other'}, {'ObservedFingerprint':'different'},
+                        {'ReconciliationReason':'possible copy or rename'},):
+            with self.subTest(changes=changes):
+                incoming=fields();self.state.observe([incoming])
+                remote={**incoming,'SourceID':'','Folder':'','Expno':'',**changes}
+                client=Fake([{'id':1,'fields':remote}]);result=flush(self.state,client)
+                self.assertEqual(result['conflicts'],1)
+                for name in ('SourceID','Folder','Expno'):
+                    self.assertEqual(client.rows[0]['fields'][name],remote[name])
+                self.assertTrue(self.state.pending())
+
+    def test_root_identity_fills_explicit_empty_folder_and_second_sync_is_noop(self):
+        incoming={**fields('local:1'),'ObservedFolder':''}
+        self.state.observe([incoming]);client=Fake();flush(self.state,client)
+        saved=client.rows[0]['fields']
+        self.assertEqual((saved['SourceID'],saved['Folder'],saved['Expno']),('local','','1'))
+        self.assertEqual(flush(self.state,client)['updated'],0)
+
+    def test_actual_facts_replace_recorded_values_without_touching_human_assessment(self):
         human={'SourceID':'local','Folder':'sample','Expno':'1','Sample':77,'Assessment':'Use',
                'AssessmentReason':'manual','Notes':'keep','Field_MHz':850,'Instrument':'confirmed'}
         client=Fake([{'id':4,'fields':human}])
         incoming=fields();incoming['ObservedField_MHz']=600
         self.state.observe([incoming]); result=flush(self.state,client)
         self.assertEqual(result['created'],0);self.assertEqual(client.posts,0)
-        for key,value in human.items(): self.assertEqual(client.rows[0]['fields'][key],value)
-        self.assertIn('differs',client.rows[0]['fields']['MetadataDifference'])
+        for key,value in human.items():
+            self.assertEqual(client.rows[0]['fields'][key],600 if key=='Field_MHz' else value)
+        self.assertEqual(client.rows[0]['fields']['MetadataDifference'],'')
         self.assertFalse(client.rows[0]['fields']['ReconciliationReason'])
-        self.assertTrue(all(not set(p['fields']) & set(human) for p in client.patches))
+        self.assertTrue(all(not set(p['fields']) & (set(human)-{'Field_MHz'}) for p in client.patches))
+
+    def test_inconclusive_copy_preserves_terminal_without_hourly_requeues(self):
+        for prior in ('Completed','Aborted','Finished','Stopped'):
+            for observed in ('Unknown','Setup'):
+                with self.subTest(prior=prior,observed=observed):
+                    incoming=fields();incoming.update(ObservedAcquisitionStatus=observed,
+                        ObservedAcquisitionEvidence='audita.txt: missing audit; local copy only')
+                    client=Fake([{'id':4,'fields':{**incoming,'AcquisitionStatus':prior,'Assessment':'Use'}}])
+                    self.state.observe([incoming]);flush(self.state,client)
+                    self.assertEqual(client.rows[0]['fields']['AcquisitionStatus'],
+                        {'Finished':'Completed','Stopped':'Aborted'}.get(prior,prior))
+                    self.assertEqual(client.rows[0]['fields']['Assessment'],'Use')
+                    self.assertEqual(self.state.pending(),[])
+                    self.assertEqual(flush(self.state,client)['updated'],0)
+
+    def test_explicit_new_attempt_invalidates_terminal_without_assessment_write(self):
+        for observed in ('Unknown','Setup'):
+            incoming=fields();incoming.update(ObservedAcquisitionStatus=observed,
+                ObservedAcquisitionEvidence='audita.txt: latest attempt unresolved: entry 9 records in progress; copied audit cannot establish live running')
+            client=Fake([{'id':4,'fields':{**incoming,'AcquisitionStatus':'Completed','Assessment':'Use'}}])
+            self.state.observe([incoming]);flush(self.state,client)
+            self.assertEqual(client.rows[0]['fields']['AcquisitionStatus'],observed)
+            self.assertEqual(client.rows[0]['fields']['Assessment'],'Use')
+            self.assertTrue(all('Assessment' not in p['fields'] for p in client.patches))
+
+    def test_latest_terminal_wins_and_legacy_outbox_names_translate(self):
+        for observed,expected in [('Finished','Completed'),('Stopped','Aborted'),('Completed','Completed'),('Aborted','Aborted')]:
+            incoming=fields();incoming['ObservedAcquisitionStatus']=observed
+            client=Fake([{'id':4,'fields':{**incoming,'AcquisitionStatus':'Running'}}])
+            self.state.observe([incoming]);flush(self.state,client)
+            self.assertEqual(client.rows[0]['fields']['AcquisitionStatus'],expected)
+            self.assertEqual(flush(self.state,client)['updated'],0)
+            self.assertEqual(self.state.pending(),[])
 
     def test_duplicate_manual_visible_and_pending(self):
         manual={'SourceID':'local','Folder':'sample','Expno':'1','Assessment':'Use'}
@@ -55,9 +133,10 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(client.posts,0)
 
     def test_non_machine_fields_fail_closed(self):
-        incoming=fields();incoming['Notes']='bad'
-        self.state.observe([incoming])
-        with self.assertRaises(ValueError):flush(self.state,Fake())
+        for name in ('Notes','SourceID','Folder','Expno'):
+            incoming=fields();incoming[name]='bad'
+            self.state.observe([incoming])
+            with self.assertRaises(ValueError):flush(self.state,Fake())
 
 
     def test_key_and_different_manual_row_is_visible_conflict(self):
@@ -78,21 +157,79 @@ class SyncTests(unittest.TestCase):
         confirmed['Field_MHz']=850
         self.assertIn('observed Field_MHz differs from confirmed value',_conflicts(machine,confirmed))
 
-    def test_create_initializes_unknown_human_numeric_null_and_preserves_observed_zero(self):
+    def test_create_initializes_unknown_numeric_null_and_keeps_actual_zero(self):
         incoming=fields();incoming.update(ObservedField_MHz=600.48,ObservedTemperature_C=0,RawBytes=0)
         self.state.observe([incoming]);client=Fake();flush(self.state,client)
         saved=client.rows[0]['fields']
-        for key in ('Field_MHz','Temperature_C','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM'):
+        for key in ('SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM'):
             self.assertIn(key,saved);self.assertIsNone(saved[key])
-        self.assertEqual(saved['ObservedField_MHz'],600.48)
-        self.assertEqual(saved['ObservedTemperature_C'],0);self.assertEqual(saved['RawBytes'],0)
-        self.assertEqual(saved.get('Field_MHz') if saved.get('Field_MHz') is not None else saved['ObservedField_MHz'],600.48)
-        # A later observation updates only machine columns, even when a person
-        # deliberately enters human zero after first registration.
-        client.rows[0]['fields']['Temperature_C']=0
-        self.state.observe([incoming]);flush(self.state,client)
+        self.assertEqual(saved['Field_MHz'],600)
+        self.assertEqual(saved['Temperature_C'],0);self.assertEqual(saved['RawBytes'],0)
+        self.assertIsNone(saved['AcquiredAt'])
+        self.assertNotIn('ObservedField_MHz',saved);self.assertNotIn('ObservedTemperature_C',saved)
+        client.rows[0]['fields']['Temperature_C']=25
+        flush(self.state,client)
         self.assertEqual(client.rows[0]['fields']['Temperature_C'],0)
-        self.assertTrue(all('Temperature_C' not in record['fields'] for record in client.patches))
+        self.assertTrue(all(not {'Assessment','AssessmentReason','Sample','Notes'} & set(record['fields']) for record in client.patches))
+
+    def test_completion_refresh_timeout_retry_replaces_status_preserves_assessment(self):
+        incoming=fields()
+        incoming.update(ObservedAcquisitionStatus='Unknown',
+                        ObservedAcquisitionEvidence='no terminal audit record')
+        human={'AcquisitionStatus':'Planned','Assessment':'Use',
+               'AssessmentReason':'manual review','Notes':'keep this note'}
+        remote={**incoming,**human}
+
+        class CommitThenTimeout(Fake):
+            def __init__(self,rows):
+                super().__init__(rows)
+                self.fail_next_patch=True
+            def update_records(self,table,items):
+                super().update_records(table,items)
+                if self.fail_next_patch:
+                    self.fail_next_patch=False
+                    raise GristError('synthetic timeout after commit')
+
+        client=CommitThenTimeout([{'id':4,'fields':remote}])
+        self.state.observe([incoming],now=1000)
+        with self.assertRaises(GristError):
+            flush(self.state,client)
+        self.assertTrue(self.state.pending())
+
+        finished={**incoming,'ObservedAcquisitionStatus':'Finished',
+                  'ObservedAcquisitionEvidence':'matching go4 terminal record'}
+        self.state.observe([finished],now=1001)
+        result=flush(self.state,client)
+
+        self.assertEqual(result['created'],0)
+        self.assertEqual(result['updated'],1)
+        self.assertFalse(self.state.pending())
+        self.assertEqual(len(client.rows),1)
+        saved=client.rows[0]['fields']
+        self.assertEqual(saved['AcquisitionStatus'],'Completed')
+        self.assertEqual(saved['ObservedAcquisitionEvidence'],'matching go4 terminal record')
+        for key,value in human.items():
+            self.assertEqual(saved[key],'Completed' if key=='AcquisitionStatus' else value)
+        self.assertTrue(all(not {'Assessment','AssessmentReason','Notes'}
+                            & set(record['fields']) for record in client.patches))
+
+        # The next identical scan changes only TransferStable from false to
+        # true. Flush that expected machine-only stabilization before asserting
+        # that a subsequent unchanged scan creates no more work.
+        self.state.observe([finished],now=1002)
+        result=flush(self.state,client)
+        self.assertEqual(result['created'],0)
+        self.assertEqual(result['updated'],1)
+        self.assertEqual(client.rows[0]['fields']['AcquisitionStatus'],'Completed')
+        for key,value in human.items():
+            self.assertEqual(client.rows[0]['fields'][key],'Completed' if key=='AcquisitionStatus' else value)
+        patch_count=len(client.patches)
+        self.state.observe([finished],now=1003)
+        result=flush(self.state,client)
+        self.assertEqual(result['created'],0)
+        self.assertEqual(result['updated'],0)
+        self.assertEqual(len(client.rows),1)
+        self.assertEqual(len(client.patches),patch_count)
 
     def test_http_timeout_after_commit_reconciles_before_post(self):
         server_state={'rows':[],'posts':0,'slow':True}
@@ -193,7 +330,7 @@ class FieldGroupingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state=State(directory)
             try:
-                a=fields();b=fields('local:second/2');b.update(ObservedFolder='second',ObservedExpno='2',ObservedPulseProgram='hsqc')
+                a=fields();b=fields('local:second/2');b.update(ObservedFingerprint='second-fingerprint',ObservedFolder='second',ObservedExpno='2',ObservedPulseProgram='hsqc')
                 state.observe([a,b]);session=FieldConstraintSession(timeout_method='POST');client=self.client(session)
                 with self.assertRaises(GristError):flush(state,client)
                 self.assertEqual(len(session.rows),2);self.assertEqual(len(state.pending()),2)
@@ -206,7 +343,7 @@ class FieldGroupingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state=State(directory)
             try:
-                a=fields();b=fields('local:second/2');b.update(ObservedFolder='second',ObservedExpno='2')
+                a=fields();b=fields('local:second/2');b.update(ObservedFingerprint='second-fingerprint',ObservedFolder='second',ObservedExpno='2')
                 state.observe([a,b]);pending=state.pending()
                 remote=[]
                 for index,(_,payload) in enumerate(pending,1):
@@ -237,14 +374,13 @@ class MetadataRefreshTests(unittest.TestCase):
         self.assertFalse(self.state.pending())
         result=flush(self.state,client)
         saved=client.rows[0]['fields']
-        self.assertEqual(result['metadata_warnings'],1)
+        self.assertEqual(result['metadata_warnings'],0)
         self.assertEqual(saved['ReconciliationReason'],'')
-        self.assertIn('PulseProgram',saved['MetadataDifference'])
-        self.assertIn('Temperature_C',saved['MetadataDifference'])
+        self.assertEqual(saved.get('MetadataDifference',''),'')
         self.assertEqual(saved['Temperature_C'],25);self.assertEqual(saved['PulseProgram'],'original')
-        saved['Temperature_C']=24.948;saved['PulseProgram']='original.ts3'
+        self.state.observe([{**fields(),'ObservedTemperature_C':24.948,'ObservedPulseProgram':'original.ts3'}])
         flush(self.state,client)
-        self.assertEqual(saved['MetadataDifference'],'')
+        self.assertEqual(saved.get('MetadataDifference',''),'')
         writes=len(client.patches);flush(self.state,client)
         self.assertEqual(len(client.patches),writes)
         self.assertEqual(client.posts,0)
@@ -269,7 +405,8 @@ class MetadataRefreshTests(unittest.TestCase):
         flush(self.state,client)
         saved=client.rows[0]['fields']
         self.assertEqual(saved['ReconciliationReason'],'')
-        self.assertIn('Temperature_C',saved['MetadataDifference'])
+        self.assertEqual(saved.get('MetadataDifference',''),'')
+        self.assertEqual(saved['Temperature_C'],24.948)
         self.assertEqual(saved['Assessment'],'Use')
 
     def test_cli_attachment_failure_publishes_error_and_restores_previous_full_success(self):

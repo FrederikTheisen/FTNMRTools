@@ -58,7 +58,7 @@ class CollectorTests(unittest.TestCase):
         records,_=scan_source(Source('local',str(self.root)))
         state=State(self.root/'state')
         state.observe(records)
-        self.assertTrue(all(not r['ReconciliationReason'] for _,r in state.pending()))
+        self.assertTrue(all('fingerprint unavailable' in r['ReconciliationReason'] and 'copy' not in r['ReconciliationReason'] for _,r in state.pending()))
         state.close()
 
     def test_mutable_audit_not_replacement_and_same_size_write_not_stable(self):
@@ -152,5 +152,5 @@ class CollectorTests(unittest.TestCase):
             (path/'acqus').write_text('##$TE= '+raw+'\n')
             fields=observe(path)
             with self.subTest(raw=raw):
-                if expected is None:self.assertNotIn('ObservedTemperature_C',fields)
+                if expected is None:self.assertIsNone(fields['ObservedTemperature_C'])
                 else:self.assertEqual(fields['ObservedTemperature_C'],expected)

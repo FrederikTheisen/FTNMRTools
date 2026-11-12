@@ -159,7 +159,8 @@ def attach_results(state,client,selections=None,max_bytes=2_000_000):
         (key TEXT PRIMARY KEY,path TEXT NOT NULL,sha256 TEXT NOT NULL)''')
     queued = state.db.execute('SELECT * FROM result_queue ORDER BY key').fetchall()
     if not queued:
-        return {'attached':0,'pending_results':0}
+        state.set_meta('result_issues',[])
+        return {'attached':0,'pending_results':0,'blocked_results':0,'result_issues':[]}
     # Re-verify immutable input before upload, even after restart.
     selected = [_read_selected(row['path'],row['sha256'],row['key'],max_bytes) for row in queued]
     rows = client.records('Experiments')
@@ -167,34 +168,45 @@ def attach_results(state,client,selections=None,max_bytes=2_000_000):
     for row in rows:
         by_key.setdefault(row['fields'].get('AcquisitionKey'),[]).append(row)
     attached = 0
+    blocked = []
+    def block(selection,reason):
+        blocked.append({'key':selection.acquisition_key,'reason':reason})
     for selection in selected:
         matching = by_key.get(selection.acquisition_key,[])
         if len(matching)!=1:
-            raise GristError('Results require one exact registered acquisition; selection retained')
+            block(selection,'Results require one exact registered acquisition; selection retained')
+            continue
         row = matching[0]
         fields = row['fields']
         if fields.get('ReconciliationReason'):
-            raise GristError('Acquisition requires reconciliation before attaching results')
+            block(selection,'Acquisition requires reconciliation before attaching results')
+            continue
         old_hash = fields.get('ResultSHA256')
         acknowledged = state.get_meta('result_sent:'+selection.acquisition_key)
         if old_hash and old_hash != selection.sha256 and (not acknowledged or acknowledged[1] != old_hash):
-            raise GristError('A different result hash is already attached; reconcile explicitly before replacement')
+            block(selection,'A different result hash is already attached; reconcile explicitly before replacement')
+            continue
         if old_hash != selection.sha256 or not fields.get('ResultCSV'):
             attachment = _attachment_id(state,client,selection)
             # An explicitly changed CURRENT selection replaces only the result we
             # previously acknowledged. Recheck after upload before moving pointer.
             fresh = [r for r in client.records('Experiments') if r['fields'].get('AcquisitionKey') == selection.acquisition_key]
             if len(fresh) != 1 or fresh[0]['id'] != row['id'] or fresh[0]['fields'].get('ResultSHA256') != old_hash:
-                raise GristError('Result pointer changed during upload; reconcile before replacement')
+                block(selection,'Result pointer changed during upload; reconcile before replacement')
+                continue
             if fresh[0]['fields'].get('ReconciliationReason'):
-                raise GristError('Acquisition became conflicted during upload; reconcile before linking results')
+                block(selection,'Acquisition became conflicted during upload; reconcile before linking results')
+                continue
             client.update_records('Experiments',[{'id':row['id'],'fields':{
                 'ResultCSV':['L',attachment],'ResultSHA256':selection.sha256,'ResultSourcePath':selection.path}}])
             attached += 1
         elif fields.get('ResultSourcePath') != selection.path:
-            raise GristError('Existing result source pointer differs; reconcile explicitly')
+            block(selection,'Existing result source pointer differs; reconcile explicitly')
+            continue
         # Timeout after PATCH leaves queue; GET on next run recognizes committed hash.
         with state.db:
             state.db.execute('DELETE FROM result_queue WHERE key=?',(selection.acquisition_key,))
         state.set_meta('result_sent:'+selection.acquisition_key,[selection.path,selection.sha256])
-    return {'attached':attached,'pending_results':state.db.execute('SELECT count(*) FROM result_queue').fetchone()[0]}
+    state.set_meta('result_issues',blocked)
+    return {'attached':attached,'pending_results':state.db.execute('SELECT count(*) FROM result_queue').fetchone()[0],
+            'blocked_results':len(blocked),'result_issues':blocked}

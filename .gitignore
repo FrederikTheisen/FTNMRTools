@@ -1,1 +1,9 @@
 relax/.DS_Store
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/

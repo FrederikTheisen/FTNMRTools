@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from nmr_register.grist import GristError
-from nmr_register.results import select_results,attach_results,read_numbers_bytes
+from nmr_register.results import select_results,attach_results,read_numbers_bytes,ResultSelection
 from nmr_register.state import State
 
 
@@ -23,7 +23,7 @@ class ResultClient:
         return [self.files[-1]['id']]
     def download_attachment(self,attachment):return next(f['content'] for f in self.files if f['id']==attachment)
     def update_records(self,table,records):
-        for record in records:self.rows[0]['fields'].update(record['fields'])
+        for record in records:next(r for r in self.rows if r['id']==record['id'])['fields'].update(record['fields'])
         if self.fail_patch:
             self.fail_patch=False;raise GristError('synthetic timeout after patch committed')
 
@@ -87,8 +87,9 @@ class ResultsTests(unittest.TestCase):
         client.rows[0]['fields']['ResultSHA256']='c'*64
         self.content=self.content.replace(b'A1,3.5',b'A1,4.5')
         self.path.write_bytes(self.content);self.write_manifest()
-        with self.assertRaisesRegex(GristError,'different result hash'):
-            attach_results(self.state,client,self.select())
+        blocked=attach_results(self.state,client,self.select())
+        self.assertEqual(blocked['blocked_results'],1)
+        self.assertIn('different result hash',blocked['result_issues'][0]['reason'])
         self.assertEqual(client.rows[0]['fields']['ResultSHA256'],'c'*64)
         self.assertEqual(client.uploads,2)
 
@@ -112,15 +113,40 @@ class ResultsTests(unittest.TestCase):
             client.rows[0]['fields']['ReconciliationReason']='raw acquisition replaced'
             return result
         client.upload=conflicting_upload
-        with self.assertRaisesRegex(GristError,'became conflicted'):
-            attach_results(self.state,client,self.select())
+        blocked=attach_results(self.state,client,self.select())
+        self.assertEqual(blocked['blocked_results'],1)
+        self.assertIn('became conflicted',blocked['result_issues'][0]['reason'])
         self.assertNotIn('ResultCSV',client.rows[0]['fields'])
         self.assertEqual(self.state.db.execute('SELECT count(*) FROM result_queue').fetchone()[0],1)
 
     def test_existing_different_hash_refuses_overwrite(self):
         client=ResultClient();client.rows[0]['fields']['ResultSHA256']='a'*64
-        with self.assertRaisesRegex(GristError,'different result hash'):attach_results(self.state,client,self.select())
+        blocked=attach_results(self.state,client,self.select())
+        self.assertEqual(blocked['blocked_results'],1)
+        self.assertIn('different result hash',blocked['result_issues'][0]['reason'])
         self.assertEqual(client.uploads,0)
+
+    def test_blocked_entries_do_not_poison_safe_results_and_remain_pending(self):
+        client=ResultClient();selected=self.select()
+        for ident,folder,extra in [(10,'aaa',{'ReconciliationReason':'matching metadata requires review'}),(11,'zzz',{'ResultSHA256':'a'*64})]:
+            content=self.content.replace(b'source_folder: sample',('source_folder: '+folder).encode())
+            path=self.root/(folder+'.csv');path.write_bytes(content)
+            selected.append(ResultSelection('local:'+folder+'/1',str(path),hashlib.sha256(content).hexdigest(),content))
+            client.rows.append({'id':ident,'fields':{'AcquisitionKey':'local:'+folder+'/1',**extra}})
+        first=attach_results(self.state,client,selected)
+        self.assertEqual((first['attached'],first['pending_results'],first['blocked_results']),(1,2,2))
+        self.assertEqual(client.uploads,1);self.assertNotIn('ResultCSV',client.rows[1]['fields'])
+        self.assertEqual(client.rows[2]['fields']['ResultSHA256'],'a'*64)
+        self.assertEqual(self.state.get_meta('result_issues'),first['result_issues'])
+        self.assertEqual(self.state.status()['pending_results'],2)
+        self.assertEqual(self.state.status()['result_issues'],first['result_issues'])
+        second=attach_results(self.state,client)
+        self.assertEqual((second['attached'],second['pending_results'],second['blocked_results']),(0,2,2))
+        self.assertEqual(client.uploads,1)
+        client.rows[1]['fields']['ReconciliationReason']=''
+        resumed=attach_results(self.state,client)
+        self.assertEqual((resumed['attached'],resumed['pending_results'],resumed['blocked_results']),(1,1,1))
+        self.assertEqual(client.uploads,2)
 
     def test_target_filter_before_unrelated_file_reads(self):
         self.write_manifest(acquisition='unrelated/1')

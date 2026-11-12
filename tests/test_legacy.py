@@ -11,6 +11,8 @@ class LegacyTests(unittest.TestCase):
             payload=review_snapshot(path,[{'Folder':'a','Expno':'1','Assessment':''},{'Folder':'a','Expno':'2','Assessment':'Do not use','AssessmentReason':'bad'}])
             out=Path(d)/'out.tsv'; out.write_bytes(payload); rows=read_reviews(out)
             self.assertEqual(rows['a/1']['assessment'],''); self.assertEqual(rows['a/1']['comment'],''); self.assertEqual(rows['a/2']['assessment'],'exclude')
+            payload=review_snapshot(path,[{'Folder':'a','Expno':'1','Assessment':''},{'Folder':'a','Expno':'2','Assessment':'Do not use','AssessmentExplanation':'FID: Unusable'}])
+            out.write_bytes(payload); self.assertEqual(read_reviews(out)['a/2']['comment'],'FID: Unusable')
             with self.assertRaises(ValueError): review_snapshot(path,[{'Folder':'a','Expno':'2','Assessment':'Do not use'}])
             self.assertIn('a/2\t\t',path.read_text())
 

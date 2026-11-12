@@ -1,14 +1,19 @@
 """Changed-only registration, with stable-key reconciliation after ambiguity."""
 from collections import defaultdict
+import json
+import math
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo,ZoneInfoNotFoundError
 from .discovery import scan_source
-from .schema import MACHINE_FIELDS,CONDITIONS
+from .schema import MACHINE_FIELDS,CONDITIONS,canonical_experiment_type,FILL_ONLY_IDENTITY_FIELDS
 from .grist import GristError
+from .state import observation_warning,sufficient_fingerprint,MISSING_FINGERPRINT_WARNING
 
 
 def _tuple(fields, observed=False):
+    if not observed and 'incomplete acquisition identity' in str(fields.get('MigrationIssue') or '').lower():
+        return None  # Blank workbook folder is unresolved, not an explicit root acquisition.
     prefix = 'Observed' if observed else ''
     values = tuple(str(fields.get(prefix+k,'') if fields.get(prefix+k,'') is not None else '').strip() for k in ('SourceID','Folder','Expno'))
     # Grist numeric Int values may arrive as floats.
@@ -39,6 +44,15 @@ def _acquisition_zone():
 def _consistent(human,confirmed,value):
     if human == 'ExperimentType':
         return _type(confirmed) == _type(value)
+    if human == 'DelayList_s':
+        try:
+            left, right = json.loads(confirmed), json.loads(value)
+            return (isinstance(left,list) and isinstance(right,list) and len(left) == len(right)
+                    and all(type(a) in (int,float) and type(b) in (int,float)
+                        and math.isfinite(a) and math.isfinite(b) and a >= 0 and b >= 0
+                        and math.isclose(a,b,rel_tol=1e-8,abs_tol=1e-9) for a,b in zip(left,right)))
+        except (TypeError,ValueError,OverflowError):
+            return False
     if str(confirmed) == str(value):
         return True
     try:
@@ -47,6 +61,10 @@ def _consistent(human,confirmed,value):
             # Workbook dates have day precision, represented as UTC midnight.
             # Bruker timestamps have second precision in the acquisition zone.
             return datetime.fromtimestamp(number,timezone.utc).date() == datetime.fromtimestamp(observed,_acquisition_zone()).date()
+        if human == 'D1_s':
+            return math.isclose(number,observed,rel_tol=1e-8,abs_tol=1e-6)
+        if human in ('SpinLock_Hz','SpinLockOffset_Hz'):
+            return math.isclose(number,observed,rel_tol=1e-6,abs_tol=.1)
         if human == 'Field_MHz' and number.is_integer():
             return round(observed) == int(number)
         return abs(number-observed) < 0.01
@@ -56,7 +74,61 @@ def _consistent(human,confirmed,value):
 
 METADATA_PAIRS = (('Instrument','ObservedInstrument'),('ExperimentType','ObservedType'),
                   ('AcquiredAt','ObservedAcquiredAt'),('Field_MHz','ObservedField_MHz'),
-                  ('PulseProgram','ObservedPulseProgram'),('Temperature_C','ObservedTemperature_C'))
+                  ('PulseProgram','ObservedPulseProgram'),('Temperature_C','ObservedTemperature_C'),
+                  ('D1_s','ObservedD1_s'),('DelayList_s','ObservedDelayList_s'),
+                  ('SpinLock_Hz','ObservedSpinLock_Hz'),('SpinLockOffset_Hz','ObservedSpinLockOffset_Hz'))
+
+
+SOURCE_FACTS = dict(METADATA_PAIRS + (('AcquisitionStatus','ObservedAcquisitionStatus'),))
+
+
+def _status_facts_for_remote(facts, machine, remote):
+    # Missing copied metadata does not undo an already documented terminal run.
+    # An explicit newer attempt/deletion does invalidate that prior outcome.
+    if remote.get("AcquisitionStatus") == "Dummy":
+        return {**facts, "AcquisitionStatus": "Dummy"}
+    from .bruker import STATUS_CONTRADICTION_PREFIX
+    terminal = {'Completed','Aborted','Finished','Stopped','Done','Acquired'}
+    if (facts.get('AcquisitionStatus') in ('Unknown','Setup')
+            and remote.get('AcquisitionStatus') in terminal
+            and not machine.get('ObservedAcquisitionEvidence','').startswith(STATUS_CONTRADICTION_PREFIX)):
+        retained = {'Finished':'Completed','Done':'Completed','Acquired':'Completed','Stopped':'Aborted'}.get(
+            remote['AcquisitionStatus'],remote['AcquisitionStatus'])
+        return {**facts,'AcquisitionStatus':retained}
+    return facts
+
+
+def _canonical_payload(payload):
+    """Translate local observations; unknown facts are absent, never blank overrides."""
+    facts = {}
+    numeric = {'AcquiredAt','Field_MHz','Temperature_C','D1_s','SpinLock_Hz','SpinLockOffset_Hz'}
+    for canonical, observed in SOURCE_FACTS.items():
+        value = payload.get(observed, payload.get(canonical))
+        if canonical == 'AcquisitionStatus':
+            value = {'Finished':'Completed','Stopped':'Aborted'}.get(value,value)
+            if value in ('Completed','Aborted','Setup','Unknown'):
+                facts[canonical] = value
+        elif canonical == 'ExperimentType':
+            value = canonical_experiment_type(value)
+            if value:
+                facts[canonical] = value
+        elif canonical in numeric:
+            if type(value) in (int,float) and math.isfinite(value):
+                if canonical in ('AcquiredAt','Field_MHz') and value <= 0:
+                    continue
+                facts[canonical] = math.floor(value+.5) if canonical == 'Field_MHz' else value
+        elif isinstance(value,str) and value.strip():
+            if canonical != 'Instrument' or value.strip().lower() != 'unknown':
+                facts[canonical] = value
+    for name in ('Title','TitleSource'):
+        if name in payload and isinstance(payload[name],str):
+            facts[name] = payload[name]  # A readable empty source explicitly clears comments.
+    machine = {key:value for key,value in payload.items()
+               if key not in SOURCE_FACTS and key not in SOURCE_FACTS.values() and key not in ('Title','TitleSource')}
+    forbidden = (set(machine)|set(facts))-set(MACHINE_FIELDS['Experiments'])
+    if forbidden:
+        raise ValueError('Refusing non-machine collector fields: '+', '.join(sorted(forbidden)))
+    return machine, facts
 
 
 def _conflicts(machine, remote):
@@ -70,8 +142,29 @@ def _conflicts(machine, remote):
 
 
 def _identity_conflicts(machine,remote):
-    expected,confirmed = _tuple(machine,observed=True),_tuple(remote)
-    return ['observed source/folder/expno differs from confirmed identity'] if expected and confirmed and expected != confirmed else []
+    source,folder,expno = (machine.get('Observed'+name) for name in ('SourceID','Folder','Expno'))
+    if not isinstance(source,str) or not source or not isinstance(folder,str) or expno is None or not str(expno).isdigit():
+        return ['observed acquisition identity is missing or invalid; reconcile before binding']
+    expected = (source,folder,str(expno))
+    expected_key = source+':'+(folder+'/' if folder else '')+str(expno)
+    if machine.get('AcquisitionKey') != expected_key:
+        return ['collector key differs from observed acquisition identity; reconcile before binding']
+    reasons = []
+    if any(remote.get(name) not in (None,'') and str(remote[name]) != expected[index]
+           for index,name in enumerate(('SourceID','Folder','Expno'))):
+        reasons.append('observed source/folder/expno differs from confirmed identity')
+    fingerprint, previous = machine.get('ObservedFingerprint'), remote.get('ObservedFingerprint')
+    if fingerprint and previous and fingerprint != previous:
+        reasons.append('acquisition fingerprint differs from registered identity; reconcile before reusing assessment')
+    return reasons
+
+
+def _identity_defaults(machine, remote):
+    """Fill blanks only after exact observed-key and existing-identity validation."""
+    if _identity_conflicts(machine, remote):
+        return {}
+    return {name:machine['Observed'+name] for name in FILL_ONLY_IDENTITY_FIELDS
+            if remote.get(name) in (None,'') and remote.get(name) != machine['Observed'+name]}
 
 
 def _legacy_metadata_only(reason):
@@ -79,8 +172,20 @@ def _legacy_metadata_only(reason):
     return bool(reason) and all(piece.strip() in allowed for piece in reason.split(';'))
 
 
+def _source_review_reason(local,remote):
+    # A local copy warning cannot erase a serious warning already in Grist.
+    if remote and not _legacy_metadata_only(remote) and not observation_warning(remote):
+        if local and not observation_warning(local) and local not in remote:
+            return local if remote in local else remote+'; '+local
+        return remote
+    return local or (remote if not _legacy_metadata_only(remote) else '')
+
+
 def _metadata_fields(observed,remote):
-    result = {'MetadataDifference':'; '.join(_conflicts(observed,remote))}
+    # Former override-versus-observation differences are obsolete. Preserve any
+    # unrelated diagnostic and every genuine identity reconciliation warning.
+    difference = remote.get('MetadataDifference','') or ''
+    result = {'MetadataDifference':'' if _legacy_metadata_only(difference) else difference}
     if _legacy_metadata_only(remote.get('ReconciliationReason','')):
         result['ReconciliationReason'] = ''
     return result
@@ -110,13 +215,34 @@ def flush(state, client, batch_size=100):
         changed = {k:v for k,v in computed.items() if (fields.get(k) or '') != v}
         if changed:
             metadata_updates[row['id']] = {'id':row['id'],'fields':changed}
+    # The same hourly GET catches edits to source-owned canonical facts without
+    # rescanning files or issuing any additional remote reads. Queue corrections
+    # before transport so ambiguous responses keep the existing durable retry.
+    already_pending = {key for key,_ in pending}
+    requeue = []
+    for key,cached in state.cached_observations():
+        if key in already_pending:
+            continue
+        machine,facts = _canonical_payload(cached)
+        matches = keys.get(key,[])
+        exact = manual.get(_tuple(machine,observed=True),[])
+        if len(matches)>1 or len(exact)>1 or (matches and exact and matches[0]['id']!=exact[0]['id']):
+            requeue.append(key)
+            continue
+        row = matches[0] if matches else exact[0] if len(exact)==1 else None
+        if row and (bool(_differences(_status_facts_for_remote(facts,machine,row['fields']),row['fields'])) or _identity_conflicts(machine,row['fields']) or _identity_defaults(machine,row['fields'])
+                    or (row['fields'].get('ReconciliationReason')==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(machine.get('ObservedFingerprint')))
+                    or any(reason and not _legacy_metadata_only(reason) and not observation_warning(reason) for reason in
+                        (machine.get('ReconciliationReason',''),row['fields'].get('ReconciliationReason','')))):
+            requeue.append(key)
+    state.requeue_observations(requeue)
+    pending = state.pending()
     create, update, acknowledged = [], [], []
+    blocked = set()
     conflict_updates = {}
     conflicts = 0
     for key,payload in pending:
-        forbidden = set(payload)-set(MACHINE_FIELDS['Experiments'])
-        if forbidden:
-            raise ValueError('Refusing non-machine collector fields: '+', '.join(sorted(forbidden)))
+        machine, facts = _canonical_payload(payload)
         matches = keys.get(key,[])
         identity = _tuple(payload,observed=True)
         exact = manual.get(identity,[]) if identity else []
@@ -132,8 +258,9 @@ def flush(state, client, batch_size=100):
                 conflict_updates[exact[0]['id']] = {'id':exact[0]['id'],'fields':{'ReconciliationReason':'exact manual identity already has a different collector key; reconcile before binding'}}
                 continue
             row = exact[0]
-        machine = dict(payload)
         if row:
+            if not machine.get('ObservedFingerprint') and row['fields'].get('ObservedFingerprint'):
+                machine.pop('ObservedFingerprint',None)  # A partial read must not erase the last identity guard.
             metadata_updates.pop(row['id'],None)
             computed = _metadata_fields(machine,row['fields'])
             machine['MetadataDifference'] = computed['MetadataDifference']
@@ -142,21 +269,40 @@ def flush(state, client, batch_size=100):
             reason = machine.get('ReconciliationReason','')
             if _legacy_metadata_only(reason): reason = ''
             remote_reason = row['fields'].get('ReconciliationReason','')
-            if not reason and remote_reason and not _legacy_metadata_only(remote_reason):
-                reason = remote_reason  # Never erase a genuine identity ambiguity.
+            if sufficient_fingerprint(machine.get('ObservedFingerprint')):
+                if reason==MISSING_FINGERPRINT_WARNING:reason=''
+                if remote_reason==MISSING_FINGERPRINT_WARNING:remote_reason=''
+            reason = _source_review_reason(reason,remote_reason)
             identity_reasons = _identity_conflicts(machine,row['fields'])
             if identity_reasons:
-                reason = '; '.join(filter(None,[reason,*identity_reasons]))
-                conflicts += 1
+                reason = '; '.join(filter(None,[reason,*(r for r in identity_reasons if r not in reason)]))
             machine['ReconciliationReason'] = reason
+            if reason and not observation_warning(reason):
+                blocked.add(key)
+                conflicts += 1
+            else:
+                machine.update(_identity_defaults(machine,row['fields']))
+                machine.update(_status_facts_for_remote(facts,machine,row['fields']))
             changed = _differences(machine,row['fields'])
             if changed:
                 update.append((key,{'id':row['id'],'fields':changed}))
-            else:
+            elif key not in blocked:
                 acknowledged.append(key)
         else:
-            initialize = {'Field_MHz':None,'Temperature_C':None,
-                'ObservedField_MHz':None,'ObservedTemperature_C':None,'RawBytes':None,'MetadataDifference':''}
+            reason = machine.get('ReconciliationReason','')
+            if _legacy_metadata_only(reason):
+                reason = ''
+            reason = '; '.join(filter(None,[reason,*_identity_conflicts(machine,{})]))
+            machine['ReconciliationReason'] = reason
+            if reason and not observation_warning(reason):
+                blocked.add(key)
+                conflicts += 1
+            else:
+                machine.update(_identity_defaults(machine,{}))
+                machine.update(facts)
+            initialize = {'Field_MHz':None,'Temperature_C':None,'AcquiredAt':None,
+                'RawBytes':None,'MetadataDifference':''}
+            initialize.update({name:None for name in ('D1_s','SpinLock_Hz','SpinLockOffset_Hz')})
             initialize.update({'Snapshot'+name:None for name,typ in CONDITIONS.items() if typ in ('Numeric','Int')})
             create.append((key,{**initialize,**machine}))
     state.acknowledge(acknowledged)
@@ -177,7 +323,7 @@ def flush(state, client, batch_size=100):
                 client.add_records('Experiments',[fields for _,fields in batch])
             else:
                 client.update_records('Experiments',[record for _,record in batch])
-            state.acknowledge([key for key,_ in batch])
+            state.acknowledge([key for key,_ in batch if key not in blocked])
     return {'created':len(create),'updated':len(update)+len(remote_only),'conflicts':conflicts,
             'metadata_warnings':len(metadata_warnings)}
 
@@ -201,7 +347,7 @@ def sync_scan_status(state,client,config,scan_error=''):
 def run(config,state,client=None,dry_run=False):
     observations,errors = [],[]
     for source in config.sources:
-        found,failures = scan_source(source)
+        found,failures = scan_source(source, config.instrument_profiles)
         observations.extend(found)
         errors.extend(failures)
     if dry_run:

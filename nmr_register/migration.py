@@ -1,8 +1,11 @@
 """Conservative pilot migration. All inputs are read-only; application is opt-in."""
 import csv
+import hashlib
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+INSTRUMENT_FIELDS = {'600_1300':600,'600Cryo':600,'600oxbru':600,'700':700,'850':850,'950':950}
 
 REVIEW_MAP = {'usable':'Use', 'exclude':'Do not use', 'ok':'Use', 'bad':'Do not use', 'poor':'Limited use'}
 
@@ -27,6 +30,36 @@ def _date(value):
 
 def _str(value):
     return '' if value is None else str(value).strip()
+
+
+def experiment_rows(sheet):
+    """Expand A/B/C/D/F within a nonblank A:M block, preserving source cells.
+
+    EXPNO and all per-acquisition conditions, type, settings, status and comments
+    stay exactly on their own row. A fully blank A:M row resets every default.
+    """
+    inherited_columns=(0,1,2,3,5)
+    context={};origins={}
+    blank=lambda value:value is None or isinstance(value,str) and not value.strip()
+    for number,raw in enumerate(sheet.iter_rows(min_row=2,values_only=True),2):
+        values=list(raw[:13]);values.extend([None]*(13-len(values)))
+        if all(blank(value) for value in values):
+            context.clear();origins.clear();continue
+        inherited={}
+        for index in inherited_columns:
+            if not blank(values[index]):context[index]=values[index];origins[index]=number
+            elif index in context:values[index]=context[index];inherited[index]=origins[index]
+        yield number,tuple(values),inherited
+
+
+def _workbook_evidence(sheet,number,row,inherited):
+    evidence=f'{sheet}!{number}'
+    if row[6] is not None:evidence+='; condition: '+_str(row[6])
+    if _str(row[2]):evidence+='; workbook user: '+_str(row[2])
+    names={0:'Date',1:'Instrument',2:'User',3:'Folder',5:'Sample'}
+    if inherited:evidence+='; inherited: '+', '.join(names[index]+' from '+chr(65+index)+str(origin) for index,origin in inherited.items())
+    if 0 in inherited:evidence+='; group date context: '+_str(row[0])
+    return evidence
 
 def build_pilot(workbook, reviews, sample_ids, targets, source_id=""):
     """Plan explicitly selected workbook samples and acquisitions; never infer identities.
@@ -58,13 +91,14 @@ def build_pilot(workbook, reviews, sample_ids, targets, source_id=""):
     if len({s['SampleID'] for s in samples}) != len(samples): raise ValueError('Duplicate selected sample ID')
     found_targets=set()
     for sheet in ('Database','ANP32','N-Tail','TDR1','CtIP'):
-        for n,row in enumerate(book[sheet].iter_rows(min_row=2, values_only=True),2):
+        for n,row,inherited in experiment_rows(book[sheet]):
             folder,expno=_str(row[3]),_str(row[4]); target=folder+'/'+expno
             if target not in targets: continue
             if target in found_targets:
                 prior=next(x for x in experiments if x['fields']['Folder']+'/'+x['fields']['Expno']==target)
                 prior['fields']['MigrationIssue'] += '; duplicate workbook target requires review'
                 prior['fields']['MigrationIssue'] += f'; {sheet}!{n}: type={_str(row[8])}, status={_str(row[11])}, comment={_str(row[12])}'
+                prior['fields']['SourceEvidence']=_append_evidence(prior['fields'].get('SourceEvidence',''),_workbook_evidence(sheet,n,row,inherited)+'; duplicate source row: '+repr(tuple(row[:13])))
                 continue
             found_targets.add(target)
             status=_str(row[11]); notes=_str(row[12]); sample=_str(row[5]); r=review.get(target, {})
@@ -81,15 +115,19 @@ def build_pilot(workbook, reviews, sample_ids, targets, source_id=""):
                 elif not decision: decision='Do not use'; reason=notes
             if decision in ('Limited use','Do not use') and not reason: issue.append('Assessment reason missing')
             if sample not in sample_ids: issue.append('Sample link unresolved: '+sample + ('; workbook condition: '+_str(row[6]) if row[6] is not None else ''))
-            instrument=_str(row[1]); field={'600_1300':600,'600Cryo':600,'600oxbru':600,'700':700,'850':850,'950':950}.get(instrument)
+            instrument=_str(row[1]); field=INSTRUMENT_FIELDS.get(instrument)
             fields={'SourceID':source_id,'Folder':folder,'Expno':expno,'Instrument':instrument,'Field_MHz':field,
-                'ExperimentType':_str(row[8]),'AcquiredAt':_date(row[0]),
-                'AcquisitionDateText':_str(row[0]) if row[0] is not None and not isinstance(row[0],datetime) else '',
+                'ExperimentType':_str(row[8]),'AcquiredAt':_date(row[0]) if 0 not in inherited else None,
+                'AcquisitionDateText':_str(row[0]) if 0 not in inherited and row[0] is not None and not isinstance(row[0],datetime) else '',
                 'AcquisitionStatus':status,
                 'Temperature_C':row[7] if isinstance(row[7],(int,float)) else None,'PulseProgram':_str(row[9]),
                 'Assessment':decision,'AssessmentReason':reason,'Notes':notes,
-                'SourceEvidence':f'{sheet}!{n}' + ('; condition: '+_str(row[6]) if row[6] is not None else ''),
+                'SourceEvidence':_workbook_evidence(sheet,n,row,inherited),
                 'MigrationKey':f'workbook:{sheet}:{n}','MigrationIssue':'; '.join(issue)}
+            study = REVIEWED_PILOT_STUDIES.get((source_id,target))
+            if study:
+                fields['Study']=study
+                fields['SourceEvidence']=_append_evidence(fields['SourceEvidence'],_study_evidence(source_id,target))
             experiments.append({'fields':fields,'sample_id':sample if sample in sample_ids else None})
     book.close()
     if found_targets != targets: raise ValueError('Missing targets: '+', '.join(sorted(targets-found_targets)))
@@ -108,6 +146,13 @@ def apply_pilot(plan, client, dry_run=True, full_accepted=False):
     if plan.get('scope') not in ('pilot','full'): raise ValueError('Unknown migration scope')
     if plan['scope'] == 'full' and not dry_run and not full_accepted:
         raise ValueError('Full migration requires recorded pilot and Mac acceptance')
+    if not dry_run and any('Assessment' in entry.get('fields',{}) for entry in plan.get('experiments',[])):
+        tables=[r['id'] for r in client.records('_grist_Tables') if r['fields'].get('tableId')=='Experiments']
+        if len(tables)!=1:raise ValueError('Experiments table missing or ambiguous')
+        assessment=[r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId')==tables[0] and r['fields'].get('colId')=='Assessment']
+        if len(assessment)!=1:raise ValueError('Assessment column missing or ambiguous')
+        if assessment[0]['fields'].get('isFormula'):
+            raise ValueError('Experiment migration requires reviewed QC mapping before writing formula Assessment')
     existing_samples=client.records('Samples'); existing_exp=client.records('Experiments')
     def unique(records, key):
         out={}
@@ -172,7 +217,10 @@ def apply_pilot(plan, client, dry_run=True, full_accepted=False):
         sample=entry['sample_id']
         if sample and not dry_run: fields['Sample']=sample_map[sample]
         actions['experiments'].append(key)
-        if not dry_run: client.add('Experiments',fields)
+        if not dry_run:
+            if fields.get('RegisteredAt') in (None, 0):
+                fields['RegisteredAt'] = datetime.now(timezone.utc).timestamp()
+            client.add('Experiments',fields)
         exp_map[key]=True
     return actions
 
@@ -212,17 +260,19 @@ def build_full(workbook, reviews, source_id=""):
             ambiguous.append({'row':n,'label':label,'evidence':repr(tuple(row[:7]))})
         else: physical.append(label)
     for sheet in ('Database','ANP32','N-Tail','TDR1','CtIP'):
-        for n,row in enumerate(book[sheet].iter_rows(min_row=2,values_only=True),2):
+        for n,row,inherited in experiment_rows(book[sheet]):
             folder,expno=_str(row[3]),_str(row[4])
             if folder and expno: targets.add(folder+'/'+expno)
             elif any(x is not None and x != '' for x in row[:13]) and (folder or row[8] or row[11] or row[12]):
                 planned.append({'fields':{'SourceID':source_id,'Folder':folder,'Expno':expno,
-                    'AcquiredAt':_date(row[0]),
-                    'AcquisitionDateText':_str(row[0]) if row[0] is not None and not isinstance(row[0],datetime) else '',
+                    'Instrument':_str(row[1]),'Field_MHz':INSTRUMENT_FIELDS.get(_str(row[1])),
+                    'AcquiredAt':_date(row[0]) if 0 not in inherited else None,
+                    'AcquisitionDateText':_str(row[0]) if 0 not in inherited and row[0] is not None and not isinstance(row[0],datetime) else '',
                     'ExperimentType':_str(row[8]),'AcquisitionStatus':_str(row[11]),
                     'Notes':_str(row[12]),'MigrationKey':f'workbook:{sheet}:{n}',
                     'MigrationIssue':'Planned or incomplete record; identity and sample unresolved',
-                    'SourceEvidence':f'{sheet}!{n}: '+repr(tuple(row[:13]))},'sample_id':None})
+                    'SourceEvidence':_workbook_evidence(sheet,n,row,inherited)+': '+repr(tuple(row[:13]))},
+                    'sample_id':_str(row[5]) if _str(row[5]) in physical else None})
     book.close()
     plan=build_pilot(workbook,reviews,physical,targets,source_id)
     plan['scope']='full'; plan['experiments'].extend(planned); plan['unclassified_samples']=ambiguous
@@ -238,7 +288,7 @@ def build_full(workbook, reviews, source_id=""):
             'MigrationIssue':'Review-only record; sample and registration unresolved'},'sample_id':None})
     return plan
 
-def reconcile_sources(plan, catalog=None, status_workbooks=(), overview=None):
+def reconcile_sources(plan, catalog=None, status_workbooks=(), overview=None, catalog_source_id='nmrdata'):
     """Reconcile exact-target evidence. Never infer a tube from condition matches.
 
     CSV observations and explicit investigator ratings in status workbooks can
@@ -263,6 +313,7 @@ def reconcile_sources(plan, catalog=None, status_workbooks=(), overview=None):
             fields['Assessment']=decision; fields['AssessmentReason']=_str(comment)
             if decision in ('Limited use','Do not use') and not _str(comment): issue(fields,'Assessment reason missing')
     if catalog:
+        analyzed,_ = _catalog_analysis(catalog,catalog_source_id)
         with open(catalog,newline='',encoding='utf-8-sig') as stream:
             for n,row in enumerate(csv.DictReader(stream),2):
                 target=row.get('relative_path','')
@@ -279,6 +330,11 @@ def reconcile_sources(plan, catalog=None, status_workbooks=(), overview=None):
                        'MigrationIssue':'Catalog-only record; sample and registration unresolved'}
                     plan['experiments'].append({'fields':f,'sample_id':None})
                     by_target[target]=f
+                identity = _exact_identity(f)
+                evidence = analyzed.get(identity)
+                if evidence and not _str(f.get('AnalysisStatus')) and _analysis_identity_safe(f):
+                    f['AnalysisStatus']='Analyzed'
+                    f['SourceEvidence']=_append_evidence(f.get('SourceEvidence'),evidence)
                 for source,target in (('temperature_C','Temperature_C'),('field_MHz','Field_MHz')):
                     try: observed=float(row[source])
                     except (TypeError,ValueError,KeyError): continue
@@ -316,3 +372,154 @@ def reconcile_sources(plan, catalog=None, status_workbooks=(), overview=None):
                 f=by_target.get(row.get('acquisition',''))
                 if f: rating(f,row.get('user_assessment'),row.get('user_comment'),f'{Path(overview).name}:{n}')
     return plan
+
+
+# These tuples were individually reviewed for the pilot. Folder substrings,
+# zero concentrations, and absence of DNA/TFE are never scope classifiers.
+REVIEWED_PILOT_IDENTITIES = {
+    1: ('nmrdata','20250528_15N_hANP32a_50mMNaCl','5'),
+    2: ('nmrdata','20251017_15N_HeTDR1_DNA','104'),
+    3: ('nmrdata','20251017_15N_HeTDR1_DNA','204'),
+    4: ('nmrdata','20251017_15N_HeTDR1_DNA','304'),
+    5: ('nmrdata','20251017_15N_HeTDR1_DNA','404'),
+    6: ('nmrdata','20251105_15N_heTDR1_NaCl','405'),
+    7: ('nmrdata','20251105_15N_heTDR1_NaCl','406'),
+    8: ('nmrdata','20251105_15N_heTDR1_NaCl','407'),
+    9: ('nmrdata','20251218_15N_heDR1_50mMNaCl','5'),
+    10: ('nmrdata','20251218_15N_heDR1_50mMNaCl','6'),
+    11: ('nmrdata','20251218_15N_heDR1_50mMNaCl','7'),
+}
+REVIEWED_PILOT_STUDIES = {(source,folder+'/'+expno):('DNA' if row in (2,3,4,5) else 'Electrostatics')
+    for row,(source,folder,expno) in REVIEWED_PILOT_IDENTITIES.items()}
+_PILOT_PATCH_FIELDS = frozenset(('Study','AnalysisStatus','SourceEvidence'))
+_GUARD_FIELDS = ('SourceID','Folder','Expno','AcquisitionKey','ObservedSourceID','ObservedFolder','ObservedExpno',
+                 'ReconciliationReason','MigrationIssue','Study','AnalysisStatus','SourceEvidence')
+
+
+def _exact_identity(fields):
+    identity=tuple(_str(fields.get(name)) for name in ('SourceID','Folder','Expno'))
+    return identity if all(identity) else None
+
+
+def _append_evidence(existing,evidence):
+    existing='' if existing is None else str(existing)
+    if evidence in existing.split(' | '): return existing
+    return ' | '.join(value for value in (existing,evidence) if value)
+
+
+def _study_evidence(source,target):
+    return 'Reviewed pilot study: '+source+':'+target
+
+
+def _analysis_identity_safe(fields):
+    identity=_exact_identity(fields)
+    if not identity or fields.get('ReconciliationReason') or fields.get('MigrationIssue'): return False
+    source,folder,expno=identity
+    key=_str(fields.get('AcquisitionKey'))
+    if key and key != source+':'+folder+'/'+expno: return False
+    observed=tuple(_str(fields.get('Observed'+name)) for name in ('SourceID','Folder','Expno'))
+    if any(observed) and observed != identity: return False
+    return True
+
+
+def _catalog_analysis(catalog,source_id):
+    """Positive exact acquisition evidence, bound to an explicitly known source.
+
+    This catalog has no source column; its reviewed origin is nmrdata. A caller
+    importing a catalog from another source must provide its reviewed source ID.
+    Duplicate catalog targets, derived records and raw copies never promote state.
+    """
+    if not _str(source_id): raise ValueError('Catalog source ID is required')
+    seen={}; duplicates=set()
+    with open(catalog,newline='',encoding='utf-8-sig') as stream:
+        for row in csv.DictReader(stream):
+            target=_str(row.get('relative_path'))
+            declared=_str(row.get('SourceID') or row.get('source_id'))
+            if declared and declared != source_id: continue
+            folder,separator,expno=target.rpartition('/')
+            if not separator or not folder or not expno.isdigit() or any(part in ('.','..') or '211@950' in part for part in folder.split('/')) or folder.startswith('/'):
+                continue
+            identity=(source_id,folder,expno)
+            if identity in seen: duplicates.add(identity)
+            seen[identity]=row
+    positive={}
+    for identity,row in seen.items():
+        if identity in duplicates or _str(row.get('status')).casefold() not in ('analysed','analyzed'):continue
+        if _str(row.get('primary_record_status')).casefold() != 'primary raw acquisition':continue
+        if _str(row.get('related_primary_path')):continue
+        target=identity[1]+'/'+identity[2]
+        positive[identity]='Analysis catalog: '+str(Path(catalog).resolve())+'; exact acquisition '+source_id+':'+target+'; status='+_str(row['status'])
+    return positive,duplicates
+
+
+def reviewed_pilot_patch(records,catalog,source_id='nmrdata',expected_identities=None):
+    """Return a reviewable, blank-only patch for the existing eleven pilot rows.
+
+    No rows are created. IDs AND exact source tuples are checked; unrelated rows
+    and nonblank human decisions are preserved. This function has no API writes.
+    """
+    if source_id != 'nmrdata':raise ValueError('The reviewed pilot belongs to source nmrdata')
+    expected=REVIEWED_PILOT_IDENTITIES if expected_identities is None else expected_identities
+    if any(tuple(identity) not in REVIEWED_PILOT_IDENTITIES.values() for identity in expected.values()):
+        raise ValueError('Requested identity is outside the reviewed pilot')
+    analyzed,duplicate_catalog=_catalog_analysis(catalog,source_id)
+    by_id={};by_identity={}
+    for record in records:
+        by_id.setdefault(record['id'],[]).append(record)
+        identity=_exact_identity(record['fields'])
+        if identity:by_identity.setdefault(identity,[]).append(record)
+    patches=[];guards={};issues=[]
+    for row_id,identity in expected.items():
+        identity=tuple(identity);candidates=by_id.get(row_id,[])
+        if len(candidates)!=1 or _exact_identity(candidates[0]['fields'])!=identity or len(by_identity.get(identity,[]))!=1:
+            issues.append('Pilot row '+str(row_id)+' has missing, duplicate, or inconsistent exact identity');continue
+        fields=candidates[0]['fields'];source,folder,expno=identity;target=folder+'/'+expno
+        key=_str(fields.get('AcquisitionKey'))
+        observed=tuple(_str(fields.get('Observed'+name)) for name in ('SourceID','Folder','Expno'))
+        if (key and key != source+':'+target) or (any(observed) and observed!=identity):
+            issues.append('Pilot row '+str(row_id)+' has inconsistent collector identity');continue
+        values={};provenance=fields.get('SourceEvidence') or ''
+        if not _str(fields.get('Study')):
+            values['Study']=REVIEWED_PILOT_STUDIES[(source,target)]
+            provenance=_append_evidence(provenance,_study_evidence(source,target))
+        if identity in duplicate_catalog:
+            issues.append('Pilot row '+str(row_id)+' has ambiguous duplicate catalog evidence')
+        elif not _str(fields.get('AnalysisStatus')) and _analysis_identity_safe(fields) and identity in analyzed:
+            values['AnalysisStatus']='Analyzed';provenance=_append_evidence(provenance,analyzed[identity])
+        if values:
+            if provenance != (fields.get('SourceEvidence') or ''):values['SourceEvidence']=provenance
+            patches.append({'id':row_id,'fields':values})
+            guards[str(row_id)]={name:fields.get(name) for name in _GUARD_FIELDS}
+    return {'scope':'reviewed_pilot_fields','source_id':source_id,'catalog':str(Path(catalog).resolve()),
+            'catalog_sha256':hashlib.sha256(Path(catalog).read_bytes()).hexdigest(),
+            'records':patches,'preconditions':guards,'issues':issues}
+
+
+def apply_reviewed_pilot_patch(plan,client,dry_run=True):
+    """Apply only the reviewed blank-field patch after rechecking every guard."""
+    if plan.get('scope')!='reviewed_pilot_fields' or plan.get('source_id')!='nmrdata':
+        raise ValueError('Not a reviewed pilot field patch')
+    if plan.get('issues'):raise ValueError('Pilot patch has unresolved identity/evidence issues')
+    if hashlib.sha256(Path(plan['catalog']).read_bytes()).hexdigest()!=plan.get('catalog_sha256'):
+        raise ValueError('Catalog changed after pilot patch review')
+    positive,_=_catalog_analysis(plan['catalog'],'nmrdata')
+    current=client.records('Experiments');by_id={}
+    for row in current:by_id.setdefault(row['id'],[]).append(row)
+    for patch in plan['records']:
+        if set(patch['fields'])-_PILOT_PATCH_FIELDS:raise ValueError('Pilot patch contains an unauthorized field')
+        guard=plan['preconditions'].get(str(patch['id']))
+        matching=by_id.get(patch['id'],[])
+        if guard is None or len(matching)!=1 or any(matching[0]['fields'].get(name)!=value for name,value in guard.items()):
+            raise ValueError('Pilot row changed after patch review: '+str(patch['id']))
+        identity=_exact_identity(matching[0]['fields'])
+        if identity not in REVIEWED_PILOT_IDENTITIES.values() or sum(_exact_identity(row['fields'])==identity for row in current)!=1:
+            raise ValueError('Pilot identity is no longer uniquely reviewed')
+        if 'Study' in patch['fields'] and patch['fields']['Study'] != REVIEWED_PILOT_STUDIES[(identity[0],identity[1]+'/'+identity[2])]:
+            raise ValueError('Study value differs from reviewed pilot membership')
+        if 'AnalysisStatus' in patch['fields'] and (patch['fields']['AnalysisStatus']!='Analyzed' or identity not in positive or not _analysis_identity_safe(matching[0]['fields'])):
+            raise ValueError('Analysis status lacks exact positive current catalog evidence')
+        for name,value in patch['fields'].items():
+            if name!='SourceEvidence' and _str(matching[0]['fields'].get(name)):
+                raise ValueError('Refusing to overwrite a nonblank human field: '+name)
+    if not dry_run and plan['records']:client.update_records('Experiments',plan['records'])
+    return {'records':plan['records'],'dry_run':dry_run}

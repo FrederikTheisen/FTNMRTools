@@ -238,6 +238,8 @@ class RegisterAcceptanceTests(unittest.TestCase):
         self.assertIn('PreparedDateText', sample_cols['SampleID']['formula'])
         column_ids = {('Experiments', 'Sample'): 20}
         column_ids[('Experiments', 'Series')] = 21
+        tag_deps = ('ObservedSampleID','ObservedSampleTagIssue','AcquisitionKey','ObservedSourceID','ObservedFolder','ObservedExpno','SourceID','Folder','Expno','ReconciliationReason')
+        column_ids.update({('Experiments', name): i + 200 for i, name in enumerate(tag_deps)})
         snapshot_names = ['SnapshotSampleID'] + ['Snapshot' + name for name in CONDITIONS]
         column_ids.update({('Experiments', name): i + 30 for i, name in enumerate(snapshot_names)})
         sample_names = list(dict.fromkeys(('PreparedAt', 'PreparedDateText', 'Protein', 'Isotope',
@@ -250,7 +252,7 @@ class RegisterAcceptanceTests(unittest.TestCase):
         update_actions = [action for action in actions if action[0] == 'UpdateRecord']
         trigger_updates = [action for action in update_actions if 'recalcWhen' in action[3]]
         display_actions = [action for action in actions if action[0] == 'SetDisplayFormula']
-        self.assertEqual(len(trigger_updates), len(snapshot_names) + 1 + len(CONDITIONS))
+        self.assertEqual(len(trigger_updates), len(snapshot_names) + 2 + len(CONDITIONS))
         self.assertEqual(len(update_actions), len(trigger_updates) + 3)
         self.assertEqual(len(display_actions), 3)
         self.assertEqual({(action[1], action[4]) for action in display_actions},
@@ -268,6 +270,8 @@ class RegisterAcceptanceTests(unittest.TestCase):
             self.assertEqual(action[3]['recalcWhen'], 0)
             if action[2] in {column_ids[('Experiments', name)] for name in snapshot_names}:
                 self.assertEqual(action[3]['recalcDeps'], ['L', 20])
+            elif action[2] == column_ids[('Experiments', 'Sample')]:
+                self.assertEqual(action[3]['recalcDeps'], ['L'] + [column_ids[('Experiments', name)] for name in tag_deps])
             elif action is not sample_id_action:
                 self.assertEqual(action[3]['recalcDeps'], ['L', 25])
         self.assertEqual(exp_cols['SnapshotDNA_uM']['type'], 'Numeric')

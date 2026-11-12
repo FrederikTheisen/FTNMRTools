@@ -36,6 +36,9 @@ def parser():
     backup.add_argument('--restore-to',type=Path,help='With --validate, restore to a new local file only')
     setup = sub.add_parser('setup',help='Review or apply fresh register schema and layout')
     setup.add_argument('--apply',action='store_true')
+    electro = sub.add_parser('electrostatics',help='Review or install the narrow Electrostatics page and reviewed pilot fields')
+    electro.add_argument('--catalog',type=Path,required=True,help='Reviewed acquisition-catalog.csv')
+    electro.add_argument('--apply',action='store_true',help='Back up, install the page and apply the reviewed pilot fields')
     migrate = sub.add_parser('import',help='Plan a selected pilot or full read-only migration')
     migrate.add_argument('--workbook',type=Path,required=True)
     migrate.add_argument('--reviews',type=Path,required=True)
@@ -60,6 +63,45 @@ def parser():
 
 def _client(config):
     return GristClient(config,read_token(config.home,config.doc_url,config.credential_file or None))
+
+
+def install_electrostatics(client,config,catalog,apply=False):
+    """Review or restart the narrow, pilot-only page and field installation."""
+    from .migration import reviewed_pilot_patch,apply_reviewed_pilot_patch
+    from .setup import (upgrade_acquisition_schema,upgrade_labelling_choices,upgrade_electrostatics_schema,
+        build_layout,apply_electrostatics_ui,apply_experiments_ui,apply_experiment_registration_widget,apply_sample_registration_widget)
+    from .samples_ui import apply_samples_ui
+    before=reviewed_pilot_patch(client.records('Experiments'),catalog)
+    if not apply:
+        return {'dry_run':True,'pilot_patch':before,'scope':'Electrostatics page and reviewed existing pilot fields'}
+    if before['issues']:
+        raise ValueError('Pilot patch has unresolved identity/evidence issues; run without --apply for details')
+    try:
+        backup=create_backup(client,config.home/'backups',True)
+        upgrade_acquisition_schema(client)
+        upgrade_labelling_choices(client)
+        upgrade_electrostatics_schema(client)
+        build_layout(client,electrostatics_only=True)
+        doc_id=config.api_base.rsplit('/',1)[1]
+        layout=apply_electrostatics_ui(client,doc_id)
+        form=apply_experiment_registration_widget(client,doc_id)
+        experiments_layout=apply_experiments_ui(client,doc_id)
+        sample_form=apply_sample_registration_widget(client,doc_id)
+        samples_layout=apply_samples_ui(client,doc_id)
+        # New Choice cells can read as empty strings instead of absent/None.
+        # Recompute the guarded plan after schema creation and reject changes
+        # to its reviewed field updates or evidence during installation.
+        after=reviewed_pilot_patch(client.records('Experiments'),catalog)
+        if (after['issues'] or after['records'] != before['records'] or
+                after['catalog_sha256'] != before['catalog_sha256']):
+            raise ValueError('Pilot fields or catalog changed during setup; review again before resuming')
+        applied=apply_reviewed_pilot_patch(after,client,dry_run=False)
+    except GristError as error:
+        if '429' in str(error):
+            raise GristError('Grist HTTP 429: site quota or rate limit reached; wait for access to recover, then rerun electrostatics --apply. Completed steps are restartable.') from None
+        raise
+    return {'dry_run':False,'backup':backup['path'],'layout':layout,
+            'experiment_form':form,'experiments_layout':experiments_layout,'sample_form':sample_form,'samples_layout':samples_layout,'pilot_patch':applied}
 
 
 def main(argv=None):
@@ -130,6 +172,8 @@ def main(argv=None):
                             build_layout(client)
                             build_registration_widgets(client,config.api_base.rsplit('/',1)[1])
                             result = {'setup':'created','premigration':snapshot['path']}
+                        elif args.command == 'electrostatics':
+                            result = install_electrostatics(_client(config),config,args.catalog,args.apply)
                         elif args.command == 'import':
                             from .migration import build_pilot,build_full,apply_pilot,PILOT_SAMPLES,PILOT_TARGETS
                             if args.full and args.apply:

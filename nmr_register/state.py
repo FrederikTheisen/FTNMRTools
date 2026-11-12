@@ -7,6 +7,19 @@ import os
 from pathlib import Path
 import sqlite3
 import time
+from .split import is_derived_split
+
+MATCHING_METADATA_PREFIX = 'matching acquisition metadata at another path; possible copy or rename: '
+MISSING_FINGERPRINT_WARNING = 'Acquisition metadata fingerprint unavailable; independent identity requires review'
+DERIVED_SPLIT_WARNING = 'derived split dataset; original acquisition relation requires review'
+
+def sufficient_fingerprint(value):
+    return isinstance(value,str) and len(value)==64 and all(c in '0123456789abcdef' for c in value)
+
+def observation_warning(reason):
+    """A reviewable observation, not evidence of replacement at this exact path."""
+    if reason in (MISSING_FINGERPRINT_WARNING,DERIVED_SPLIT_WARNING):return True
+    return isinstance(reason,str) and reason.startswith(MATCHING_METADATA_PREFIX) and '; ' not in reason[len(MATCHING_METADATA_PREFIX):]
 
 
 def serialized(value):
@@ -58,11 +71,48 @@ class State:
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',(key,serialized(value)))
 
+    def exclude_derived_splits(self, records=(), now=None):
+        """Purge confirmed derived cache facts, never source files or remote rows.
+
+        Only exact generated copy-warning targets are removed. Hard identity
+        reasons and ambiguous warning text are preserved verbatim.
+        """
+        now = time.time() if now is None else now
+        excluded = {r['AcquisitionKey'] for r in records if is_derived_split(r)}
+        for table in ('observations', 'outbox'):
+            for row in self.db.execute('SELECT key,payload FROM '+table).fetchall():
+                if is_derived_split(json.loads(row['payload'])):
+                    excluded.add(row['key'])
+        if not excluded:
+            return
+        with self.db:
+            for table in ('observations', 'outbox'):
+                self.db.executemany('DELETE FROM '+table+' WHERE key=?', [(k,) for k in excluded])
+                for row in self.db.execute('SELECT key,payload FROM '+table).fetchall():
+                    fields = json.loads(row['payload'])
+                    reason = fields.get('ReconciliationReason', '')
+                    if not reason.startswith(MATCHING_METADATA_PREFIX) or not observation_warning(reason):
+                        continue
+                    targets = reason[len(MATCHING_METADATA_PREFIX):].split(', ')
+                    kept = [k for k in targets if k not in excluded]
+                    if kept == targets:
+                        continue
+                    fields['ReconciliationReason'] = MATCHING_METADATA_PREFIX+', '.join(kept) if kept else ''
+                    fields['LastChangedAt'] = now
+                    payload = serialized(fields)
+                    self.db.execute('UPDATE '+table+' SET payload=? WHERE key=?', (payload,row['key']))
+                    if table == 'observations':
+                        self.db.execute('INSERT OR IGNORE INTO outbox VALUES (?,?,?)', (row['key'],payload,now))
+
     def observe(self, records, now=None):
         now = now or time.time()
+        records = list(records)
+        self.exclude_derived_splits(records, now)
         changed = 0
         with self.db:
             for incoming in records:
+                if is_derived_split(incoming):
+                    continue
                 context = {k:v for k,v in incoming.items() if k.startswith('_')}
                 fields = {k:v for k,v in incoming.items() if not k.startswith('_')}
                 key = fields['AcquisitionKey']
@@ -74,6 +124,8 @@ class State:
                     reason = 'acquisition identity changed at existing path; reconcile before reusing assessment'
                 elif old:
                     reason = json.loads(old['payload']).get('ReconciliationReason','')
+                if reason==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(fields['ObservedFingerprint']):
+                    reason = ''  # Only this generated absence warning is resolved by new evidence.
                 old_context = json.loads(old['context']) if old else {}
                 old_files = {v[0]:tuple(v[3:]) for v in old_context.get('_RawFileStats',[])}
                 current_files = {v[0]:tuple(v[3:]) for v in context.get('_RawFileStats',[])}
@@ -81,8 +133,12 @@ class State:
                     reason = 'raw acquisition file replaced at existing path; reconcile before reusing assessment'
                 matches = self.db.execute('SELECT key FROM observations WHERE fingerprint=? AND key<>?',
                                           (fields['ObservedFingerprint'],key)).fetchall() if fields['ObservedFingerprint'] else []
-                if matches:
-                    reason = 'matching acquisition metadata at another path; possible copy or rename: '+', '.join(r[0] for r in matches)
+                if matches and (not reason or observation_warning(reason)):
+                    reason = MATCHING_METADATA_PREFIX+', '.join(sorted(r[0] for r in matches))
+                elif not reason and not fields['ObservedFingerprint']:
+                    reason = MISSING_FINGERPRINT_WARNING
+                elif not reason and 'derived split experiment' in fields.get('ScanError',''):
+                    reason = DERIVED_SPLIT_WARNING
                 fields['TransferStable'] = stable
                 fields['ReconciliationReason'] = reason
                 previous = json.loads(old['payload']) if old else None
@@ -102,7 +158,10 @@ class State:
                 rows = self.db.execute('SELECT key,payload FROM observations WHERE fingerprint=?',(fingerprint,)).fetchall()
                 for row in rows:
                     fields = json.loads(row['payload'])
-                    reason = 'matching acquisition metadata at another path; possible copy or rename: '+', '.join(r['key'] for r in rows if r['key'] != row['key'])
+                    previous_reason=fields.get('ReconciliationReason','')
+                    if previous_reason and not observation_warning(previous_reason):
+                        continue  # Copy suspicion must never erase real replacement evidence.
+                    reason = MATCHING_METADATA_PREFIX+', '.join(sorted(r['key'] for r in rows if r['key'] != row['key']))
                     if fields.get('ReconciliationReason') != reason:
                         fields['ReconciliationReason'] = reason
                         fields['LastChangedAt'] = now
@@ -112,7 +171,22 @@ class State:
                         changed += 1
         return changed
 
+    def cached_observations(self):
+        """Last actual observations, without altering identity or transfer state."""
+        self.exclude_derived_splits()
+        return [(row['key'],json.loads(row['payload'])) for row in
+                self.db.execute('SELECT key,payload FROM observations ORDER BY key')]
+
+    def requeue_observations(self,keys,now=None):
+        """Durably retry cached facts while preserving any already newer outbox work."""
+        self.exclude_derived_splits()
+        queued = time.time() if now is None else now
+        with self.db:
+            self.db.executemany('INSERT OR IGNORE INTO outbox(key,payload,queued) '
+                'SELECT key,payload,? FROM observations WHERE key=?',[(queued,key) for key in keys])
+
     def pending(self):
+        self.exclude_derived_splits()
         return [(row['key'],json.loads(row['payload'])) for row in self.db.execute('SELECT * FROM outbox ORDER BY queued,key')]
 
     def acknowledge(self,keys):
@@ -127,7 +201,10 @@ class State:
             self.set_meta('document_api_base',api_base)
 
     def status(self):
+        has_results=self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='result_queue'").fetchone()
         return {'observations':self.db.execute('SELECT count(*) FROM observations').fetchone()[0],
                 'pending':self.db.execute('SELECT count(*) FROM outbox').fetchone()[0],
+                'pending_results':self.db.execute('SELECT count(*) FROM result_queue').fetchone()[0] if has_results else 0,
+                'result_issues':self.get_meta('result_issues',[]),
                 'last_scan':self.get_meta('last_scan'),'last_sync':self.get_meta('last_sync'),
                 'last_error':self.get_meta('last_error','')}
