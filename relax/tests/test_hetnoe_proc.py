@@ -47,7 +47,7 @@ lo to 5 times l3
 '''
 
 
-def acquisition(root, datatype=0, byte_order=0, program='15N_HETNOE'):
+def acquisition(root, datatype=0, byte_order=0, program='15N_HETNOE', fniloop=0):
     root.mkdir(parents=True, exist_ok=True)
     (root/'acqus').write_text(f'''##$PULPROG= <{program}>
 ##$TD= 18
@@ -66,7 +66,8 @@ def acquisition(root, datatype=0, byte_order=0, program='15N_HETNOE'):
 <not needed> <a quoted name with spaces>
 ##END=
 ''')
-    (root/'acqu2s').write_text('''##$TD= 16
+    (root/'acqu2s').write_text(f'''##$TD= {8 if fniloop == 2 else 16}
+##$FnILOOP= {fniloop}
 ##$FnMODE= 6
 ##$SFO1= 60.85
 ##$O1= 7200
@@ -103,7 +104,7 @@ class HetNOEProcessingTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b''.join(raw[i*1024:(i+1)*1024] for i in range(j,16,2)))
         self.assertEqual(p['rows']//4,4)
         self.assertEqual((self.root/'ser').read_bytes(),raw)
-    def test_float64_in_both_byte_orders_becomes_unscaled_native_float32(self):
+    def test_float64_split_preserves_double_words_and_native_byte_order(self):
         for endian in (0,1):
             acquisition(self.root,2,endian)
             folder=self.root/f'stage{endian}'; folder.mkdir()
@@ -111,13 +112,27 @@ class HetNOEProcessingTests(unittest.TestCase):
             for j,path in enumerate(paths):
                 data=path.read_bytes(); self.assertEqual(len(data),8*1024)
                 for k in range(8):
-                    values=array.array('f'); values.frombytes(data[k*1024:k*1024+18*4])
+                    values=array.array('d'); values.frombytes(data[k*1024:k*1024+18*8])
                     self.assertEqual(list(values),[j+k*2+.25]*18)
+                self.assertEqual(hn.scalars(path.parent/'acqus')['DTYPA'],'2')
+                self.assertEqual(hn.scalars(path.parent/'acqus')['BYTORDA'],'0' if sys.byteorder=='little' else '1')
+    def test_neo_keeps_td_legacy_halves_td_and_both_clear_inner_loop(self):
+        for fniloop in (0,2):
+            acquisition(self.root,fniloop=fniloop)
+            folder=self.root/f'split{fniloop}';folder.mkdir()
+            p=hn.profile(self.root);paths=hn.split_raw(p,folder)
+            self.assertEqual(p['rows'],16)
+            for path in paths:
+                n=hn.scalars(path.parent/'acqu2s')
+                self.assertEqual(n['TD'],'8');self.assertEqual(n['FnILOOP'],'1');self.assertEqual(n['FnMODE'],'6')
+        acquisition(self.root,fniloop=1)
+        with self.assertRaisesRegex(ValueError,'no inner-loop split required'):hn.profile(self.root)
     def test_nonfinite_float_raw_rejected(self):
         acquisition(self.root,2)
         with (self.root/'ser').open('r+b') as f:f.write(struct.pack('<d',float('nan')))
         folder=self.root/'stage';folder.mkdir()
-        with self.assertRaisesRegex(ValueError,'Nonfinite'):hn.split_raw(hn.profile(self.root),folder)
+        p=hn.profile(self.root);paths=hn.split_raw(p,folder)
+        with self.assertRaisesRegex(ValueError,'Nonfinite'):hn.nmrpipe_input(p,paths[0],folder/'conversion.float32')
     def test_legacy_loop_and_changed_counter_or_loop_rejection(self):
         acquisition(self.root,program='N15HetNoe_rk.nl')
         self.assertEqual(hn.profile(self.root)['program'],'N15HetNoe_rk.nl')
@@ -134,10 +149,11 @@ class HetNOEProcessingTests(unittest.TestCase):
             path.write_text(original)
     def test_counts_require_explicit_full_file_override_never_truncation(self):
         path=self.root/'acqu2s';path.write_text(path.read_text().replace('TD= 16','TD= 12'))
-        with self.assertRaisesRegex(ValueError,'--raw-rows'):hn.profile(self.root)
-        self.assertEqual(hn.profile(self.root,16)['rows'],16)
-        for n in (12,14,20,0):
+        with self.assertRaisesRegex(ValueError,'must agree'):hn.profile(self.root)
+        for n in (12,14,16,20,0):
             with self.assertRaises(ValueError):hn.profile(self.root,n)
+        acquisition(self.root)
+        self.assertEqual(hn.profile(self.root,16)['rows'],16)
         with (self.root/'ser').open('ab') as f:f.write(b'x')
         with self.assertRaisesRegex(ValueError,'trailing bytes'):hn.profile(self.root,16)
     def test_inspect_does_not_invoke_commands_or_write(self):
@@ -189,6 +205,8 @@ class HetNOEProcessingTests(unittest.TestCase):
         self.assertIn('15N_baseline: POLY -auto -ord 4',text)
         self.assertIn('H_baseline: POLY -auto -ord 3',text)
         self.assertIn('plane_roles: reference, saturated',text)
+        for i in (1,2):
+            self.assertTrue((self.out/f'ft/test{i:03d}.ft2').is_file())
         self.assertFalse((self.out/'raw').exists())
         for name,data in before.items():self.assertEqual((self.root/name).read_bytes(),data)
     def test_float_conversion_uses_native_noi2f(self):
@@ -197,10 +215,19 @@ class HetNOEProcessingTests(unittest.TestCase):
              mock.patch.object(hn.rt,'set_series_metadata'),\
              mock.patch.object(hn,'pipeline',side_effect=self.fake_pipeline):hn.process(self.args)
         for cmd in self.conversions:self.assertIn('-noi2f',cmd);self.assertIn('-noswap',cmd)
+    def test_default_output_is_experiment_ft_and_preserves_acquisition(self):
+        self.args.output_dir=None;self.conversions=[];self.pipelines=[]
+        before={n:(self.root/n).read_bytes() for n in ('ser','acqus','acqu2s','pulseprogram')}
+        with mock.patch.object(hn.rt,'checked_run',side_effect=self.fake_commands),\
+             mock.patch.object(hn.rt,'set_series_metadata'),\
+             mock.patch.object(hn,'pipeline',side_effect=self.fake_pipeline):hn.process(self.args)
+        for i in (1,2):self.assertTrue((self.root/f'ft/test{i:03d}.ft2').is_file())
+        for n,b in before.items():self.assertEqual((self.root/n).read_bytes(),b)
+        self.assertFalse((self.root/'hetnoe_processed').exists())
     def test_failure_after_reference_preserves_previous_outputs(self):
         self.out.mkdir()
         for name in hn.OUTPUTS:
-            if name=='planes':(self.out/name).mkdir();(self.out/name/'old').write_bytes(b'old')
+            if name in ('planes','split','ft'):(self.out/name).mkdir();(self.out/name/'old').write_bytes(b'old')
             else:(self.out/name).write_bytes(b'old')
         self.conversions=[];self.pipelines=[]
         def fail_second(commands,cwd):
@@ -209,7 +236,7 @@ class HetNOEProcessingTests(unittest.TestCase):
         with mock.patch.object(hn.rt,'checked_run',side_effect=self.fake_commands),\
              mock.patch.object(hn,'pipeline',side_effect=fail_second),self.assertRaises(subprocess.CalledProcessError):hn.process(self.args)
         for name in hn.OUTPUTS:
-            path=self.out/name/('old' if name=='planes' else '')
+            path=self.out/name/('old' if name in ('planes','split','ft') else '')
             self.assertEqual(path.read_bytes(),b'old')
     def test_mixed_input_during_run_and_invalid_noise_do_not_publish(self):
         self.conversions=[];self.pipelines=[]
@@ -244,6 +271,12 @@ class HetNOEProcessingTests(unittest.TestCase):
         self.args.h_p0=self.args.h_p1=self.args.n_p0=self.args.n_p1=0.
         self.args.h_baseline_order=4
         hn.process(self.args)
+        for i in (1,2):
+            series=self.out/f'ft/test{i:03d}.ft2'
+            h=hn.rt.pipe_header(series)
+            self.assertEqual(h[9],2);self.assertEqual(h[15],1);self.assertEqual(h[442],1)
+            self.assertEqual(h[200],1);self.assertEqual(h[388],1)  # FDF3FTSIZE, FDF3TDSIZE
+            self.assertEqual(series.read_bytes()[2048:],(self.out/f'planes/plane_{i:02d}.ft2').read_bytes()[2048:])
         payloads=[(self.out/f'planes/plane_{i:02d}.ft2').read_bytes()[2048:] for i in (1,2)]
         vectors=[]
         for payload in payloads:

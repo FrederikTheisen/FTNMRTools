@@ -8,6 +8,7 @@ import array
 import math
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -15,7 +16,7 @@ import relax_tools as rt
 
 
 ROLES = ('reference', 'saturated')
-OUTPUTS = ['planes', 'm.ft3', 'proc.ucsf', 'vEstNoise.txt', 'relax_header.txt', 'processing.txt']
+OUTPUTS = ['split', 'planes', 'ft', 'm.ft3', 'proc.ucsf', 'vEstNoise.txt', 'relax_header.txt', 'processing.txt']
 
 
 def scalars(path):
@@ -91,10 +92,21 @@ def profile(folder, raw_rows=None):
     if len(re.findall(r'"'+counter+r'=1"', active)) != 1 or re.search(r'"'+counter+r'=(?!=)(?!1")', active):
         raise ValueError('Unrecognised initial saturation counter')
     audit = folder/'audita.txt'
-    if audit.exists() and re.search(r'created by split\s+\d+:', audit.read_text()):
+    if audit.exists() and re.search(r'created by split\b', audit.read_text()):
         raise ValueError('This is a TopSpin split copy; use the original interleaved experiment')
     td = number(acq, 'TD', positive=True, integer=True)
     metadata_rows = number(indirect, 'TD', positive=True, integer=True)
+    fniloop = number({'FnILOOP': indirect.get('FnILOOP', '0')}, 'FnILOOP', integer=True)
+    if fniloop == 2:
+        # Bruker split: Neo TD excludes the inner-loop multiplicity.
+        rows, split_td, split_kind = 2*metadata_rows, metadata_rows, 'neo_inner_loop'
+    elif fniloop == 0:
+        # Pre-Neo TD includes the two interleaved states.
+        rows, split_td, split_kind = metadata_rows, metadata_rows//2, 'legacy_td'
+    elif fniloop == 1:
+        raise ValueError('FnILOOP=1: no inner-loop split required; use the original interleaved experiment')
+    else:
+        raise ValueError(f'Unsupported FnILOOP={fniloop}; expected 0 (legacy) or 2 (Neo)')
     if (number(acq, 'PARMODE', integer=True) != 1 or number(acq, 'AQ_mod', integer=True) != 3 or
             number(indirect, 'FnMODE', integer=True) != 6 or td % 2 or number(acq, 'FnTYPE', integer=True) != 0):
         raise ValueError('Expected uniformly sampled packed 2D DQD / echo-antiecho acquisition')
@@ -106,15 +118,14 @@ def profile(folder, raw_rows=None):
     row_bytes = ((td*word_bytes+1023)//1024)*1024
     size = (folder/'ser').stat().st_size
     observed, remainder = divmod(size, row_bytes)
-    inferred_interleaved_rows = (raw_rows is None and
-                                 program in ('15N_HETNOE', 'N15HetNoe_rk.nl') and
-                                 observed == 2*metadata_rows)
-    rows = (observed if inferred_interleaved_rows else metadata_rows) if raw_rows is None else raw_rows
+    if raw_rows is not None and raw_rows != rows:
+        raise ValueError('--raw-rows cannot override TD/FnILOOP split semantics')
     if rows <= 0 or rows % 4:
         raise ValueError('Raw row count must be a positive multiple of four (two states x echo/antiecho)')
     if remainder or observed != rows:
         raise ValueError(f'Raw ser has {observed} full rows and {remainder} trailing bytes; acqu2s TD={metadata_rows}, '
-                         f'selected rows={rows}. Review acquisition status; --raw-rows N explicitly selects the complete file, never truncates it')
+                         f'FnILOOP={fniloop} requires {rows} rows. Acquisition status and file size must agree; '
+                         'no file-size inference or truncation is performed')
     for parameters in (acq, indirect):
         for key in ('SFO1', 'SW_h'):
             number(parameters, key, positive=True)
@@ -125,16 +136,46 @@ def profile(folder, raw_rows=None):
     return dict(folder=folder, acq=acq, indirect=indirect, program=program, pulse_path=pulse_path, td=td,
                 rows=rows, metadata_rows=metadata_rows, row_bytes=row_bytes,
                 datatype=datatype, byte_order=byte_order, raw_rows_override=raw_rows is not None,
-                raw_rows_inferred_interleaved=inferred_interleaved_rows)
+                raw_rows_inferred_interleaved=False, fniloop=fniloop,
+                split_td=split_td, split_kind=split_kind)
+
+
+def set_scalar(text, key, value):
+    pattern = r'^##\$'+re.escape(key)+r'=[^\n]*'
+    line = f'##${key}= {value}'
+    if re.search(pattern, text, re.M):
+        return re.sub(pattern, lambda match: line, text, count=1, flags=re.M)
+    if re.search(r'^##END=', text, re.M):
+        return re.sub(r'^##END=', lambda match: line+'\n##END=', text, count=1, flags=re.M)
+    return text.rstrip()+'\n'+line+'\n'
 
 
 def split_raw(p, directory):
-    """Alternate whole FIDs before echo/antiecho decoding; never mix states.
+    """Ordinary 2D Bruker split 2: preserve raw words, padding and quadrature.
 
-    Float64 raw values are converted to native float32 for NMRPipe without
-    intensity normalization. Padding is recreated for the 4-byte word size.
+    Follows exp/stan/nmr/au/src/split (16.04.2021): PARMODE=1,
+    FnTYPE=0, no IPAP/ITS/NBL. Each successive whole record goes to the
+    next output. Only byte order changes to local endian, as in local_swap.
+    TD/FnILOOP are updated separately for legacy and Neo acquisitions.
     """
-    paths = [directory/f'plane_{i:02d}.ser' for i in (1, 2)]
+    native_order = 0 if sys.byteorder == 'little' else 1
+    paths = []
+    for role in ROLES:
+        folder = directory/role
+        folder.mkdir()
+        for name in ('acqu', 'acqu2', 'acqus', 'acqu2s', 'pulseprogram', 'pulseprogram.precomp', p['program']+'.pp'):
+            source = p['folder']/name
+            if source.is_file():
+                shutil.copyfile(source, folder/name)
+        acq_path = folder/'acqus'
+        acq_path.write_text(set_scalar(acq_path.read_text(), 'BYTORDA', native_order))
+        indirect_path = folder/'acqu2s'
+        indirect_path.write_text(set_scalar(set_scalar(indirect_path.read_text(), 'TD', p['split_td']), 'FnILOOP', 1))
+        current = folder/'acqu2'
+        if current.exists() and p['split_kind'] == 'legacy_td':
+            td = number(scalars(current), 'TD', positive=True, integer=True)
+            current.write_text(set_scalar(current.read_text(), 'TD', td//2))
+        paths.append(folder/'ser')
     handles = []
     try:
         handles = [path.open('wb') for path in paths]
@@ -143,14 +184,9 @@ def split_raw(p, directory):
                 record = source.read(p['row_bytes'])
                 if len(record) != p['row_bytes']:
                     raise ValueError('Raw ser changed while reading')
-                if p['datatype'] == 2:
-                    values = array.array('d'); values.frombytes(record[:p['td']*8])
-                    if (sys.byteorder == 'little') != (p['byte_order'] == 0):
-                        values.byteswap()
-                    if any(not math.isfinite(v) or abs(v) > 3.4028234663852886e38 for v in values):
-                        raise ValueError('Nonfinite or out-of-range float64 raw intensity')
-                    record = array.array('f', values).tobytes()
-                    record += bytes((-len(record)) % 1024)
+                if p['byte_order'] != native_order:
+                    words = array.array('d' if p['datatype'] == 2 else 'i')
+                    words.frombytes(record); words.byteswap(); record = words.tobytes()
                 handles[index % 2].write(record)
             if source.read(1):
                 raise ValueError('Raw ser grew while reading')
@@ -158,6 +194,29 @@ def split_raw(p, directory):
         for handle in handles:
             handle.close()
     return paths
+
+
+def nmrpipe_input(p, split_path, target):
+    """Make an explicitly separate float32 conversion input for NMRPipe.
+
+    The preserved split Bruker ser remains float64. NMRPipe's -noi2f
+    accepts float32 words, not Bruker DTYPA=2 double words.
+    """
+    if p['datatype'] == 0:
+        return split_path
+    with split_path.open('rb') as source, target.open('wb') as output:
+        for _ in range(p['split_td']):
+            record = source.read(p['row_bytes'])
+            if len(record) != p['row_bytes']:
+                raise ValueError('Incomplete split raw record')
+            values = array.array('d'); values.frombytes(record[:p['td']*8])
+            if any(not math.isfinite(v) or abs(v) > 3.4028234663852886e38 for v in values):
+                raise ValueError('Nonfinite or out-of-range float64 raw intensity')
+            record = array.array('f', values).tobytes()
+            output.write(record+bytes((-len(record)) % 1024))
+        if source.read(1):
+            raise ValueError('Unexpected extra split raw record')
+    return target
 
 
 def pipeline(commands, directory):
@@ -209,28 +268,30 @@ def process(args):
         raise ValueError('Zero-fill sizes must accommodate acquired complex points')
     if not 0 <= args.n_baseline_order <= 6 or not 0 <= args.h_baseline_order <= 6:
         raise ValueError('Baseline polynomial orders must be between zero and six')
-    destination = Path(args.output_dir).resolve() if args.output_dir else p['folder']/'hetnoe_processed'
-    if destination == p['folder'] or destination in p['folder'].parents:
-        raise ValueError('Use a dedicated processing directory, not an acquisition or its parent')
+    destination = Path(args.output_dir).resolve() if args.output_dir else p['folder']
+    if destination in p['folder'].parents:
+        raise ValueError('Output must be the experiment directory or a dedicated processing directory, not a parent')
     destination.mkdir(parents=True, exist_ok=True)
-    inputs = [p['folder']/name for name in ('ser', 'acqus', 'acqu2s')] + [p['pulse_path']]
+    inputs = [p['folder']/name for name in ('ser', 'acqus', 'acqu2s', 'acqu', 'acqu2') if (p['folder']/name).is_file()] + [p['pulse_path']]
     if (p['folder']/'audita.txt').exists():
         inputs.append(p['folder']/'audita.txt')
     initial = {path: signature(path) for path in inputs}
     with rt.run_directory(destination, 'hetnoe-process') as stage:
-        raw = stage/'raw'; raw.mkdir()
+        raw = stage/'split'; raw.mkdir()
         raw_paths = split_raw(p, raw)
+        converted = stage/'conversion'; converted.mkdir()
         planes = stage/'planes'; planes.mkdir()
-        swap = '-noswap' if p['datatype'] == 2 or ((p['byte_order'] == 0) == (sys.byteorder == 'little')) else '-swap'
+        swap = '-noswap'  # split outputs are already in native byte order
         for index, path in enumerate(raw_paths, 1):
             fid = stage/f'plane_{index:02d}.fid'
+            path = nmrpipe_input(p, path, converted/f'plane_{index:02d}.float32')
             command = ['bruk2pipe', '-in', path, '-bad', '0.0', '-ext', swap, '-AMX']
             if p['datatype'] == 2:
                 command.append('-noi2f')
             command += ['-decim', str(number(p['acq'], 'DECIM')), '-dspfvs', str(number(p['acq'], 'DSPFVS')),
                         '-grpdly', str(number(p['acq'], 'GRPDLY')),
                         '-xN', str(p['td']), '-xT', str(p['td']//2),
-                        '-yN', str(p['rows']//2), '-yT', str(p['rows']//4),
+                        '-yN', str(p['split_td']), '-yT', str(p['split_td']//2),
                         '-xMODE', 'DQD', '-yMODE', 'Echo-AntiEcho']
             for axis, parameters in [('x', p['acq']), ('y', p['indirect'])]:
                 obs = number(parameters, 'SFO1', positive=True)
@@ -245,16 +306,29 @@ def process(args):
         headers = [rt.pipe_header(path) for path in paths]
         if any(h[9] != 2 or (h[99], h[219]) != (headers[0][99], headers[0][219]) for h in headers):
             raise ValueError('Processed planes have inconsistent grids')
-        rt.set_series_metadata(paths)
+        # Only temporary copies become a pseudo-3D series for the stack.
+        # The displayed/exported planes remain genuinely independent 2Ds.
+        series = stage/'series'; series.mkdir()
+        series_paths = []
+        for i, path in enumerate(paths, 1):
+            series_path = series/f'test{i:03d}.ft3'
+            shutil.copyfile(path, series_path)
+            series_paths.append(series_path)
+        rt.set_series_metadata(series_paths)
+        for series_path in series_paths:
+            rt.checked_run(['sethdr', series_path, '-zFD', str(len(paths))], stage)
         with (stage/'m.ft3').open('wb') as handle:
-            rt.checked_run(['xyz2pipe', '-in', str(planes/'plane_%02d.ft2')], stage, handle)
+            rt.checked_run(['xyz2pipe', '-in', str(series/'test%03d.ft3')], stage, handle)
         if rt.plane_count(stage/'m.ft3') != 2:
             raise ValueError('Processed stack must have two planes')
         rt.checked_run(['pipe2ucsf', 'm.ft3', 'proc.ucsf'], stage); rt.nonempty(stage/'proc.ucsf')
         noises = []
-        for path in paths:
-            rt.checked_run(['sethdr', path, '-ndim', '2', '-zN', '1', '-zT', '1', '-zMODE', 'Real'], stage)
+        ft = stage/'ft'; ft.mkdir()
+        for index, path in enumerate(paths, 1):
+            rt.checked_run(['sethdr', path, '-ndim', '2', '-zN', '1', '-zT', '1',
+                            '-zTD', '1', '-zFD', '1', '-zMODE', 'Real'], stage)
             rt.checked_run(['setfdata', path, '-fileCount', '1'], stage)
+            shutil.copyfile(path, ft/f'test{index:03d}.ft2')
             with (stage/'noise_stat.txt').open('w') as handle:
                 rt.checked_run(['specStat.com', '-in', path, '-stat', 'vEstNoise'], stage, handle)
             noises.append(rt.noise_value(stage/'noise_stat.txt'))
@@ -264,9 +338,13 @@ def process(args):
         (stage/'processing.txt').write_text(
             f"source_folder: {p['folder'].parent.name}\nexpno: {p['folder'].name}\npulse_program: {p['program']}\n"
             f"plane_roles: {', '.join(ROLES)}\nplane_codes: 0, 1\n"
+            'processed_planes: ft/test001.ft2 reference; ft/test002.ft2 saturated; independent 2D headers\n'
             f"raw_type: {'int32' if p['datatype'] == 0 else 'float64 -> native float32, no normalization'}\n"
             f"metadata_TD1: {p['metadata_rows']}\nraw_rows: {p['rows']}\nraw_rows_override: {p['raw_rows_override']}\n"
             f"raw_rows_inferred_interleaved: {p['raw_rows_inferred_interleaved']}\n"
+            f"split_convention: Bruker ordinary split 2, {p['split_kind']}\n"
+            f"source_FnILOOP: {p['fniloop']}\nsplit_TD1: {p['split_td']}\nsplit_FnILOOP: 1\n"
+            'split_raw: original datatype and padding preserved; local byte order; no rescaling or quadrature mixing.\n'
             f"h_phase: {args.h_p0}, {args.h_p1}\nn_phase: {args.n_p0}, {args.n_p1}\n"
             f"zero_fill: {args.h_zf}, {args.n_zf}\n"
             f"15N_baseline: POLY -auto -ord {args.n_baseline_order} (after N PS -di, before TP)\n"
@@ -278,6 +356,7 @@ def process(args):
             raise ValueError('Acquisition inputs changed during processing')
         rt.publish(stage, destination, OUTPUTS)
     print(f'Processed reference (plane 1) and saturated (plane 2): {destination}')
+    print(f'Open reference in NMRDraw: nmrDraw -in "{destination}/ft/test001.ft2"')
     print('Export one assigned peak list from the well-phased reference plane; use fixed coordinates for both.')
 
 
@@ -285,7 +364,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('inspect', 'process'))
     parser.add_argument('--experiment', default='.')
-    parser.add_argument('--raw-rows', type=int, help='Explicit complete-file row count when status TD disagrees; never truncates')
+    parser.add_argument('--raw-rows', type=int, help='Optional assertion of TD/FnILOOP-derived row count; never overrides metadata')
     parser.add_argument('--output-dir')
     for key in ('h-p0', 'h-p1', 'n-p0', 'n-p1'):
         parser.add_argument('--'+key, type=float, default=0.)

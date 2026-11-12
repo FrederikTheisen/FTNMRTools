@@ -1759,15 +1759,29 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
     plot += ['set autoscale y', 'set format x "%g"']
     plot += ['set autoscale x', 'set title ' + gnuplot_string(mode.upper() + ' | ' + run_tag), 'set xlabel "Residue"',
              'set ylabel ' + gnuplot_string('hetNOE' if mode == 'noe' else mode.upper() + ' (1/s)'),
-             'set key top right', 'set datafile missing "NaN"']
+             'set key top right', 'set datafile missing "NaN"',
+             'set yrange [-1.5:1.5]' if mode == 'noe' else 'set yrange [* < 0:0 < *]']
     groups = [(False, 'Isolated peaks', '#285879'), (True, 'Overlap flagged', '#c17b19')]
     groups = [(flag, label, color) for flag, label, color in groups
               if any(row['valid'] and row['overlap'] == flag for row in rows)]
     if not groups:
         plot += text_page('No valid fitted values', ['All saved fits are invalid; exponential suitability is not applicable.' if mode=='noe' else 'All saved fits are invalid; assessment is inconclusive.'])
-    if groups: plot.append('plot ' + ', '.join(
-        '\'-\' using 1:2:3 with yerrorbars pt 7 lc rgb ' + gnuplot_string(color) + ' title ' + gnuplot_string(label)
-        for flag, label, color in groups))
+    residue_counts = Counter(row['residue'] for row in rows)
+    unique = sorted((row for row in rows if row['valid'] and residue_counts[row['residue']] == 1),
+                    key=lambda row: row['residue'])
+    adjacent = [(left, right) for left, right in zip(unique, unique[1:])
+                if right['residue'] == left['residue'] + 1]
+    if groups:
+        series = ['\'-\' using 1:2 with lines lw 0.8 lc rgb "#777777" notitle'] if adjacent else []
+        series += [
+            '\'-\' using 1:2:3 with yerrorbars pt 7 ps 0.45 lc rgb ' + gnuplot_string(color) + ' title ' + gnuplot_string(label)
+            for flag, label, color in groups]
+        plot.append('plot ' + ', '.join(series))
+        if adjacent:
+            for pair in adjacent:
+                plot.extend(f"{row['residue']} {row['values'][0]:.17g}" for row in pair)
+                plot.append('')
+            plot.append('e')
     for flag, label, color in groups:
         plot.extend(f"{row['residue']} {row['values'][0]:.17g} {row['values'][1]:.17g}"
                     for row in rows if row['valid'] and row['overlap'] == flag)

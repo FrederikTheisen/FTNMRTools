@@ -1,23 +1,86 @@
 HetNOE processing with NMRPipe
 
-Run from the original interleaved Bruker experiment folder.
+Copy hetnoe_proc.com into the ORIGINAL interleaved Bruker experiment folder,
+then run from that folder:
 
-1. In the experiment folder, run NMRPipe's `bruker` command to create
-   `fid.com` from the Bruker `ser` data and acquisition parameters.
-2. Run the generated conversion script:
+    tcsh hetnoe_proc.com
 
-       tcsh fid.com
+The .com script uses the shared FTNMRTools hetnoe_proc.py helper, which applies
+ordinary Bruker split 2 semantics BEFORE converting either state. No manual
+TopSpin split, bruker conversion setup, or fid.com run is needed. It reads ser,
+acqus, acqu2s and the saved pulse program. NMRPipe must be initialized in
+your shell. The reviewed 15N_HETNOE and N15HetNoe_rk.nl pulse-program layouts
+are supported; unrecognized layouts stop with an explanation.
 
-   It writes the pseudo-3D NMRPipe FIDs under `fid/`.
-3. Run the shared FTNMRTools processor:
+Edit H_P0, H_P1, N_P0, N_P1 and BASELINE_ORDER at the top of your local .com
+script. Tune phases on the reference and rerun; both spectra always use
+the same phase, window and baseline settings. No peaks are created or moved.
 
-       tcsh /path/to/FTNMRTools/relax/hetnoe_proc.com
+Outputs directly in the experiment directory (OUTDIR = .):
+    split/reference/    reference Bruker ser and acquisition parameters
+    split/saturated/    saturated Bruker ser and acquisition parameters
+    ft/test001.ft2      reference, standalone 2D for NMRDraw and CCPN
+    ft/test002.ft2      saturated, standalone 2D for NMRDraw and CCPN
+    planes/plane_01.ft2  reference
+    planes/plane_02.ft2  saturated
+    m.ft3               paired NMRPipe stack
+    proc.ucsf           paired UCSF stack
+    relax_header.txt    plane codes, 0 = reference and 1 = saturated
+    vEstNoise.txt       separate noise SDs, in plane order
+    processing.txt      acquisition, plane-order and processing settings
 
-The processor handles each Bruker-generated FID separately and writes the
-third-axis planes as separate 2D spectra under `hetnoe_processed/`. It follows
-the usual NMRPipe H and 15N processing order and applies `POLY -auto -ord 4`
-while 15N is active. Edit the H/N phases and baseline order at the top of the
-shared `.com` script. Use the same phase settings for both planes.
+Open a processed 2D plane in NMRDraw from the experiment directory:
 
-No Python helper is required for this processing route. The Bruker-generated
-`fid.com` supplies the experiment-specific conversion parameters.
+    nmrDraw -in ft/test001.ft2
+
+test001 is reference and test002 is saturated. Each file has dimension count
+two, file count one and a one-point unused third axis. Load these files in
+CCPN as ordinary 2D spectra. planes/*.ft2 are equivalent compatibility copies.
+Only temporary copies are given 3D headers to build m.ft3 and proc.ucsf;
+those combined stacks are separate from the independent processed planes.
+For phasing, put the resulting H/N phases into the local hetnoe_proc.com,
+rerun it, and reload the same ft/*.ft2 spectra.
+
+Inspect both 2D spectra before exporting peak positions. Signed intensities
+and relative scaling are preserved; do not normalize the planes separately.
+This processing script does not run the ratio analysis.
+
+Analysis:
+    Finish phasing, update the local processing script, and rerun processing.
+    In CCPN export ONE assigned reference-plane peak list with FT_exportSparky.py.
+    Set its OUTPUTPATH to this original experiment directory (not Documents).
+    Include hetNOE in the peak-list filename. Retain the overlap column.
+    Copy hetnoe_analyze.com here, set PEAKS to that exact filename, and choose
+    sparky3d for a pseudo-3D export (w1 plane, w2 N, w3 H), or sparky2d for
+    an ordinary 2D export (w1 N, w2 H). Then run:
+
+        tcsh hetnoe_analyze.com
+
+    Analysis reads the current ft/test001.ft2 and ft/test002.ft2 and estimates
+    noise independently in each. The displayed spectra are not modified.
+    It writes <prefix>_numbers.csv, <peak-list>_intensity.pdf and
+    <prefix>_support.zip beside the original acquisition and peak list.
+    Source collection, expno and pulse program are embedded in the results.
+    Analysis does not update the Electrostatics catalog/current-result manifest
+    or attach results to Grist. Those require explicit current-result selection.
+
+Split semantics (Bruker AU source split, version 16.04.2021):
+    FnILOOP=2: Neo TD excludes the states. Read 2*TD records, retain TD in
+               each output and set FnILOOP=1.
+    FnILOOP=0: legacy TD includes both states. Read TD records, halve TD
+               in each output and set FnILOOP=1.
+    FnILOOP=1: already separated/no inner loop; refuse another split.
+Each whole padded record is copied to its state, preserving datatype, NC,
+and echo/antiecho encoding. Byte order is converted to local endian, as in
+TopSpin's local_swap. Ordinary splitting does not combine echo/antiecho pairs.
+Only the later NMRPipe conversion decodes Echo-AntiEcho, exactly once. For
+float64 raw data, separate temporary float32 inputs are created for NMRPipe;
+the saved split Bruker datasets retain the original float64 values.
+Counts must agree with TD/FnILOOP and the complete raw file. File size is
+never used to guess an alternative split convention or truncate the series.
+
+Validation: compared both raw outputs byte-for-byte and acquisition parameters
+against four existing TopSpin split datasets (two legacy and two Neo). The
+scope is ordinary uniformly sampled 2D, two-state acquisitions with the saved
+reviewed pulse programs above; IPAP, NBL, NUS and general nD split modes are
+not implemented here.

@@ -1,49 +1,30 @@
 #!/bin/tcsh
-# Process the pseudo-3D NMRPipe FIDs made by the Bruker `bruker` conversion.
-# Run from the original experiment directory after running fid.com.
-# H and 15N phases are shared by both HetNOE planes; tune on the reference.
+# Copy into the ORIGINAL interleaved Bruker experiment and run:
+#     tcsh hetnoe_proc.com
+# Applies ordinary Bruker split 2 semantics before converting each 2D dataset.
+# Preserved Bruker split datasets: split/{reference,saturated}/
+# Standalone 2D planes: ft/test001.ft2 reference, ft/test002.ft2 saturated.
+# Tune phases on the reference; both planes use the same settings.
 
 set H_P0 = 0
 set H_P1 = 0
 set N_P0 = 0
 set N_P1 = 0
 set BASELINE_ORDER = 4
-set OUTDIR = hetnoe_processed
+set OUTDIR = .
 
-set INPUTS = (fid/test*.fid)
-if ($#INPUTS == 0) then
-    echo "No fid/test*.fid files found. Run the Bruker-generated fid.com first."
-    exit 1
+set TOOLS_DIR = "$HOME/Documents/Projects/FTNMRTools/relax"
+if ($?FTNMRTOOLS_ROOT) then
+    set TOOLS_DIR = "$FTNMRTOOLS_ROOT/relax"
+endif
+set PROCESSOR = "$TOOLS_DIR/hetnoe_proc.py"
+if (! -f "$PROCESSOR") then
+    echo "Shared HetNOE processor not found: $PROCESSOR"
+    echo "Set FTNMRTOOLS_ROOT to your FTNMRTools checkout."
+    exit 2
 endif
 
-mkdir -p "$OUTDIR"
-if ($status != 0) exit 1
-
-foreach INPUT ($INPUTS)
-    set BASE = $INPUT:t:r
-    echo "Processing $INPUT"
-    xyz2pipe -in "$INPUT" -x \
-    | nmrPipe -fn SOL \
-    | nmrPipe -fn SP -off 0.5 -end 0.95 -pow 2 -elb 0.0 -glb 0.0 -c 0.5 \
-    | nmrPipe -fn ZF -zf 1 -auto \
-    | nmrPipe -fn FT \
-    | nmrPipe -fn PS -p0 $H_P0 -p1 $H_P1 -di \
-    | nmrPipe -fn EXT -left -sw \
-    | nmrPipe -fn TP \
-    | nmrPipe -fn SP -off 0.5 -end 0.95 -pow 1 -elb 0.0 -glb 0.0 -c 0.5 \
-    | nmrPipe -fn ZF -zf 1 -auto \
-    | nmrPipe -fn FT \
-    | nmrPipe -fn PS -p0 $N_P0 -p1 $N_P1 -di \
-    | nmrPipe -fn POLY -auto -ord $BASELINE_ORDER \
-    | nmrPipe -fn TP \
-    | nmrPipe -fn POLY -auto -ord $BASELINE_ORDER \
-    | pipe2xyz -out "$OUTDIR/${BASE}_plane%03d.ft2" -z -ov
-
-    if ($status != 0) then
-        echo "NMRPipe processing failed for $INPUT. Check the first command that reported an error."
-        exit 1
-    endif
-end
-
-echo "Wrote the separated NMRPipe planes under $OUTDIR/"
-echo "15N baseline correction is applied before the final transpose."
+python3 "$PROCESSOR" process --experiment "$cwd" --output-dir "$OUTDIR" \
+    --h-p0 "$H_P0" --h-p1 "$H_P1" --n-p0 "$N_P0" --n-p1 "$N_P1" \
+    --h-baseline-order "$BASELINE_ORDER" --n-baseline-order "$BASELINE_ORDER" $argv:q
+exit $status
