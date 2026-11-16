@@ -158,11 +158,9 @@ The collector has 757 exact targets; 753 are currently observed and four are
 absent. The current sync has no identity conflicts, metadata warnings, pending
 work, or pending results. Sixteen internal result attachments are present.
 
-The Experiments page has a **Show calibration / 1D** button. Routine entries
-start hidden in each browser; the button shows them without changing other
-filters. Entries with acquisition reconciliation warnings or scan errors remain
-visible in either setting. The control shows a loading or error message if its
-selection is unavailable.
+The Experiments page uses its standard pinned **Experiment type** filter.
+**Calibration** and **1D** are unchecked in the saved default view. Select them
+in that filter whenever you want to include those EXPNOs.
 
 An EXPNO without raw data is a setup placeholder: changing its pulse program
 or parameters, or copying setup templates between EXPNOs, is normal. These

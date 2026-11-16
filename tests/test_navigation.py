@@ -37,3 +37,10 @@ class Tests(unittest.TestCase):
  def test_partial_install_resumes_and_user_hidden_field_is_preserved(self):
   c=Fake();plan=apply_experiment_navigation(c);c.apply(plan['actions']);apply_experiment_navigation(c,dry_run=False)
   c.tables['_grist_Views_section_field'][-1]['fields']['width']=0;self.assertEqual(apply_experiment_navigation(c,dry_run=False)['actions'],[])
+
+ def test_legacy_visibility_controller_is_rejected_as_linked_destination(self):
+  c=Fake();c.tables['_grist_Views_section'][0]['fields']['linkSrcSectionRef']=23
+  c.tables['_grist_Views_section'].append({'id':23,'fields':{'parentId':8,'title':'Experiment visibility','parentKey':'custom','tableRef':4}})
+  with self.assertRaisesRegex(ValueError,'Experiments grid is linked'):
+   apply_experiment_navigation(c,dry_run=False)
+  self.assertFalse(c.calls)

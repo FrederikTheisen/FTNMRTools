@@ -290,9 +290,9 @@ class ExperimentPresentationTests(unittest.TestCase):
                 if name=='grist_set_page_layout': self.layouts.append(args['layout'])
                 return {}
         c=Fake()
-        with patch('nmr_register.setup._mcp',side_effect=c.mcp), patch('nmr_register.experiments_ui._mcp',side_effect=c.mcp), patch('nmr_register.experiments_ui.install_experiment_visibility',return_value={'widget':99}) as visibility:
+        with patch('nmr_register.setup._mcp',side_effect=c.mcp), patch('nmr_register.experiments_ui._mcp',side_effect=c.mcp), patch('nmr_register.experiments_ui.configure_experiment_type_filter',return_value={'filter':99}) as type_filter:
             first=apply_experiments_ui(c,'doc');second=apply_experiments_ui(c,'doc')
-        self.assertEqual(visibility.call_count,2);self.assertEqual(first['visibility'],{'widget':99})
+        self.assertEqual(type_filter.call_count,2);self.assertEqual(first['type_filter'],{'filter':99});type_filter.assert_called_with(c,apply=True)
         self.assertEqual(first,second);self.assertEqual(len(c.batches),1)
         self.assertTrue({f['id'] for f in c.fields}.issuperset({5}))
         opts=json.loads(c.columns[0]['fields']['widgetOptions'])
@@ -306,7 +306,7 @@ class ExperimentPresentationTests(unittest.TestCase):
         field_custom=json.dumps({'dropdownCondition':{'text':'choice.Protein == "X"'},'other':'keep'})
         custom.columns[0]['fields']['widgetOptions']=column_custom
         custom.fields[-1]['fields']['widgetOptions']=field_custom
-        with patch('nmr_register.setup._mcp',side_effect=custom.mcp), patch('nmr_register.experiments_ui._mcp',side_effect=custom.mcp), patch('nmr_register.experiments_ui.install_experiment_visibility',return_value={'widget':99}): apply_experiments_ui(custom,'doc')
+        with patch('nmr_register.setup._mcp',side_effect=custom.mcp), patch('nmr_register.experiments_ui._mcp',side_effect=custom.mcp), patch('nmr_register.experiments_ui.configure_experiment_type_filter',return_value={'filter':99}): apply_experiments_ui(custom,'doc')
         self.assertEqual(custom.columns[0]['fields']['widgetOptions'],column_custom)
         self.assertEqual(custom.fields[0]['fields']['widgetOptions'],field_custom)
         blocked=Fake();blocked.fields[-1]['fields']['widgetOptions']=json.dumps({'dropdownCondition':{'text':'$ProteinSelector and choice.Available'}})
