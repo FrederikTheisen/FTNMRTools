@@ -362,13 +362,14 @@ establish membership, and the zero-dose DNA control remains a DNA experiment.
 On the Electrostatics page, choose a protein, then set and save its field, NaCl,
 and experiment-type axes. The matrix has experiment rows and nominal field
 columns; each cell lists the expected NaCl concentrations separately. Counts
-include only identity-trusted acquisitions with overall `Use` and all six
-acceptable QC choices. Acquisition coverage `Complete` or `Sufficient` both
-qualify. Acquisition status remains separate; a stopped or unknown-status
-acquisition can count when its identity is trusted and its QC passes. Green
-requires at least two in one compatible condition / protocol group; `Do not use`
-acquisitions are excluded and marked red. Limited, unassessed, pending, and
-identity-review records remain visible separately. The default types are T1,
+include only identity-trusted acquisitions with overall `Use`. Blue means one
+`Use`; green means two or more in that protein, temperature, field, experiment
+and salt cell. Sample or protocol differences remain available in the details
+and do not change this colour threshold. Acquisition status remains separate.
+`Do not use` acquisitions do not count and appear in the discarded subtitle.
+Limited, unassessed, pending, and identity-review records remain visible
+separately. All visible salt cells share the tallest required height and
+realign when the available width changes. The default types are T1,
 T1rho, hetNOE, and etaXY; water T1 is optional. Select one temperature and click a
 NaCl line to show its individual acquisitions. A zero count does not establish
 that an experiment was never run. Sample and protocol differences remain in

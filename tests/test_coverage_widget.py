@@ -60,7 +60,7 @@ check('durable save merges fresh unrelated protein settings and HTML',()=>{const
 check('same protein concurrent changes and invalid section never write',()=>{const s=metadata();throws(()=>Coverage.mergeAxes([s],[{id:42,tableId:'Experiments'}],88,'P',originalAxes,{...originalAxes,salts:[100]}));for(const change of [{tableRef:99},{parentKey:'record'},{options:'not json'},{options:JSON.stringify({html:'other',customView:'{}'})}])throws(()=>Coverage.mergeAxes([{...s,...change}],[{id:42,tableId:'Experiments'}],88,'P',originalAxes,originalAxes));});
 check('only trusted structured QC Use counts good',()=>{const c=cell(build([row(1),row(2,{Assessment:''}),row(3,{Assessment:'Limited use'}),row(4,{Assessment:'Do not use'}),row(5,{EffectiveAcquisitionStatus:'Planned',QCAcquisitionCoverage:'Not assessed',Assessment:''}),row(6,{ReconciliationReason:'possible copy'}),row(7,{Assessment:'',ResultCSV:['L',8],AnalysisStatus:'Analyzed'})]));assert(c.good===1&&c.maxCompatibleGood===1&&c.unassessed===3&&c.limited===1&&c.pending===1&&c.review===1&&c.assessments['Do not use']===1);equal(c.ids,[1,2,3,4,5,6,7]);});
 check('two good plus bad is two not three',()=>{const c=cell(build([row(1),row(2),row(3,{Assessment:'Do not use'})]));assert(c.good===2&&c.maxCompatibleGood===2&&c.assessments['Do not use']===1);equal(c.goodCounts,[2]);});
-check('incompatible good groups are not a matched pair',()=>{const c=cell(build([row(1),row(2,{SnapshotConstruct:'other'})]));assert(c.good===2&&c.maxCompatibleGood===1);equal(c.goodCounts,[1,1]);const matched=cell(build([row(1),row(2),row(3,{SnapshotConstruct:'other'})]));assert(matched.good===3&&matched.maxCompatibleGood===2);equal(matched.goodCounts,[2,1]);});
+check('trusted Use total is independent of compatibility subgroups',()=>{const protocol=cell(build([row(1),row(2,{EffectiveD1_s:9})]));assert(protocol.good===2&&protocol.maxCompatibleGood===1);equal(protocol.goodCounts,[1,1]);const c=cell(build([row(1),row(2,{SnapshotConstruct:'other'})]));assert(c.good===2&&c.maxCompatibleGood===1);equal(c.goodCounts,[1,1]);const matched=cell(build([row(1),row(2),row(3,{SnapshotConstruct:'other'})]));assert(matched.good===3&&matched.maxCompatibleGood===2);equal(matched.goodCounts,[2,1]);});
 check('duplicate good identities and empty holes never count',()=>{const c=cell(build([row(1),row(2,{ObservedFingerprint:'fp1'})]));assert(c.good===0&&c.review===2);const empty=cell(build([row(1)]),'t1rho');assert(empty.good===0&&empty.maxCompatibleGood===0);equal(empty.ids,[]);});
 check('Stopped sufficient and unknown complete passing QC count good',()=>{const c=cell(build([row(1,{EffectiveAcquisitionStatus:'Stopped',QCAcquisitionCoverage:'Sufficient'}),row(2,{EffectiveAcquisitionStatus:'Unknown'})]));assert(c.good===2&&c.maxCompatibleGood===2&&c.finished===0);});
 check('formula overall Use counts while its imported decision is active',()=>{const unsettled={QCAcquisitionCoverage:'Not assessed',QCSettings:'Not assessed',QCFID:'Not assessed',QCSNR:'Not assessed',QCSample:'Not assessed',QCAnalysis:'Not assessed'};const c=cell(build([row(1,{...unsettled,Assessment:'Use',ImportedAssessment:'Use',EffectiveAcquisitionStatus:'Unknown'}),row(2,{...unsettled,Assessment:'',ImportedAssessment:''}),row(3,{...unsettled,Assessment:'Limited use',ImportedAssessment:'Limited use'}),row(4,{...unsettled,Assessment:'Do not use',ImportedAssessment:'Do not use'})]));assert(c.good===1&&c.pending===1&&c.unassessed===1&&c.assessments['Limited use']===1&&c.assessments['Do not use']===1);});
@@ -108,11 +108,13 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("analysis not confirmed",html)
         self.assertIn("[button.title,...flags,...needs].join(', ')",html)
         self.assertNotIn('condition / protocol groups',html)
-        self.assertIn('Green: at least two with comparable recorded sample and acquisition settings.',html)
+        self.assertIn('Blue: 1 Use. Green: 2 or more Use.',html)
         self.assertIn('Counts show experiments assessed Use.',html)
         self.assertIn("const qcUse = r => r.Assessment==='Use'",html)
         self.assertIn(".cell.good{background:#e5f3e9}",html)
-        self.assertIn("cell.maxCompatibleGood>=2",html)
+        self.assertIn("cell.good>=2",html)
+        self.assertIn("cell.good===1",html)
+        self.assertNotIn("cell.maxCompatibleGood>=2",html)
         self.assertNotIn("alignPanelRows",html)
         self.assertNotIn("field-panel",html)
 
@@ -174,11 +176,35 @@ setTimeout(async()=>{
   const sample=button(950,'t1',50), sampleAria=sample.getAttribute('aria-label'), sampleNeeds=sample.querySelector('.needs');
   check(sample.children.length===3&&sampleAria.includes('+1 discarded')&&sampleAria.includes('analysis not confirmed')&&Number(getComputedStyle(sampleNeeds).fontWeight)>=700,'three lines, bold action count and accessible labels');
   check(!button(600,'eta_xy',50).querySelector('.needs'),'empty cell has no action alert');
-  check(!button(950,'t1',500).classList.contains('good')&&!button(950,'t1',500).textContent.includes('groups'),'incompatible good pairs not green');
+  check(button(950,'t1',500).classList.contains('good')&&!button(950,'t1',500).classList.contains('single'),'two Use with different sample metadata green');
+  check(model.cells.find(c=>c.field===950&&c.type==='t1'&&c.salt===500).maxCompatibleGood===1,'sample fixture has incompatible metadata');
+  check(model.cells.find(c=>c.field===600&&c.type==='t1'&&c.salt===500).maxCompatibleGood===1,'D1 fixture has incompatible protocol metadata');
+  check(button(600,'t1rho',50).classList.contains('single')&&!button(600,'t1rho',50).classList.contains('good'),'exactly one trusted Use blue');
+  check(!button(850,'t1',500).classList.contains('single')&&!button(700,'t1',50).classList.contains('single'),'identity conflicts and discarded records never blue');
+  // Timers also advance in headless virtual time, where animation frames may pause.
+  const frames=()=>new Promise(resolve=>setTimeout(resolve,100));
+  const geometry=label=>{
+   const cells=[...document.querySelectorAll('.cell')],heights=cells.map(b=>b.getBoundingClientRect().height);
+   check(Math.max(...heights)-Math.min(...heights)<0.6,label+' equal button heights');
+   for(const type of ['t1','t1rho','noe','eta_xy'])for(const salt of [50,500]){
+    const tops=[600,700,850,950].map(field=>button(field,type,salt).getBoundingClientRect().top);
+    check(Math.max(...tops)-Math.min(...tops)<0.6,label+' aligned salt rows '+type+' '+salt);
+   }
+   check(cells.every(b=>b.scrollHeight<=b.clientHeight+1),label+' no clipped text');
+  };
+  await frames();geometry('initial viewport');
+  const empty=button(600,'eta_xy',50),oneLine=button(600,'t1rho',50),long=button(700,'t1rho',50);
+  check(empty.children.length===1&&oneLine.children.length===1&&sample.children.length===3,'empty, one-line and three-line fixtures');
+  const scroll=document.querySelector('.matrix-scroll'),originalWidth=scroll.style.width;
+  for(const width of [1440,1024,720,1366]){
+   scroll.style.width=width+'px';await frames();geometry('resize '+width);
+   if(width===720){const needs=long.querySelector('.needs');check(needs.getBoundingClientRect().height>parseFloat(getComputedStyle(needs).lineHeight)*1.5,'long action text wraps across multiple lines');}
+  }
+  scroll.style.width=originalWidth;await frames();geometry('restored viewport');
   for(const [field,type,salt,ids]of [[600,'t1',50,[101,102]],[700,'t1',50,[104]],[850,'t1',500,[107,108]],[950,'t1',50,[109,110,111]],[600,'eta_xy',50,[]]]){
    button(field,type,salt).click();await tick();check(JSON.stringify(selectionCalls.at(-1))===JSON.stringify(ids),'exact source selection '+field+' '+type+' '+salt);}
   check(metadataWrites.length===0,'rendering and selection do not mutate data or config');await clearSelection();
-  report.textContent='Quality-matrix checks passed: field columns, salt lines, 2 Use threshold, excluded/bad/pending/review, incompatible groups, source IDs and empty selection.';
+  report.textContent='Quality-matrix checks passed: field columns, salt lines, 2 Use threshold, excluded/bad/pending/review, sample/protocol-independent colors, equal heights and aligned salt rows at resized widths, source IDs and empty selection.';
  }catch(error){report.textContent='Quality-matrix checks FAILED: '+error.message;report.style.color='red';}
 },500);
 """
@@ -198,12 +224,17 @@ def quality_matrix_harness():
                     EffectiveDelayList_s='[0,0.1]',EffectiveSpinLock_Hz=None,EffectiveSpinLockOffset_Hz=None,Assessment=assessment,QCAcquisitionCoverage='Complete',QCSettings='Appropriate',QCFID='Clean',QCSNR='Adequate',QCSample='Acceptable',QCAnalysis='Reliable')
         fields.update(extra);data['Experiments'].append({'id':ident,'fields':fields})
     add(101,600,50,EffectiveAcquisitionStatus='Stopped',QCAcquisitionCoverage='Sufficient');add(102,600,50,EffectiveAcquisitionStatus='Unknown');add(103,600,500)
-    add(114,600,500,'Use',EffectiveAcquisitionStatus='Unknown',ImportedAssessment='Use',QCAcquisitionCoverage='Not assessed',QCSettings='Not assessed',QCFID='Not assessed',QCSNR='Not assessed',QCSample='Not assessed',QCAnalysis='Not assessed')
+    add(114,600,500,'Use',EffectiveAcquisitionStatus='Unknown',EffectiveD1_s=9,ImportedAssessment='Use',QCAcquisitionCoverage='Not assessed',QCSettings='Not assessed',QCFID='Not assessed',QCSNR='Not assessed',QCSample='Not assessed',QCAnalysis='Not assessed')
     add(104,700,50,'Do not use');add(105,700,500,'',ResultCSV=['L',1],AnalysisStatus='Analyzed')
     add(106,850,50,'',EffectiveAcquisitionStatus='Planned',QCAcquisitionCoverage='Not assessed')
     add(107,850,500);add(108,850,500,ObservedFingerprint='fixture-107')
     add(109,950,50);add(110,950,50);add(111,950,50,'Do not use')
     add(112,950,500);add(113,950,500,SnapshotConstruct='Other construct')
+    add(115,600,50,EffectiveType='T1rho',AnalysisStatus='Analyzed')
+    add(116,700,50,'Limited use',EffectiveType='T1rho')
+    add(117,700,50,'Do not use',EffectiveType='T1rho')
+    add(118,700,50,'',EffectiveType='T1rho')
+    add(119,700,50,EffectiveType='T1rho',ReconciliationReason='possible copy')
     prefs={'coverageAxes':{'version':1,'proteins':{'Fixture protein':{'fields':[600,700,850,950],'salts':[50,500],'types':['t1','t1rho','noe','eta_xy']}}}}
     html=browser_harness(data)
     encoded=json.dumps(prefs).replace('<','\\u003c')
