@@ -23,7 +23,12 @@ class Client:
 
     def apply(self, actions):
         self.calls.extend(copy.deepcopy(actions))
-        for action, table, row_id, fields in actions:
+        for item in actions:
+            action, table, row_id = item[:3]
+            if action == 'RemoveRecord':
+                self.data[table] = [row for row in self.data[table] if row['id'] != row_id]
+                continue
+            fields = item[3]
             if action == 'AddRecord':
                 self.data[table].append({'id': 100, 'fields': copy.deepcopy(fields)})
             else:
@@ -31,6 +36,36 @@ class Client:
 
 
 class TypeFilterTests(unittest.TestCase):
+    def test_neutral_legacy_filter_removed_only_from_main_grid(self):
+        client = Client({'excluded': ['Calibration', '1D', 'Other']}, pinned=True)
+        client.data['_grist_Tables_column'].append(
+            {'id': 96, 'fields': {'parentId': 1, 'colId': 'EffectiveType',
+                                  'isFormula': True, 'formula': '$ExperimentType'}})
+        client.data['_grist_Filters'].extend([
+            {'id': 2, 'fields': {'viewSectionRef': 22, 'colRef': 96, 'filter': '{}', 'pinned': True}},
+            {'id': 3, 'fields': {'viewSectionRef': 23, 'colRef': 96, 'filter': '{}', 'pinned': True}},
+            {'id': 4, 'fields': {'viewSectionRef': 22, 'colRef': 99, 'filter': '{}', 'pinned': True}},
+        ])
+        before = copy.deepcopy(client.data['_grist_Filters'])
+        self.assertEqual(configure_experiment_type_filter(client)['actions'],
+                         [['RemoveRecord', '_grist_Filters', 2]])
+        self.assertEqual(client.data['_grist_Filters'], before)
+        configure_experiment_type_filter(client, apply=True)
+        self.assertEqual(client.data['_grist_Filters'], [r for r in before if r['id'] != 2])
+        self.assertEqual(configure_experiment_type_filter(client, apply=True)['actions'], [])
+
+    def test_active_legacy_filter_requires_review_before_writes(self):
+        client = Client()
+        client.data['_grist_Tables_column'].append(
+            {'id': 96, 'fields': {'parentId': 1, 'colId': 'EffectiveType',
+                                  'isFormula': True, 'formula': '$ExperimentType'}})
+        client.data['_grist_Filters'].append(
+            {'id': 2, 'fields': {'viewSectionRef': 22, 'colRef': 96,
+                                  'filter': '{"included":["T1"]}', 'pinned': True}})
+        with self.assertRaises(ValueError):
+            configure_experiment_type_filter(client, apply=True)
+        self.assertEqual(client.calls, [])
+
     def test_existing_exclusions_and_metadata_are_preserved(self):
         client = Client({'excluded': ['Other', 'Calibration'], 'flag': 'keep'})
         result = configure_experiment_type_filter(client)

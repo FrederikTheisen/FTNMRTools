@@ -142,11 +142,29 @@ def configure_experiment_type_filter(client, apply=False):
     if any(grid['fields'].get(k) for k in
            ('linkSrcSectionRef', 'linkSrcColRef', 'linkTargetColRef')):
         raise ValueError('Experiment grid is linked; review before configuring filter')
-    col = one([r for r in client.records('_grist_Tables_column')
+    columns = client.records('_grist_Tables_column')
+    col = one([r for r in columns
                if r['fields'].get('parentId') == tid
                and r['fields'].get('colId') == 'ExperimentType'],
               'Experiment type column missing or ambiguous')
-    filters = [r for r in client.records('_grist_Filters')
+    all_filters = client.records('_grist_Filters')
+    aliases = [r for r in columns
+               if r['fields'].get('parentId') == tid
+               and r['fields'].get('colId') == 'EffectiveType']
+    alias_filters = [r for r in all_filters
+                     if r['fields'].get('viewSectionRef') == grid['id']
+                     and r['fields'].get('colRef') in {c['id'] for c in aliases}]
+    if alias_filters:
+        if len(aliases) != 1 or not aliases[0]['fields'].get('isFormula') or aliases[0]['fields'].get('formula') != '$ExperimentType':
+            raise ValueError('Legacy experiment type column requires review')
+        for row in alias_filters:
+            try:
+                condition = json.loads(row['fields'].get('filter') or '{}')
+            except (TypeError, ValueError):
+                raise ValueError('Legacy experiment type filter requires review') from None
+            if condition not in ({}, {'excluded': []}):
+                raise ValueError('Legacy experiment type filter has restrictions; review before removing')
+    filters = [r for r in all_filters
                if r['fields'].get('viewSectionRef') == grid['id']
                and r['fields'].get('colRef') == col['id']]
     if len(filters) > 1:
@@ -168,7 +186,7 @@ def configure_experiment_type_filter(client, apply=False):
     else:
         excluded = list(target.get('excluded', []))
         target['excluded'] = excluded + [x for x in hidden if x not in excluded]
-    actions = []
+    actions = [['RemoveRecord', '_grist_Filters', r['id']] for r in alias_filters]
     if filters:
         updates = {}
         if target != current:
