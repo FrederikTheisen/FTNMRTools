@@ -65,7 +65,8 @@ setTimeout(async()=>{
   const positives=['Sufficient','Appropriate','Clean','Adequate','Acceptable','Reliable'];
   AssessmentCard.keys.forEach((k,i)=>{$(k).value=positives[i];$(k).dispatchEvent(new Event('change'));});await save();
   assert($('decision').textContent==='Use','stored computed decision after explicit six positive ratings');
-  $('QCAnalysis').value='Reliable — early points excluded';$('QCAnalysis').dispatchEvent(new Event('change'));await save();
+  assert([...$('QCAnalysis').options].map(o=>o.textContent).join('|')==='Not assessed|Good fit — all points|Good fit — early points excluded|Usable fit — other concerns|Unusable fit — two-phase|Unusable fit — other problem','relaxation labels and order');
+  $('QCAnalysis').value='Reliable — early points excluded';assert($('QCAnalysis').selectedOptions[0].textContent==='Good fit — early points excluded','display label selects stored value');$('QCAnalysis').dispatchEvent(new Event('change'));await save();
   assert(current.QCAnalysis==='Reliable — early points excluded'&&$('decision').textContent==='Use','rescued reliable fit saves its distinct rating and remains Use');
   $('QCAnalysis').value='Two-phase — unresolved';$('QCAnalysis').dispatchEvent(new Event('change'));await save();
   assert(current.QCAnalysis==='Two-phase — unresolved'&&$('decision').textContent==='Do not use','unresolved two-phase fit is a veto');
@@ -87,7 +88,8 @@ setTimeout(async()=>{
   const older=receive({id:1}),newer=receive({id:2});waiting[1](table(RECORDS));await newer;waiting[0](table(RECORDS));await older;
   assert(current.id===2,'late selection response cannot restore a stale source row');grist.docApi.fetchTable=fetchLatest;
   RECORDS[1].ExperimentType='HSQC';RECORDS[1].QCAnalysis='Reliable — early points excluded';await receive(RECORDS[1]);
-  assert($('QCAnalysis').value===RECORDS[1].QCAnalysis&&$('QCAnalysis').selectedOptions[0].textContent.includes('Saved rating'),'restricted saved value stays visible');
+  assert($('QCAnalysis').value===RECORDS[1].QCAnalysis&&$('QCAnalysis').selectedOptions[0].textContent==='Saved rating (unavailable for this experiment type): Good fit — early points excluded','restricted saved value stays visible');
+  assert([...$('QCAnalysis').options].slice(0,4).map(o=>o.textContent).join('|')==='Not assessed|Reliable|Usable with reservations|Unusable','non-relaxation labels');
   assert([...$('QCAnalysis').options].length===5&&!([...$('QCAnalysis').options].some(o=>o.value==='Two-phase — unresolved')),'restricted choices do not leak');
   $('note').value='retained rating';$('note').dispatchEvent(new Event('input'));await save();assert(RECORDS[1].QCAnalysis==='Reliable — early points excluded','note save preserves human rating');
   await receive(RECORDS[0]);assert([...$('QCAnalysis').options].length===6,'relaxation selection restores choices');message('');

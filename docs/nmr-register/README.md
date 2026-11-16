@@ -428,12 +428,13 @@ and unresolved acquisition or sample identities do not confirm registration.
 | FIDs and spectrum | Clean; Usable with exclusions; Unusable |
 | SNR | Adequate; Marginal; Inadequate |
 | Sample during acquisition | Acceptable; Concern; Unacceptable |
-| Analysis quality | Reliable; Reliable — early points excluded; Two-phase — unresolved; Limited; Unreliable |
+| Analysis / fit (T1/T1rho dialog) | Good fit — all points; Good fit — early points excluded; Usable fit — other concerns; Unusable fit — two-phase; Unusable fit — other problem |
 
-For T1 and T1rho, **Reliable — early points excluded** records a reliable fit
+For T1 and T1rho, **Good fit — early points excluded** records a reliable fit
 after dropping early points. It is fully acceptable, while remaining separately
-filterable in `QCAnalysis`. **Two-phase — unresolved** means the remaining fit
-is unsuitable and yields `Do not use`. Use **Limited** for other reservations.
+filterable as `Reliable — early points excluded` in `QCAnalysis`.
+**Unusable fit — two-phase** means the remaining fit is unsuitable and yields
+`Do not use`. Use **Usable fit — other concerns** for other reservations.
 These choices record your assessment; they do not remove points or rerun a fit.
 Both new choices appear only for T1/T1rho in the assessment dialog. Existing
 ratings and results are preserved; older `Reliable` ratings are not reclassified.

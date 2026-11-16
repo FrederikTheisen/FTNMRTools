@@ -7,7 +7,7 @@ CRITERIA = [
     ('QCFID', 'FIDs and spectrum', ['Not assessed', 'Clean', 'Usable with exclusions', 'Unusable']),
     ('QCSNR', 'Signal to noise', ['Not assessed', 'Adequate', 'Marginal', 'Inadequate']),
     ('QCSample', 'Sample condition', ['Not assessed', 'Acceptable', 'Concern', 'Unacceptable']),
-    ('QCAnalysis', 'Analysis / fit', ['Not assessed', 'Reliable', 'Reliable — early points excluded', 'Two-phase — unresolved', 'Limited', 'Unreliable']),
+    ('QCAnalysis', 'Analysis / fit', ['Not assessed', 'Reliable', 'Reliable — early points excluded', 'Limited', 'Two-phase — unresolved', 'Unreliable']),
 ]
 
 CORE_JS = r'''
@@ -22,6 +22,7 @@ const AssessmentCard=(()=>{
  const restrictedAnalysis=['Reliable — early points excluded','Two-phase — unresolved'];
  const relaxationType=value=>/^(?:15n)?(?:t1|r1)(?:rho|ρ)?$/i.test(String(value||'').replace(/[\s_-]+/g,''));
  const choicesFor=(key,record)=>{const choices=criteria.find(c=>c[0]===key)?.[2]||[];return key==='QCAnalysis'&&!relaxationType(record?.ExperimentType)?choices.filter(v=>!restrictedAnalysis.includes(v)):choices;};
+ const choiceLabel=(key,value,record)=>{if(key!=='QCAnalysis')return value;const fit={'Reliable':'Good fit — all points','Reliable — early points excluded':'Good fit — early points excluded','Limited':'Usable fit — other concerns','Two-phase — unresolved':'Unusable fit — two-phase','Unreliable':'Unusable fit — other problem'},other={'Reliable':'Reliable','Limited':'Usable with reservations','Unreliable':'Unusable'};return (relaxationType(record?.ExperimentType)||restrictedAnalysis.includes(value)?fit:other)[value]||value;};
  const tone=(key,value)=>{if(value==='Not assessed'||!criteria.find(c=>c[0]===key)?.[2].includes(value))return 'unchecked';if(key==='QCAnalysis')return ({'Reliable':'pass','Reliable — early points excluded':'pass','Two-phase — unresolved':'fail','Limited':'limited','Unreliable':'fail'})[value];const choices=criteria.find(c=>c[0]===key)[2],index=choices.indexOf(value);return index===choices.length-1?'fail':key==='QCAcquisitionCoverage'||index===1?'pass':'limited';};
  function registrationTimestamp(base,draft,fresh,experimentRows,sampleRows,now){
   if(fresh.RegisteredAt!=null&&fresh.RegisteredAt!==0)return undefined;
@@ -59,7 +60,7 @@ const AssessmentCard=(()=>{
   const options=JSON.parse(section.options||'{}');
   if(typeof options.html!=='string'||!options.html.includes('data-nmr-assessment="1"'))throw Error('This is not the expected assessment widget.');
  }
- return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,registrationTimestamp,action,context,choicesFor,relaxationType};
+ return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,registrationTimestamp,action,context,choicesFor,choiceLabel,relaxationType};
 })();
 '''.replace('__CRITERIA__', json.dumps(CRITERIA, ensure_ascii=False))
 
@@ -81,7 +82,7 @@ function render(){
  const evidence=['ReconciliationReason','MetadataDifference','ObservedAcquisitionEvidence','TitleSource'].filter(k=>current[k]).map(k=>String(current[k]));$('warnings').hidden=!evidence.length;$('evidence').textContent=evidence.join(' · ');
  $('decision').textContent=current.AssessmentDisplay||current.Assessment||'Assessment incomplete';$('decision').className='decision '+AssessmentCard.decisionTone(current);
  $('explanation').textContent=current.AssessmentExplanation||'Rate each criterion explicitly; the overall decision is calculated from the saved ratings.';
- for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key],choices=AssessmentCard.choicesFor(key,current);select.replaceChildren();for(const choice of choices){const option=el('option',choice);option.value=choice;select.append(option);}if(!choices.includes(value)){const option=el('option','Saved rating (unavailable for this experiment type): '+value);option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
+ for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key],choices=AssessmentCard.choicesFor(key,current);select.replaceChildren();for(const choice of choices){const option=el('option',AssessmentCard.choiceLabel(key,choice,current));option.value=choice;select.append(option);}if(!choices.includes(value)){const option=el('option','Saved rating (unavailable for this experiment type): '+AssessmentCard.choiceLabel(key,value,current));option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
  $('analysisHelp').hidden=!AssessmentCard.relaxationType(current.ExperimentType);
  $('note').value=draft.AssessmentReason;$('note').disabled=busy;
  $('save').disabled=busy||!SECTION_ID||!dirty();$('discard').disabled=busy||(!dirty()&&pending===undefined);
@@ -136,4 +137,4 @@ button{min-height:32px;border:0;border-radius:4px;background:var(--grist-theme-c
 .actions{display:flex;gap:8px;align-items:center;margin-top:12px}#switch{padding:8px;background:#fff4dc;border-left:3px solid #d8bb77}#draft{min-height:16px}
 #titleText{white-space:pre-wrap;overflow-wrap:anywhere;max-height:10em;overflow:auto;border:1px solid var(--grist-theme-input-border,#d9d9d9);border-radius:4px;padding:7px;margin:0;font:11px/1.4 ui-monospace,monospace}
 @media(max-width:480px){.ratings{grid-template-columns:1fr}}
-</style></head><body><p id="empty" class="muted">Select an experiment in the acquisition list.</p><main id="card" hidden><h2 id="experiment"></h2><p id="conditions" class="muted"></p><p id="source" class="muted"></p><section id="titleBlock" hidden><h3>Acquisition title and comments</h3><pre id="titleText"></pre></section><details id="warnings" hidden><summary>Acquisition notes</summary><p id="evidence" class="muted"></p></details><span id="decision" class="decision" aria-label="Calculated overall assessment"></span><p id="explanation" class="muted"></p><div id="ratings" class="ratings"></div><p id="analysisHelp" class="muted" hidden>Reliable means the fit is reliable using all points. Choose Reliable — early points excluded only when the remaining fit is reliable. Two-phase — unresolved is an unreliable fit.</p><label>Assessment note (optional)<textarea id="note" rows="2"></textarea></label><p id="draft" class="muted"></p><p id="switch" hidden></p><div class="actions"><button id="save" type="button">Save assessment</button><button id="discard" type="button">Discard changes</button></div></main><p id="message" class="muted" role="status"></p><script>''' + script + '</script></body></html>'
+</style></head><body><p id="empty" class="muted">Select an experiment in the acquisition list.</p><main id="card" hidden><h2 id="experiment"></h2><p id="conditions" class="muted"></p><p id="source" class="muted"></p><section id="titleBlock" hidden><h3>Acquisition title and comments</h3><pre id="titleText"></pre></section><details id="warnings" hidden><summary>Acquisition notes</summary><p id="evidence" class="muted"></p></details><span id="decision" class="decision" aria-label="Calculated overall assessment"></span><p id="explanation" class="muted"></p><div id="ratings" class="ratings"></div><p id="analysisHelp" class="muted" hidden>Both Good fit options are fully acceptable. Usable fit is a caution; Unusable fit excludes the experiment.</p><label>Assessment note (optional)<textarea id="note" rows="2"></textarea></label><p id="draft" class="muted"></p><p id="switch" hidden></p><div class="actions"><button id="save" type="button">Save assessment</button><button id="discard" type="button">Discard changes</button></div></main><p id="message" class="muted" role="status"></p><script>''' + script + '</script></body></html>'
