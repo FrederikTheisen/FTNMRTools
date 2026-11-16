@@ -117,3 +117,79 @@ def display_partial_assessment(client, apply=False):
     if apply and actions:
         client.apply(actions)
     return actions
+
+
+def install_experiment_visibility(client, doc_id, *, apply=False):
+    """Install the exact selector after validating the original grid and filter."""
+    from .experiment_visibility import experiment_visibility_html
+    views=client.records('_grist_Views');sections=client.records('_grist_Views_section')
+    tables=client.records('_grist_Tables');columns=client.records('_grist_Tables_column');filters=client.records('_grist_Filters')
+    def one(items, message):
+        if len(items)!=1:raise ValueError(message)
+        return items[0]
+    view=one([r for r in views if r['fields'].get('name')=='Experiments'],'Experiments page missing or ambiguous')
+    table=one([r for r in tables if r['fields'].get('tableId')=='Experiments'],'Experiments table missing or ambiguous')
+    page=view['id'];tid=table['id']
+    grid=one([r for r in sections if r['fields'].get('parentId')==page and r['fields'].get('title')=='Experiments' and r['fields'].get('parentKey')=='record' and r['fields'].get('tableRef')==tid],'Experiment grid missing or ambiguous')
+    col=one([r for r in columns if r['fields'].get('parentId')==tid and r['fields'].get('colId')=='ExperimentType'],'Experiment type column missing or ambiguous')
+    flt=one([r for r in filters if r['fields'].get('viewSectionRef')==grid['id'] and r['fields'].get('colRef')==col['id']],'Experiment type filter missing or ambiguous')
+    try:layout=json.loads(view['fields'].get('layoutSpec') or '{}');old=json.loads(flt['fields'].get('filter') or '{}')
+    except ValueError:raise ValueError('Invalid experiment layout or filter') from None
+    def contains(node, leaf):
+        return isinstance(node,dict) and (node.get('leaf')==leaf or any(contains(child,leaf) for child in node.get('children',[]) if isinstance(child,dict)))
+    if not isinstance(layout,dict) or not isinstance(layout.get('children'),list) or not contains(layout,grid['id']):raise ValueError('Experiment layout requires review')
+    if not isinstance(old,dict) or 'included' in old or not isinstance(old.get('excluded',[]),list) or any(not isinstance(x,str) for x in old.get('excluded',[])):raise ValueError('Experiment type filter requires review')
+    def prune(node, wid):
+        if not isinstance(node,dict):raise ValueError('Experiment layout requires review')
+        if node.get('leaf')==wid:return None
+        result=dict(node)
+        for key in ('children','collapsed'):
+            if key in node:
+                if not isinstance(node[key],list):raise ValueError('Experiment layout requires review')
+                result[key]=[v for child in node[key] if (v:=prune(child,wid)) is not None]
+        if 'children' in result and not result['children'] and 'leaf' not in result:return None
+        return result
+    def placed(current,wid):
+        return bool(current['children'] and current['children'][0].get('leaf')==wid and not any(contains(x,wid) for x in current.get('collapsed',[])))
+    def attach(current,wid):
+        cleaned=prune(current,wid)
+        if not cleaned or not contains(cleaned,grid['id']):raise ValueError('Experiment layout requires review')
+        return {**cleaned,'children':[{'leaf':wid,'size':0.9},*cleaned['children']]}
+    prior=[r for r in sections if r['fields'].get('parentId')==page and r['fields'].get('title')=='Experiment visibility']
+    if len(prior)>1:raise ValueError('Visibility controller is ambiguous')
+    newfilter={**old,'excluded':[x for x in old.get('excluded',[]) if x not in ('Calibration','1D')]}
+    if prior:
+        controller=prior[0];wid=controller['id'];f=controller['fields']
+        if (f.get('tableRef')!=tid or f.get('parentKey') not in ('custom','creator')
+            or f.get('linkSrcSectionRef') or f.get('linkSrcColRef') or f.get('linkTargetColRef')
+            or grid['fields'].get('linkSrcColRef') or grid['fields'].get('linkTargetColRef')
+            or any(r['id']!=grid['id'] and r['fields'].get('linkSrcSectionRef')==wid for r in sections)):
+            raise ValueError('Existing visibility controller requires review')
+        try:options=json.loads(f.get('options') or '{}')
+        except ValueError:raise ValueError('Invalid controller options') from None
+        html=options.get('html'); shipped=experiment_visibility_html(wid,grid['id']);source=grid['fields'].get('linkSrcSectionRef')
+        complete=html==shipped and source==wid
+        unfinished=html in (None,'') and not source
+        if not (complete or unfinished):raise ValueError('Existing controller differs from shipped control')
+        actions=[]
+        if unfinished:
+            options['html']=shipped
+            actions.extend([['UpdateRecord','_grist_Views_section',wid,{'options':json.dumps(options,separators=(',',':'))}],['UpdateRecord','_grist_Views_section',grid['id'],{'linkSrcSectionRef':wid}]])
+        if newfilter!=old:actions.append(['UpdateRecord','_grist_Filters',flt['id'],{'filter':json.dumps(newfilter,separators=(',',':'))}])
+        if not placed(layout,wid):actions.append(['UpdateRecord','_grist_Views',page,{'layoutSpec':json.dumps(attach(layout,wid),separators=(',',':'))}])
+        if apply and actions:client.apply(actions)
+        return {'page':page,'grid':grid['id'],'widget':wid,'actions':actions}
+    if grid['fields'].get('linkSrcSectionRef') or grid['fields'].get('linkSrcColRef') or grid['fields'].get('linkTargetColRef'):raise ValueError('Existing experiment selector requires review')
+    if not apply:return {'page':page,'grid':grid['id'],'filter':flt['id'],'filter_value':newfilter,'original_layout':layout}
+    w=_mcp(client,'grist_add_page_widget',{'doc_id':doc_id,'page_id':page,'widget_options':{'table_id':'Experiments','type':'creator','title':'Experiment visibility'}})
+    wid=w.get('id',w.get('widget_id'))
+    if not isinstance(wid,int) or isinstance(wid,bool) or wid<=0:raise ValueError('Could not create visibility control')
+    matches=[r for r in client.records('_grist_Views_section') if r['id']==wid]
+    if len(matches)!=1 or matches[0]['fields'].get('parentId')!=page or matches[0]['fields'].get('tableRef')!=tid or matches[0]['fields'].get('parentKey') not in ('custom','creator') or matches[0]['fields'].get('linkSrcSectionRef'):raise ValueError('Created visibility control requires review')
+    options=json.loads(matches[0]['fields'].get('options') or '{}')
+    if options.get('html') not in (None,''):raise ValueError('Created visibility control is not empty')
+    options['html']=experiment_visibility_html(wid,grid['id'])
+    newlayout=attach(layout,wid)
+    actions=[['UpdateRecord','_grist_Views_section',wid,{'options':json.dumps(options,separators=(',',':'))}],['UpdateRecord','_grist_Views_section',grid['id'],{'linkSrcSectionRef':wid}],['UpdateRecord','_grist_Filters',flt['id'],{'filter':json.dumps(newfilter,separators=(',',':'))}],['UpdateRecord','_grist_Views',page,{'layoutSpec':json.dumps(newlayout,separators=(',',':'))}]]
+    client.apply(actions)
+    return {'page':page,'grid':grid['id'],'widget':wid,'actions':actions}

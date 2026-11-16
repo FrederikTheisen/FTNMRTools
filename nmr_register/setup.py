@@ -1317,7 +1317,9 @@ def apply_experiments_ui(client,doc_id):
     editable_experiment_status(client,apply=True)
     apply_experiment_styles(client,doc_id)
     display_partial_assessment(client,apply=True)
-    return {'page':page,'experiments':grid,'detail':detail,'collapsed':[x['leaf'] for x in collapsed]}
+    from .experiments_ui import install_experiment_visibility
+    visibility = install_experiment_visibility(client,doc_id,apply=True)
+    return {'page':page,'experiments':grid,'detail':detail,'collapsed':[x['leaf'] for x in collapsed], 'visibility':visibility}
 
 
 def apply_completion_ui(client):

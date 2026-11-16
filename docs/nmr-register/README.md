@@ -158,6 +158,20 @@ The collector has 757 exact targets; 753 are currently observed and four are
 absent. The current sync has no identity conflicts, metadata warnings, pending
 work, or pending results. Sixteen internal result attachments are present.
 
+The Experiments page has a **Show calibration / 1D** button. Routine entries
+start hidden in each browser; the button shows them without changing other
+filters. Entries with acquisition reconciliation warnings or scan errors remain
+visible in either setting. The control shows a loading or error message if its
+selection is unavailable.
+
+The collector distinguishes a clean setup gaining raw data from an acquired
+dataset being replaced. Metadata finalization during an acquisition requires
+the same start and raw-file generation, with matching audit progress and terminal
+events when the pulse program changes. Proven transitions preserve the existing
+record and human review; genuine replacements remain flagged for reconciliation.
+A raw calibration record whose acquisition and setup pulse programs disagree is
+flagged for review rather than silently hidden or reclassified.
+
 Register experiments from the Experiments page. New registrations start as
 `Planned`; enter any known acquisition date, instrument, type, pulse program, or
 settings directly in their named fields. When the collector finds one exact

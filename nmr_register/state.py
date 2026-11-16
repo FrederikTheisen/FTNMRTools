@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import time
 from .split import is_derived_split
+from .acquisition_transition import permitted_transition
 
 MATCHING_METADATA_PREFIX = 'matching acquisition metadata at another path; possible copy or rename: '
 MISSING_FINGERPRINT_WARNING = 'Acquisition metadata fingerprint unavailable; independent identity requires review'
@@ -113,24 +114,54 @@ class State:
             for incoming in records:
                 if is_derived_split(incoming):
                     continue
-                context = {k:v for k,v in incoming.items() if k.startswith('_')}
+                context = {k:v for k,v in incoming.items() if k.startswith('_') and k not in ('_TransitionFingerprints','_TransitionKind','_TransitionRemote','_TransitionAttempt','_RawGenerationFiles','_ResolvedCopyWarning')}
                 fields = {k:v for k,v in incoming.items() if not k.startswith('_')}
                 key = fields['AcquisitionKey']
                 old = self.db.execute('SELECT * FROM observations WHERE key=?',(key,)).fetchone()
-                signature = hashlib.sha256(serialized({'fields':fields,'context':context}).encode()).hexdigest()
+                # New proof enriches local context without changing legacy transfer
+                # signatures or requeuing every unchanged acquisition on upgrade.
+                signature_context = {k:v for k,v in context.items() if k != '_AcquisitionIdentity'}
+                signature = hashlib.sha256(serialized({'fields':fields,'context':signature_context}).encode()).hexdigest()
                 stable = bool(old and old['signature'] == signature)
                 reason = ''
-                if old and old['fingerprint'] and fields['ObservedFingerprint'] and old['fingerprint'] != fields['ObservedFingerprint']:
-                    reason = 'acquisition identity changed at existing path; reconcile before reusing assessment'
-                elif old:
-                    reason = json.loads(old['payload']).get('ReconciliationReason','')
-                if reason==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(fields['ObservedFingerprint']):
-                    reason = ''  # Only this generated absence warning is resolved by new evidence.
+                previous = json.loads(old['payload']) if old else None
                 old_context = json.loads(old['context']) if old else {}
-                old_files = {v[0]:tuple(v[3:]) for v in old_context.get('_RawFileStats',[])}
+                if old_context.get('_ResolvedCopyWarning'):context['_ResolvedCopyWarning'] = old_context['_ResolvedCopyWarning']
+                if old:
+                    reason = previous.get('ReconciliationReason','')
+                changed_fingerprint = bool(old and old['fingerprint'] and fields['ObservedFingerprint'] and old['fingerprint'] != fields['ObservedFingerprint'])
+                kind = None
+                if old and fields['ObservedFingerprint'] and old['fingerprint'] != fields['ObservedFingerprint'] and (not reason or observation_warning(reason)):
+                    kind = permitted_transition(previous, old_context, fields, context)
+                if changed_fingerprint and not kind and (not reason or observation_warning(reason)):
+                    reason = 'acquisition identity changed at existing path; reconcile before reusing assessment'
+                if reason==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(fields['ObservedFingerprint']):
+                    reason = ''
+                old_files = {v[0]:tuple(v[3:]) for v in old_context.get('_RawGenerationFiles',old_context.get('_RawFileStats',[])) if kind != 'setup-to-raw' or v[1] > 0}
                 current_files = {v[0]:tuple(v[3:]) for v in context.get('_RawFileStats',[])}
                 if any(name in old_files and old_files[name] != identity for name,identity in current_files.items()):
                     reason = 'raw acquisition file replaced at existing path; reconcile before reusing assessment'
+                    kind = None
+                witness = old_context.get('_RawGenerationFiles') or [v for v in old_context.get('_RawFileStats',[]) if v[1] > 0]
+                if witness or fields.get('RawPresent'):
+                    context['_RawGenerationFiles'] = witness or [v for v in context.get('_RawFileStats',[]) if v[1] > 0]
+                if kind == 'setup-to-raw' and observation_warning(reason):
+                    if reason.startswith(MATCHING_METADATA_PREFIX):context['_ResolvedCopyWarning'] = reason
+                    reason = ''
+                if not reason or observation_warning(reason):
+                    lineage = old_context.get('_TransitionFingerprints', [])
+                    if kind:
+                        pins = [old_context.get(k) for k in ('_TransitionRemote','_TransitionAttempt') if old_context.get(k)]
+                        lineage = list(dict.fromkeys([*pins, *(lineage[-7:] if pins else lineage[:1]+lineage[-6:]), old['fingerprint'], fields['ObservedFingerprint']]))
+                        context['_TransitionKind'] = 'setup-to-raw' if kind == 'setup-to-raw' or old_context.get('_TransitionKind') == 'setup-to-raw' else kind
+                    elif lineage and fields['ObservedFingerprint'] == old['fingerprint']:
+                        context['_TransitionKind'] = old_context.get('_TransitionKind')
+                    if lineage:
+                        context['_TransitionFingerprints'] = lineage
+                        for name in ('_TransitionRemote','_TransitionAttempt'):
+                            if old_context.get(name):context[name] = old_context[name]
+                if kind == 'setup-to-raw' and reason.startswith(MATCHING_METADATA_PREFIX) and observation_warning(reason):
+                    reason = ''  # The old template match does not describe the new raw birth.
                 matches = self.db.execute('SELECT key FROM observations WHERE fingerprint=? AND key<>?',
                                           (fields['ObservedFingerprint'],key)).fetchall() if fields['ObservedFingerprint'] else []
                 if matches and (not reason or observation_warning(reason)):
@@ -153,6 +184,25 @@ class State:
                     payload = serialized(fields)
                 self.db.execute('INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?,?,?)',
                                 (key,fields['ObservedFingerprint'],signature,payload,old['first_seen'] if old else now,now,serialized(context)))
+            # Generated copy warnings describe the current fingerprint groups,
+            # not the earlier setup/template fingerprints at these paths.
+            for row in self.db.execute('SELECT key,fingerprint,payload FROM observations').fetchall():
+                fields = json.loads(row['payload'])
+                reason = fields.get('ReconciliationReason','')
+                if not (reason.startswith(MATCHING_METADATA_PREFIX) and observation_warning(reason)):
+                    continue
+                peers = self.db.execute('SELECT key FROM observations WHERE fingerprint=? AND key<>?',(row['fingerprint'],row['key'])).fetchall() if row['fingerprint'] else []
+                if not peers:
+                    saved = self.db.execute('SELECT context FROM observations WHERE key=?',(row['key'],)).fetchone()
+                    context = json.loads(saved['context'])
+                    context['_ResolvedCopyWarning'] = reason
+                    self.db.execute('UPDATE observations SET context=? WHERE key=?',(serialized(context),row['key']))
+                    fields['ReconciliationReason'] = '' if row['fingerprint'] else MISSING_FINGERPRINT_WARNING
+                    fields['LastChangedAt'] = now
+                    payload = serialized(fields)
+                    self.db.execute('UPDATE observations SET payload=? WHERE key=?',(payload,row['key']))
+                    self.db.execute('INSERT OR REPLACE INTO outbox VALUES (?,?,?)',(row['key'],payload,now))
+                    changed += 1
             # Flag BOTH paths when a copy appears; never propagate assessments.
             for fingerprint, in self.db.execute("SELECT fingerprint FROM observations WHERE fingerprint != '' GROUP BY fingerprint HAVING count(*)>1").fetchall():
                 rows = self.db.execute('SELECT key,payload FROM observations WHERE fingerprint=?',(fingerprint,)).fetchall()
@@ -170,6 +220,46 @@ class State:
                         self.db.execute('INSERT OR REPLACE INTO outbox VALUES (?,?,?)',(row['key'],payload,now))
                         changed += 1
         return changed
+
+    def transition_lineage(self, key, fingerprint):
+        """Read verified local ancestry only; transport payloads cannot authorize it."""
+        row = self.db.execute('SELECT payload,context FROM observations WHERE key=?',(key,)).fetchone()
+        if not row:
+            return (), None
+        payload, context = json.loads(row['payload']), json.loads(row['context'])
+        reason = payload.get('ReconciliationReason','')
+        lineage = context.get('_TransitionFingerprints', [])
+        if payload.get('ObservedFingerprint') != fingerprint or not lineage or lineage[-1] != fingerprint or (reason and not observation_warning(reason)):
+            return (), None
+        return tuple(value for value in lineage if value), context.get('_TransitionKind')
+
+    def resolved_copy_warning(self, key, fingerprint, remote_reason):
+        """Only retire remote targets positively resolved from this local history."""
+        if not observation_warning(remote_reason) or not remote_reason.startswith(MATCHING_METADATA_PREFIX):
+            return False
+        row = self.db.execute('SELECT payload,context FROM observations WHERE key=?',(key,)).fetchone()
+        if not row:
+            return False
+        payload, context = json.loads(row['payload']), json.loads(row['context'])
+        resolved = context.get('_ResolvedCopyWarning', '')
+        if (payload.get('ObservedFingerprint') != fingerprint or not fingerprint
+                or payload.get('ReconciliationReason') or not resolved.startswith(MATCHING_METADATA_PREFIX)):
+            return False
+        if self.db.execute('SELECT 1 FROM observations WHERE fingerprint=? AND key<>?',(fingerprint,key)).fetchone():
+            return False
+        return set(remote_reason[len(MATCHING_METADATA_PREFIX):].split(', ')) <= set(resolved[len(MATCHING_METADATA_PREFIX):].split(', '))
+
+    def mark_transition_attempt(self, key, fingerprint, remote_fingerprint):
+        """Pin both possible remote identities before an uncertain network write."""
+        lineage, _ = self.transition_lineage(key, fingerprint)
+        if not lineage or remote_fingerprint not in lineage:
+            return
+        with self.db:
+            row = self.db.execute('SELECT context FROM observations WHERE key=?',(key,)).fetchone()
+            context = json.loads(row['context'])
+            context['_TransitionRemote'] = remote_fingerprint
+            context['_TransitionAttempt'] = fingerprint
+            self.db.execute('UPDATE observations SET context=? WHERE key=?',(serialized(context),key))
 
     def cached_observations(self):
         """Last actual observations, without altering identity or transfer state."""
@@ -191,7 +281,19 @@ class State:
 
     def acknowledge(self,keys):
         with self.db:
+            keys = list(keys)
             self.db.executemany('DELETE FROM outbox WHERE key=?',[(key,) for key in keys])
+            # Successful transport establishes the remote fingerprint baseline.
+            for key in keys:
+                row = self.db.execute('SELECT context FROM observations WHERE key=?',(key,)).fetchone()
+                if row:
+                    context = json.loads(row['context'])
+                    if '_TransitionFingerprints' in context:
+                        context.pop('_TransitionFingerprints', None)
+                        context.pop('_TransitionKind', None)
+                        context.pop('_TransitionRemote', None)
+                        context.pop('_TransitionAttempt', None)
+                        self.db.execute('UPDATE observations SET context=? WHERE key=?',(serialized(context),key))
 
     def bind_document(self,api_base):
         previous = self.get_meta('document_api_base')

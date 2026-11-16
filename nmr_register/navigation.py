@@ -24,7 +24,22 @@ def apply_experiment_navigation(client, *, dry_run=True):
         return rows[0]
     page=one_view('Experiments');electro=one_view('Electrostatics')
     grid=one_grid(page,'Experiments'); acquisitions=one_grid(electro,'Individual acquisitions')
-    if grid['fields'].get('linkSrcSectionRef'):raise ValueError('Experiments grid is linked; row navigation requires review')
+    selector=grid['fields'].get('linkSrcSectionRef')
+    if selector:
+        from .experiment_visibility import experiment_visibility_html
+        candidates=[r for r in sections if r['id']==selector]
+        if (len(candidates)!=1 or candidates[0]['fields'].get('parentId')!=page
+            or candidates[0]['fields'].get('tableRef')!=table
+            or candidates[0]['fields'].get('parentKey') not in ('custom','creator')
+            or candidates[0]['fields'].get('title')!='Experiment visibility'
+            or candidates[0]['fields'].get('linkSrcSectionRef')
+            or candidates[0]['fields'].get('linkSrcColRef') or candidates[0]['fields'].get('linkTargetColRef')
+            or grid['fields'].get('linkSrcColRef') or grid['fields'].get('linkTargetColRef')):
+            raise ValueError('Experiments grid is linked; row navigation requires review')
+        try:options=json.loads(candidates[0]['fields'].get('options') or '{}')
+        except ValueError:raise ValueError('Invalid experiment visibility controller') from None
+        if options.get('html')!=experiment_visibility_html(selector,grid['id']):
+            raise ValueError('Experiments grid selector differs from shipped controller')
     formula='SELF_HYPERLINK(label="Open", page='+str(page)+') + "#a1.s'+str(grid['id'])+'.r" + str($id)'
     found=[r for r in metadata if r['fields'].get('parentId')==table and r['fields'].get('colId')=='OpenExperiment']
     if len(found)>1:raise ValueError('Duplicate OpenExperiment column')

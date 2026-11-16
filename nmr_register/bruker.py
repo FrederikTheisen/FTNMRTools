@@ -538,15 +538,41 @@ def observe(path):
     acquired = numeric(params.get('DATE_START')) or numeric(params.get('DATE'))
     fingerprint = hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest() if acquired and acquired > 0 and pulse else ''
     observed_type = pulse_type(pulse)
+    if raw_bytes > 0 and pulse_type(params.get('PULPROG', '').strip('<> ')) == 'calibration':
+        acquisition_pulse = parameters(text_file(path/'acqu')).get('PULPROG', '').strip('<> ')
+        if acquisition_pulse and acquisition_pulse != pulse and pulse_type(acquisition_pulse) not in ('calibration', '1d', 'unknown'):
+            errors.append(f'Pulse-program metadata conflict: acqus {pulse}; acqu {acquisition_pulse}; verify acquisition type')
     if observed_type == 'hsqc':
         # The evolved nucleus distinguishes carbon HSQC from nitrogen HSQC;
         # a carbon decoupling channel or sample labelling alone does not.
         indirect = parameters(text_file(path/'acqu2s')).get('NUC1','').strip('<> ').upper()
         if indirect == '13C':
             observed_type = '13c_hsqc'
+    acquisition_records = [r for r in _AUDIT_RECORD.finditer(audit) if re.fullmatch(r'go[0-9]+', r[5].strip(), re.I)]
+    latest = acquisition_records[-1][7].strip() if acquisition_records else ''
+    uuids = re.findall(r"on data set with UUID '([0-9a-f-]{36})'", latest, re.I)
+    progress_anchors = []
+    for record in acquisition_records:
+        if record[7].strip() == 'acquisition in progress':
+            try:
+                if math.floor(_audit_timestamp(record[2].strip())) == numeric(params.get('DATE_START')):
+                    progress_anchors.append([record[1], record[2], record[5], record[6]])
+            except (ValueError, OverflowError):
+                pass
+    starts = re.findall(r'^\s*started at ('+_AUDIT_TIME+r'),', latest, re.M)
+    try:
+        terminal_start = _audit_timestamp(starts[0]) if len(starts) == 1 else None
+    except (ValueError, OverflowError):
+        terminal_start = None
+    transition_identity = {'terminal_start':terminal_start, 'version':1, 'progress_anchors':progress_anchors, 'parameters':identity,
+        'raw_clean':raw_inspection_clean and audit_inspection_clean and bool(acqus) and not errors,
+        'uuid':uuids[0] if len(uuids) == 1 else '',
+        'deletion_seen':sum(r[7].strip() == 'raw data deleted by zg' for r in acquisition_records),
+        'latest_deleted':latest == 'raw data deleted by zg',
+        'latest_in_progress':latest == 'acquisition in progress'}
     fields = {'ObservedPulseProgram':pulse, 'ObservedType':observed_type,
               'RawPresent':raw_bytes > 0, 'RawBytes':raw_bytes,
-              'ObservedFingerprint':fingerprint, 'ScanError':'; '.join(errors), '_RawFileStats':raw_files,
+              'ObservedFingerprint':fingerprint, 'ScanError':'; '.join(errors), '_RawFileStats':raw_files, '_AcquisitionIdentity':transition_identity,
               'ObservedField_MHz':None, 'ObservedTemperature_C':None, 'ObservedAcquiredAt':None}
     if acquired and acquired > 0:
         fields['ObservedAcquiredAt'] = acquired
@@ -559,6 +585,7 @@ def observe(path):
     # cannot establish a clean setup observation. No raw bytes are opened.
     fields.update(acquisition_status(acqus, audit,
         raw_present=(raw_bytes > 0) if acqus and not errors and raw_inspection_clean and audit_inspection_clean else None))
+    transition_identity['progress_verified'] = fields['ObservedAcquisitionEvidence'].startswith(STATUS_CONTRADICTION_PREFIX) and 'records in progress' in fields['ObservedAcquisitionEvidence']
     titles = title_observation(path)
     title_issue = titles.pop('_TitleIssue', '')
     if title_issue:

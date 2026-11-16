@@ -9,6 +9,7 @@ from .discovery import scan_source
 from .schema import MACHINE_FIELDS,CONDITIONS,canonical_experiment_type,FILL_ONLY_IDENTITY_FIELDS
 from .grist import GristError
 from .state import observation_warning,sufficient_fingerprint,MISSING_FINGERPRINT_WARNING
+from .acquisition_transition import reviewed
 
 
 def _tuple(fields, observed=False):
@@ -141,7 +142,7 @@ def _conflicts(machine, remote):
     return differences
 
 
-def _identity_conflicts(machine,remote):
+def _identity_conflicts(machine,remote,accepted=(),transition_kind=None):
     source,folder,expno = (machine.get('Observed'+name) for name in ('SourceID','Folder','Expno'))
     if not isinstance(source,str) or not source or not isinstance(folder,str) or expno is None or not str(expno).isdigit():
         return ['observed acquisition identity is missing or invalid; reconcile before binding']
@@ -154,14 +155,16 @@ def _identity_conflicts(machine,remote):
            for index,name in enumerate(('SourceID','Folder','Expno'))):
         reasons.append('observed source/folder/expno differs from confirmed identity')
     fingerprint, previous = machine.get('ObservedFingerprint'), remote.get('ObservedFingerprint')
-    if fingerprint and previous and fingerprint != previous:
+    if fingerprint and previous and fingerprint != previous and previous not in accepted:
         reasons.append('acquisition fingerprint differs from registered identity; reconcile before reusing assessment')
+    if transition_kind == 'setup-to-raw' and previous != fingerprint and reviewed(remote):
+        reasons.append('setup-to-raw transition has existing review or result; reconcile before reusing assessment')
     return reasons
 
 
-def _identity_defaults(machine, remote):
+def _identity_defaults(machine, remote,accepted=(),transition_kind=None):
     """Fill blanks only after exact observed-key and existing-identity validation."""
-    if _identity_conflicts(machine, remote):
+    if _identity_conflicts(machine, remote,accepted,transition_kind):
         return {}
     return {name:machine['Observed'+name] for name in FILL_ONLY_IDENTITY_FIELDS
             if remote.get(name) in (None,'') and remote.get(name) != machine['Observed'+name]}
@@ -224,14 +227,16 @@ def flush(state, client, batch_size=100):
         if key in already_pending:
             continue
         machine,facts = _canonical_payload(cached)
+        accepted,transition_kind = state.transition_lineage(key,machine.get('ObservedFingerprint'))
         matches = keys.get(key,[])
         exact = manual.get(_tuple(machine,observed=True),[])
         if len(matches)>1 or len(exact)>1 or (matches and exact and matches[0]['id']!=exact[0]['id']):
             requeue.append(key)
             continue
         row = matches[0] if matches else exact[0] if len(exact)==1 else None
-        if row and (bool(_differences(_status_facts_for_remote(facts,machine,row['fields']),row['fields'])) or _identity_conflicts(machine,row['fields']) or _identity_defaults(machine,row['fields'])
+        if row and (bool(_differences(_status_facts_for_remote(facts,machine,row['fields']),row['fields'])) or _identity_conflicts(machine,row['fields'],accepted,transition_kind) or _identity_defaults(machine,row['fields'],accepted,transition_kind)
                     or (row['fields'].get('ReconciliationReason')==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(machine.get('ObservedFingerprint')))
+                    or state.resolved_copy_warning(key,machine.get('ObservedFingerprint'),row['fields'].get('ReconciliationReason',''))
                     or any(reason and not _legacy_metadata_only(reason) and not observation_warning(reason) for reason in
                         (machine.get('ReconciliationReason',''),row['fields'].get('ReconciliationReason','')))):
             requeue.append(key)
@@ -243,6 +248,7 @@ def flush(state, client, batch_size=100):
     conflicts = 0
     for key,payload in pending:
         machine, facts = _canonical_payload(payload)
+        accepted,transition_kind = state.transition_lineage(key,machine.get('ObservedFingerprint'))
         matches = keys.get(key,[])
         identity = _tuple(payload,observed=True)
         exact = manual.get(identity,[]) if identity else []
@@ -269,11 +275,13 @@ def flush(state, client, batch_size=100):
             reason = machine.get('ReconciliationReason','')
             if _legacy_metadata_only(reason): reason = ''
             remote_reason = row['fields'].get('ReconciliationReason','')
+            if not reason and state.resolved_copy_warning(key,machine.get('ObservedFingerprint'),remote_reason):
+                remote_reason = ''  # State recomputed copy groups from current observations.
             if sufficient_fingerprint(machine.get('ObservedFingerprint')):
                 if reason==MISSING_FINGERPRINT_WARNING:reason=''
                 if remote_reason==MISSING_FINGERPRINT_WARNING:remote_reason=''
             reason = _source_review_reason(reason,remote_reason)
-            identity_reasons = _identity_conflicts(machine,row['fields'])
+            identity_reasons = _identity_conflicts(machine,row['fields'],accepted,transition_kind)
             if identity_reasons:
                 reason = '; '.join(filter(None,[reason,*(r for r in identity_reasons if r not in reason)]))
             machine['ReconciliationReason'] = reason
@@ -281,8 +289,10 @@ def flush(state, client, batch_size=100):
                 blocked.add(key)
                 conflicts += 1
             else:
-                machine.update(_identity_defaults(machine,row['fields']))
+                machine.update(_identity_defaults(machine,row['fields'],accepted,transition_kind))
                 machine.update(_status_facts_for_remote(facts,machine,row['fields']))
+            if key not in blocked:
+                state.mark_transition_attempt(key,machine.get('ObservedFingerprint'),row['fields'].get('ObservedFingerprint'))
             changed = _differences(machine,row['fields'])
             if changed:
                 update.append((key,{'id':row['id'],'fields':changed}))
