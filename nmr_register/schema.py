@@ -73,10 +73,25 @@ QC_CRITERIA = {
     'QCFID': ('FIDs and spectrum', ('Clean','Usable with exclusions','Unusable')),
     'QCSNR': ('SNR', ('Adequate','Marginal','Inadequate')),
     'QCSample': ('Sample during acquisition', ('Acceptable','Concern','Unacceptable')),
-    'QCAnalysis': ('Analysis quality', ('Reliable','Limited','Unreliable')),
+    'QCAnalysis': ('Analysis quality', ('Reliable','Reliable — early points excluded','Two-phase — unresolved','Limited','Unreliable')),
 }
 QC_DEFAULT = 'Not assessed'
-QC_ACCEPTABLE = {'QCAcquisitionCoverage': ('Complete','Sufficient')}
+QC_ACCEPTABLE = {
+    'QCAcquisitionCoverage': ('Complete','Sufficient'),
+    'QCSettings': ('Appropriate',), 'QCFID': ('Clean',),
+    'QCSNR': ('Adequate',), 'QCSample': ('Acceptable',),
+    'QCAnalysis': ('Reliable','Reliable — early points excluded'),
+}
+QC_CAUTION = {
+    'QCAcquisitionCoverage': (), 'QCSettings': ('Usable with restrictions',),
+    'QCFID': ('Usable with exclusions',), 'QCSNR': ('Marginal',),
+    'QCSample': ('Concern',), 'QCAnalysis': ('Limited',),
+}
+QC_FAILING = {
+    'QCAcquisitionCoverage': ('Insufficient',), 'QCSettings': ('Invalid',),
+    'QCFID': ('Unusable',), 'QCSNR': ('Inadequate',),
+    'QCSample': ('Unacceptable',), 'QCAnalysis': ('Two-phase — unresolved','Unreliable'),
+}
 
 def assessment_from_values(values):
     failures=[]; limited=[]; missing=[]
@@ -85,9 +100,9 @@ def assessment_from_values(values):
         if imported in DECISIONS:return imported
     for name,(label,choices) in QC_CRITERIA.items():
         item=values.get(name) or QC_DEFAULT
-        if item==choices[-1]:failures.append(label+': '+item)
-        elif item in QC_ACCEPTABLE.get(name,(choices[0],)):pass
-        elif item==choices[1]:limited.append(label+': '+item)
+        if item in QC_FAILING[name]:failures.append(label+': '+item)
+        elif item in QC_ACCEPTABLE[name]:pass
+        elif item in QC_CAUTION.get(name, ()):limited.append(label+': '+item)
         else:missing.append(label)
     if failures:return 'Do not use'
     if missing:return ''
@@ -116,8 +131,7 @@ def assessment_display_from_values(values):
     if decision == 'Do not use':
         return decision
     suffix = ' · analysis missing' if missing == ['analysis'] else ''
-    cautions = sum(values.get(name) == choices[1] and values.get(name) not in QC_ACCEPTABLE.get(name, (choices[0],))
-                   for name, (_, choices) in QC_CRITERIA.items())
+    cautions = sum(values.get(name) in QC_CAUTION.get(name, ()) for name in QC_CRITERIA)
     return ('Limited use' if cautions >= 2 else 'Use') + ' so far' + suffix
 
 _QC_FORMULA_PREFIX = """criteria = [
@@ -140,6 +154,7 @@ LEGACY_ASSESSMENT_EXPLANATION_FORMULA = _QC_FORMULA_PREFIX + """if failed: retur
 if missing: return "Assessment incomplete: " + ", ".join(missing)
 if limited: return "; ".join(limited)
 return 'All criteria acceptable'"""
+
 _IMPORTED_ASSESSMENT_PREFIX = '''if all(not value or value == "Not assessed" for label, value, good, middle, bad in criteria) and $ImportedAssessment in ("Use", "Limited use", "Do not use"):
   return $ImportedAssessment
 '''
@@ -177,6 +192,26 @@ if failed: return "; ".join(failed)
 if len(limited) >= 2: return "; ".join(limited)
 if limited: return "Single caution accepted: " + limited[0]
 return 'All criteria acceptable'"""
+
+# Preserve exact previously shipped formulas for guarded metadata-only upgrades.
+PRE_ANALYSIS_ASSESSMENT_FORMULA = ASSESSMENT_FORMULA
+PRE_ANALYSIS_ASSESSMENT_EXPLANATION_FORMULA = ASSESSMENT_EXPLANATION_FORMULA
+PRE_ANALYSIS_ASSESSMENT_DISPLAY_FORMULA = ASSESSMENT_DISPLAY_FORMULA
+_ANALYSIS_QC_FORMULA_PREFIX = "criteria = [\n" + "".join(
+    "  (" + repr(label) + ", $" + name + ", " + repr(QC_ACCEPTABLE[name]) + ", "
+    + repr(QC_CAUTION.get(name, ())) + ", " + repr(QC_FAILING[name]) + "),\n"
+    for name, (label, choices) in QC_CRITERIA.items()) + """ ]
+failed = [label + ": " + str(value) for label, value, good, middle, bad in criteria if value in bad]
+missing = [label for label, value, good, middle, bad in criteria if not value or value == "Not assessed" or (value not in good and value not in bad and value not in middle)]
+limited = [label + ": " + str(value) for label, value, good, middle, bad in criteria if value in middle]
+"""
+def _analysis_formula(previous):
+    return (_ANALYSIS_QC_FORMULA_PREFIX + previous[len(_QC_FORMULA_PREFIX):]).replace(
+        'value == bad', 'value in bad').replace('value == middle', 'value in middle')
+
+ASSESSMENT_FORMULA = _analysis_formula(PRE_ANALYSIS_ASSESSMENT_FORMULA)
+ASSESSMENT_EXPLANATION_FORMULA = _analysis_formula(PRE_ANALYSIS_ASSESSMENT_EXPLANATION_FORMULA)
+ASSESSMENT_DISPLAY_FORMULA = _analysis_formula(PRE_ANALYSIS_ASSESSMENT_DISPLAY_FORMULA)
 
 SAMPLE_ID_FORMULA = '''datepart = $PreparedAt.strftime("%Y%m%d") if $PreparedAt else ""
 month = $PreparedDateText or ""

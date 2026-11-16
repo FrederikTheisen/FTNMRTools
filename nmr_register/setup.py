@@ -485,6 +485,7 @@ def upgrade_assessment_schema(client, reviewed=None):
     """
     from .schema import (columns, QC_CRITERIA, QC_DEFAULT, assessment_from_values,
                          ASSESSMENT_FORMULA, ASSESSMENT_EXPLANATION_FORMULA, PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA, LEGACY_ASSESSMENT_FORMULA,
+                         PRE_ANALYSIS_ASSESSMENT_FORMULA, PRE_ANALYSIS_ASSESSMENT_EXPLANATION_FORMULA, PRE_ANALYSIS_ASSESSMENT_DISPLAY_FORMULA,
                          LEGACY_ASSESSMENT_EXPLANATION_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA,
                          PRE_TOLERANCE_ASSESSMENT_EXPLANATION_FORMULA, PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, ATTENTION_FORMULA, LEGACY_QC_ATTENTION_FORMULA)
     reviewed=reviewed or {}
@@ -497,7 +498,7 @@ def upgrade_assessment_schema(client, reviewed=None):
     assessment=cols.get('Assessment');attention=cols.get('AttentionReason')
     if not assessment or not attention:raise ValueError('Missing Assessment or AttentionReason')
     af=assessment['fields'];old_mode=not af.get('isFormula') and af.get('formula','')==''
-    if af.get('type')!='Choice' or (not old_mode and (not af.get('isFormula') or af.get('formula') not in (ASSESSMENT_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA))):
+    if af.get('type')!='Choice' or (not old_mode and (not af.get('isFormula') or af.get('formula') not in (ASSESSMENT_FORMULA, PRE_ANALYSIS_ASSESSMENT_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA))):
         raise ValueError('Assessment schema requires review')
     current_attention=attention['fields'].get('formula','')
     if current_attention not in (LEGACY_QC_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('AttentionReason formula requires review')
@@ -506,10 +507,22 @@ def upgrade_assessment_schema(client, reviewed=None):
         spec=expected[name];existing=cols.get(name)
         if existing:
             f=existing['fields']
-            allowed=(spec['formula'], PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA, PRE_TOLERANCE_ASSESSMENT_EXPLANATION_FORMULA, LEGACY_ASSESSMENT_EXPLANATION_FORMULA) if name=='AssessmentExplanation' else (spec['formula'],)
-            if name == 'AssessmentDisplay':allowed = (spec['formula'], PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA)
+            allowed=(spec['formula'], PRE_ANALYSIS_ASSESSMENT_EXPLANATION_FORMULA, PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA, PRE_TOLERANCE_ASSESSMENT_EXPLANATION_FORMULA, LEGACY_ASSESSMENT_EXPLANATION_FORMULA) if name=='AssessmentExplanation' else (spec['formula'],)
+            if name == 'AssessmentDisplay':allowed = (spec['formula'], PRE_ANALYSIS_ASSESSMENT_DISPLAY_FORMULA, PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA)
             if f.get('type')!=spec['type'] or bool(f.get('isFormula'))!=spec['isFormula'] or f.get('formula','') not in allowed:
                 raise ValueError('Existing QC schema differs at '+name)
+            if name == 'QCAnalysis':
+                import json
+                try:
+                    options = json.loads(f.get('widgetOptions') or '{}')
+                except (ValueError, TypeError):
+                    raise ValueError('QCAnalysis choices require review')
+                target_choices = [QC_DEFAULT, *QC_CRITERIA[name][1]]
+                if not isinstance(options, dict) or options.get('choices') not in ([QC_DEFAULT, 'Reliable', 'Limited', 'Unreliable'], target_choices):
+                    raise ValueError('QCAnalysis choices require review')
+                if options['choices'] != target_choices:
+                    options['choices'] = target_choices
+                    actions.append(['UpdateRecord','_grist_Tables_column',existing['id'],{'widgetOptions':json.dumps(options)}])
             if name in QC_CRITERIA or name == 'AssessmentDisplay':
                 presentation = {}
                 if not f.get('untieColIdFromLabel'):
@@ -518,9 +531,9 @@ def upgrade_assessment_schema(client, reviewed=None):
                     presentation.update(label=spec['label'], untieColIdFromLabel=True)
                 if presentation:
                     actions.append(['UpdateRecord','_grist_Tables_column',existing['id'],presentation])
-            if name == 'AssessmentDisplay' and f.get('formula') == PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA:
+            if name == 'AssessmentDisplay' and f.get('formula') in (PRE_ANALYSIS_ASSESSMENT_DISPLAY_FORMULA, PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA):
                 actions.append(['UpdateRecord','_grist_Tables_column',existing['id'],{'formula':spec['formula']}])
-            if name=='AssessmentExplanation' and f.get('formula') in (PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA, PRE_TOLERANCE_ASSESSMENT_EXPLANATION_FORMULA, LEGACY_ASSESSMENT_EXPLANATION_FORMULA):
+            if name=='AssessmentExplanation' and f.get('formula') in (PRE_ANALYSIS_ASSESSMENT_EXPLANATION_FORMULA, PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA, PRE_TOLERANCE_ASSESSMENT_EXPLANATION_FORMULA, LEGACY_ASSESSMENT_EXPLANATION_FORMULA):
                 actions.append(['UpdateRecord','_grist_Tables_column',existing['id'],{'formula':ASSESSMENT_EXPLANATION_FORMULA}])
         else:
             info={k:v for k,v in spec.items() if k!='id'}
@@ -551,7 +564,7 @@ def upgrade_assessment_schema(client, reviewed=None):
     else:
         if any(name not in cols for name in (*QC_CRITERIA,'AssessmentExplanation')):
             raise ValueError('Computed Assessment exists with incomplete QC schema; review before continuing')
-        if af.get('formula') in (PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA):
+        if af.get('formula') in (PRE_ANALYSIS_ASSESSMENT_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA):
             actions.append(['UpdateRecord','_grist_Tables_column',assessment['id'],{'formula':ASSESSMENT_FORMULA}])
     if current_attention!=ATTENTION_FORMULA:
         actions.append(['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':ATTENTION_FORMULA}])

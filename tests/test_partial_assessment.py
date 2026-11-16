@@ -3,7 +3,7 @@ import copy
 import itertools
 import unittest
 from nmr_register.schema import (
-    QC_CRITERIA, QC_DEFAULT, ASSESSMENT_FORMULA, ASSESSMENT_DISPLAY_FORMULA,
+    QC_CRITERIA, QC_DEFAULT, QC_CAUTION, QC_FAILING, ASSESSMENT_FORMULA, ASSESSMENT_DISPLAY_FORMULA,
     ASSESSMENT_EXPLANATION_FORMULA, PRE_PARTIAL_ASSESSMENT_EXPLANATION_FORMULA,
     assessment_from_values, assessment_display_from_values, ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA,
     PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA,
@@ -16,7 +16,7 @@ class PartialAssessmentTests(unittest.TestCase):
     def setUp(self):
         self.good = {name: choices[0] for name, (_, choices) in QC_CRITERIA.items()}
 
-    def test_all_4096_valid_combinations(self):
+    def test_all_valid_combinations(self):
         names = list(QC_CRITERIA)
         count = 0
         for choices in itertools.product(*[(QC_DEFAULT, *QC_CRITERIA[n][1]) for n in names]):
@@ -24,12 +24,12 @@ class PartialAssessmentTests(unittest.TestCase):
             self.assertEqual(formula(ASSESSMENT_DISPLAY_FORMULA, values), assessment_display_from_values(values), values)
             self.assertEqual(formula(ASSESSMENT_FORMULA, values), assessment_from_values(values), values)
             missing = any(value == QC_DEFAULT for value in choices)
-            veto = any(values[name] == options[-1] for name, (_, options) in QC_CRITERIA.items())
+            veto = any(values[name] in QC_FAILING[name] for name, (_, options) in QC_CRITERIA.items())
             display = assessment_display_from_values(values)
             if veto:
                 self.assertEqual(display, 'Do not use', values)
             elif missing and any(value != QC_DEFAULT for value in choices):
-                cautions = sum(values[name] == options[1] for name, (_, options) in QC_CRITERIA.items()
+                cautions = sum(values[name] in QC_CAUTION.get(name, ()) for name, (_, options) in QC_CRITERIA.items()
                                if name != 'QCAcquisitionCoverage')
                 expected = ('Limited use' if cautions >= 2 else 'Use') + ' so far'
                 if [name for name in names if values[name] == QC_DEFAULT] == ['QCAnalysis']:
@@ -42,7 +42,7 @@ class PartialAssessmentTests(unittest.TestCase):
                 self.assertIn('Missing checks:', explanation)
                 self.assertNotIn('All criteria acceptable', explanation)
             count += 1
-        self.assertEqual(count, 4096)
+        self.assertEqual(count, 6144)
 
     def test_analysis_missing_then_complete(self):
         values = dict(self.good, QCAnalysis=QC_DEFAULT)

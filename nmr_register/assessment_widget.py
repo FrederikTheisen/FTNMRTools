@@ -7,7 +7,7 @@ CRITERIA = [
     ('QCFID', 'FIDs and spectrum', ['Not assessed', 'Clean', 'Usable with exclusions', 'Unusable']),
     ('QCSNR', 'Signal to noise', ['Not assessed', 'Adequate', 'Marginal', 'Inadequate']),
     ('QCSample', 'Sample condition', ['Not assessed', 'Acceptable', 'Concern', 'Unacceptable']),
-    ('QCAnalysis', 'Analysis / fit', ['Not assessed', 'Reliable', 'Limited', 'Unreliable']),
+    ('QCAnalysis', 'Analysis / fit', ['Not assessed', 'Reliable', 'Reliable — early points excluded', 'Two-phase — unresolved', 'Limited', 'Unreliable']),
 ]
 
 CORE_JS = r'''
@@ -19,7 +19,10 @@ const AssessmentCard=(()=>{
  const identityKeys=['AcquisitionKey','SourceID','Folder','Expno','ObservedSourceID','ObservedFolder','ObservedExpno','ObservedFingerprint','ReconciliationReason','SampleTagIssue','ObservedSampleTagIssue','ObservedSampleID','RegisteredAt','Sample','SnapshotSampleID','Title','Instrument','ExperimentType','AcquiredAt','AcquisitionDateText','AcquisitionStatus','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz'];
  const sameIdentity=(a,b)=>JSON.stringify(identityKeys.map(k=>a?.[k]??null))===JSON.stringify(identityKeys.map(k=>b?.[k]??null));
  const decisionTone=record=>record?.Assessment==='Do not use'?'fail':record?.Assessment==='Limited use'?'limited':record?.Assessment==='Use'?'pass':record?.AssessmentDisplay&&record.AssessmentDisplay!=='Not assessed'?'limited':'unchecked';
- const tone=(key,value)=>{const choices=criteria.find(c=>c[0]===key)?.[2]||[];const index=choices.indexOf(value);return index<=0?'unchecked':index===choices.length-1?'fail':key==='QCAcquisitionCoverage'||index===1?'pass':'limited';};
+ const restrictedAnalysis=['Reliable — early points excluded','Two-phase — unresolved'];
+ const relaxationType=value=>/^(?:15n)?(?:t1|r1)(?:rho|ρ)?$/i.test(String(value||'').replace(/[\s_-]+/g,''));
+ const choicesFor=(key,record)=>{const choices=criteria.find(c=>c[0]===key)?.[2]||[];return key==='QCAnalysis'&&!relaxationType(record?.ExperimentType)?choices.filter(v=>!restrictedAnalysis.includes(v)):choices;};
+ const tone=(key,value)=>{if(value==='Not assessed'||!criteria.find(c=>c[0]===key)?.[2].includes(value))return 'unchecked';if(key==='QCAnalysis')return ({'Reliable':'pass','Reliable — early points excluded':'pass','Two-phase — unresolved':'fail','Limited':'limited','Unreliable':'fail'})[value];const choices=criteria.find(c=>c[0]===key)[2],index=choices.indexOf(value);return index===choices.length-1?'fail':key==='QCAcquisitionCoverage'||index===1?'pass':'limited';};
  function registrationTimestamp(base,draft,fresh,experimentRows,sampleRows,now){
   if(fresh.RegisteredAt!=null&&fresh.RegisteredAt!==0)return undefined;
   const before=snapshot(base),after=snapshot(draft);
@@ -44,7 +47,7 @@ const AssessmentCard=(()=>{
   if(!equal(base,fresh)||!sameIdentity(base,fresh))throw Error('This experiment changed elsewhere. Discard this draft and review the current ratings before saving.');
   const fields=snapshot(draft),imported=fields.ImportedAssessment;
   delete fields.ImportedAssessment;
-  for(const [key,label,choices]of criteria)if(!choices.includes(fields[key]))throw Error('Choose a valid rating for '+label+'.');
+  for(const [key,label]of criteria)if(!choicesFor(key,fresh).includes(fields[key])&&!(key==='QCAnalysis'&&restrictedAnalysis.includes(fields[key])&&fields[key]===snapshot(base)[key]))throw Error('Choose a valid rating for '+label+'.');
   if(imported&&keys.some(key=>fields[key]!==base[key]))fields.ImportedAssessment='';
   const registered=registrationTimestamp(base,draft,fresh,experimentRows,sampleRows,now);
   if(registered!==undefined)fields.RegisteredAt=registered;
@@ -56,7 +59,7 @@ const AssessmentCard=(()=>{
   const options=JSON.parse(section.options||'{}');
   if(typeof options.html!=='string'||!options.html.includes('data-nmr-assessment="1"'))throw Error('This is not the expected assessment widget.');
  }
- return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,registrationTimestamp,action,context};
+ return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,registrationTimestamp,action,context,choicesFor,relaxationType};
 })();
 '''.replace('__CRITERIA__', json.dumps(CRITERIA, ensure_ascii=False))
 
@@ -78,7 +81,8 @@ function render(){
  const evidence=['ReconciliationReason','MetadataDifference','ObservedAcquisitionEvidence','TitleSource'].filter(k=>current[k]).map(k=>String(current[k]));$('warnings').hidden=!evidence.length;$('evidence').textContent=evidence.join(' · ');
  $('decision').textContent=current.AssessmentDisplay||current.Assessment||'Assessment incomplete';$('decision').className='decision '+AssessmentCard.decisionTone(current);
  $('explanation').textContent=current.AssessmentExplanation||'Rate each criterion explicitly; the overall decision is calculated from the saved ratings.';
- for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key];if(![...select.options].some(o=>o.value===value)){const option=el('option','Unknown saved rating: '+value);option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
+ for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key],choices=AssessmentCard.choicesFor(key,current);select.replaceChildren();for(const choice of choices){const option=el('option',choice);option.value=choice;select.append(option);}if(!choices.includes(value)){const option=el('option','Saved rating (unavailable for this experiment type): '+value);option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
+ $('analysisHelp').hidden=!AssessmentCard.relaxationType(current.ExperimentType);
  $('note').value=draft.AssessmentReason;$('note').disabled=busy;
  $('save').disabled=busy||!SECTION_ID||!dirty();$('discard').disabled=busy||(!dirty()&&pending===undefined);
  $('switch').hidden=pending===undefined;$('switch').textContent=pending===undefined?'':'Another selection or update is waiting. Save this draft, or discard it to continue.';
@@ -104,8 +108,8 @@ async function save(){if(!current||!dirty()||busy||!SECTION_ID)return;
  }catch(error){message(error.message||'Assessment could not be saved. Your draft is retained.',true);}
  finally{busy=false;render();}
 }
-for(const [key,label,choices]of AssessmentCard.criteria){const wrapper=el('label'),caption=el('span',label),select=el('select');select.id=key;
- for(const value of choices){const option=el('option',value);option.value=value;select.append(option);}select.addEventListener('change',()=>{draft[key]=select.value;message('');render();});wrapper.append(caption,select);$('ratings').append(wrapper);}
+for(const [key,label]of AssessmentCard.criteria){const wrapper=el('label'),caption=el('span',label),select=el('select');select.id=key;
+ select.addEventListener('change',()=>{draft[key]=select.value;message('');render();});wrapper.append(caption,select);$('ratings').append(wrapper);}
 $('note').addEventListener('input',()=>{draft.AssessmentReason=$('note').value;render();});
 $('save').addEventListener('click',save);$('discard').addEventListener('click',()=>{const next=pending!==undefined?pending:current;adopt(next);message('Draft discarded.');});
 grist.ready({requiredAccess:'full'});grist.onRecord(receive);render();
@@ -132,4 +136,4 @@ button{min-height:32px;border:0;border-radius:4px;background:var(--grist-theme-c
 .actions{display:flex;gap:8px;align-items:center;margin-top:12px}#switch{padding:8px;background:#fff4dc;border-left:3px solid #d8bb77}#draft{min-height:16px}
 #titleText{white-space:pre-wrap;overflow-wrap:anywhere;max-height:10em;overflow:auto;border:1px solid var(--grist-theme-input-border,#d9d9d9);border-radius:4px;padding:7px;margin:0;font:11px/1.4 ui-monospace,monospace}
 @media(max-width:480px){.ratings{grid-template-columns:1fr}}
-</style></head><body><p id="empty" class="muted">Select an experiment in the acquisition list.</p><main id="card" hidden><h2 id="experiment"></h2><p id="conditions" class="muted"></p><p id="source" class="muted"></p><section id="titleBlock" hidden><h3>Acquisition title and comments</h3><pre id="titleText"></pre></section><details id="warnings" hidden><summary>Acquisition notes</summary><p id="evidence" class="muted"></p></details><span id="decision" class="decision" aria-label="Calculated overall assessment"></span><p id="explanation" class="muted"></p><div id="ratings" class="ratings"></div><label>Assessment note (optional)<textarea id="note" rows="2"></textarea></label><p id="draft" class="muted"></p><p id="switch" hidden></p><div class="actions"><button id="save" type="button">Save assessment</button><button id="discard" type="button">Discard changes</button></div></main><p id="message" class="muted" role="status"></p><script>''' + script + '</script></body></html>'
+</style></head><body><p id="empty" class="muted">Select an experiment in the acquisition list.</p><main id="card" hidden><h2 id="experiment"></h2><p id="conditions" class="muted"></p><p id="source" class="muted"></p><section id="titleBlock" hidden><h3>Acquisition title and comments</h3><pre id="titleText"></pre></section><details id="warnings" hidden><summary>Acquisition notes</summary><p id="evidence" class="muted"></p></details><span id="decision" class="decision" aria-label="Calculated overall assessment"></span><p id="explanation" class="muted"></p><div id="ratings" class="ratings"></div><p id="analysisHelp" class="muted" hidden>Reliable means the fit is reliable using all points. Choose Reliable — early points excluded only when the remaining fit is reliable. Two-phase — unresolved is an unreliable fit.</p><label>Assessment note (optional)<textarea id="note" rows="2"></textarea></label><p id="draft" class="muted"></p><p id="switch" hidden></p><div class="actions"><button id="save" type="button">Save assessment</button><button id="discard" type="button">Discard changes</button></div></main><p id="message" class="muted" role="status"></p><script>''' + script + '</script></body></html>'

@@ -111,7 +111,7 @@ class PackagingTests(unittest.TestCase):
         self.assertIn('Blue: 1 Use. Green: 2 or more Use.',html)
         self.assertIn('Counts show experiments assessed Use.',html)
         self.assertIn("const qcUse = r => r.Assessment==='Use'",html)
-        self.assertIn(".cell.good{background:#e5f3e9}",html)
+        self.assertIn(".cell.good{background:#a8dcb6}",html)
         self.assertIn("cell.good>=2",html)
         self.assertIn("cell.good===1",html)
         self.assertNotIn("cell.maxCompatibleGood>=2",html)
@@ -180,6 +180,9 @@ setTimeout(async()=>{
   check(model.cells.find(c=>c.field===950&&c.type==='t1'&&c.salt===500).maxCompatibleGood===1,'sample fixture has incompatible metadata');
   check(model.cells.find(c=>c.field===600&&c.type==='t1'&&c.salt===500).maxCompatibleGood===1,'D1 fixture has incompatible protocol metadata');
   check(button(600,'t1rho',50).classList.contains('single')&&!button(600,'t1rho',50).classList.contains('good'),'exactly one trusted Use blue');
+  const greenStyle=getComputedStyle(button(600,'t1',50)),blueStyle=getComputedStyle(button(600,'t1rho',50));
+  check(greenStyle.backgroundColor==='rgb(168, 220, 182)'&&blueStyle.backgroundColor==='rgb(172, 208, 243)','distinct green and blue fills');
+  check(greenStyle.borderBottomWidth==='1px'&&greenStyle.borderBottomColor==='rgb(111, 132, 146)'&&getComputedStyle(button(600,'t1',50).parentElement).borderRightColor==='rgb(111, 132, 146)','visible salt and grid borders');
   check(!button(850,'t1',500).classList.contains('single')&&!button(700,'t1',50).classList.contains('single'),'identity conflicts and discarded records never blue');
   // Timers also advance in headless virtual time, where animation frames may pause.
   const frames=()=>new Promise(resolve=>setTimeout(resolve,100));
