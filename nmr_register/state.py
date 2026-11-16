@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 import time
 from .split import is_derived_split
-from .acquisition_transition import permitted_transition
+from .acquisition_transition import permitted_transition,clean_setup
 
 MATCHING_METADATA_PREFIX = 'matching acquisition metadata at another path; possible copy or rename: '
 MISSING_FINGERPRINT_WARNING = 'Acquisition metadata fingerprint unavailable; independent identity requires review'
@@ -137,7 +137,8 @@ class State:
                     reason = 'acquisition identity changed at existing path; reconcile before reusing assessment'
                 if reason==MISSING_FINGERPRINT_WARNING and sufficient_fingerprint(fields['ObservedFingerprint']):
                     reason = ''
-                old_files = {v[0]:tuple(v[3:]) for v in old_context.get('_RawGenerationFiles',old_context.get('_RawFileStats',[])) if kind != 'setup-to-raw' or v[1] > 0}
+                setup_pair = bool(previous and clean_setup(previous,old_context) and clean_setup(fields,context))
+                old_files = {v[0]:tuple(v[3:]) for v in old_context.get('_RawGenerationFiles',old_context.get('_RawFileStats',[])) if not (setup_pair or kind == 'setup-to-raw') or v[1] > 0}
                 current_files = {v[0]:tuple(v[3:]) for v in context.get('_RawFileStats',[])}
                 if any(name in old_files and old_files[name] != identity for name,identity in current_files.items()):
                     reason = 'raw acquisition file replaced at existing path; reconcile before reusing assessment'
@@ -162,8 +163,7 @@ class State:
                             if old_context.get(name):context[name] = old_context[name]
                 if kind == 'setup-to-raw' and reason.startswith(MATCHING_METADATA_PREFIX) and observation_warning(reason):
                     reason = ''  # The old template match does not describe the new raw birth.
-                matches = self.db.execute('SELECT key FROM observations WHERE fingerprint=? AND key<>?',
-                                          (fields['ObservedFingerprint'],key)).fetchall() if fields['ObservedFingerprint'] else []
+                matches = self._copy_peers(fields['ObservedFingerprint'],key) if fields['ObservedFingerprint'] and not clean_setup(fields,context) else []
                 if matches and (not reason or observation_warning(reason)):
                     reason = MATCHING_METADATA_PREFIX+', '.join(sorted(r[0] for r in matches))
                 elif not reason and not fields['ObservedFingerprint']:
@@ -191,10 +191,10 @@ class State:
                 reason = fields.get('ReconciliationReason','')
                 if not (reason.startswith(MATCHING_METADATA_PREFIX) and observation_warning(reason)):
                     continue
-                peers = self.db.execute('SELECT key FROM observations WHERE fingerprint=? AND key<>?',(row['fingerprint'],row['key'])).fetchall() if row['fingerprint'] else []
+                saved = self.db.execute('SELECT context FROM observations WHERE key=?',(row['key'],)).fetchone()
+                context = json.loads(saved['context'])
+                peers = self._copy_peers(row['fingerprint'],row['key']) if row['fingerprint'] and not clean_setup(fields,context) else []
                 if not peers:
-                    saved = self.db.execute('SELECT context FROM observations WHERE key=?',(row['key'],)).fetchone()
-                    context = json.loads(saved['context'])
                     context['_ResolvedCopyWarning'] = reason
                     self.db.execute('UPDATE observations SET context=? WHERE key=?',(serialized(context),row['key']))
                     fields['ReconciliationReason'] = '' if row['fingerprint'] else MISSING_FINGERPRINT_WARNING
@@ -205,7 +205,9 @@ class State:
                     changed += 1
             # Flag BOTH paths when a copy appears; never propagate assessments.
             for fingerprint, in self.db.execute("SELECT fingerprint FROM observations WHERE fingerprint != '' GROUP BY fingerprint HAVING count(*)>1").fetchall():
-                rows = self.db.execute('SELECT key,payload FROM observations WHERE fingerprint=?',(fingerprint,)).fetchall()
+                rows = self._copy_peers(fingerprint)
+                if len(rows) < 2:
+                    continue
                 for row in rows:
                     fields = json.loads(row['payload'])
                     previous_reason=fields.get('ReconciliationReason','')
@@ -220,6 +222,11 @@ class State:
                         self.db.execute('INSERT OR REPLACE INTO outbox VALUES (?,?,?)',(row['key'],payload,now))
                         changed += 1
         return changed
+
+    def _copy_peers(self, fingerprint, exclude=None):
+        """Copied setup parameters do not identify an acquired dataset."""
+        return [row for row in self.db.execute('SELECT key,payload,context FROM observations WHERE fingerprint=?',(fingerprint,)).fetchall()
+                if row['key'] != exclude and not clean_setup(json.loads(row['payload']),json.loads(row['context']))]
 
     def transition_lineage(self, key, fingerprint):
         """Read verified local ancestry only; transport payloads cannot authorize it."""
@@ -245,7 +252,7 @@ class State:
         if (payload.get('ObservedFingerprint') != fingerprint or not fingerprint
                 or payload.get('ReconciliationReason') or not resolved.startswith(MATCHING_METADATA_PREFIX)):
             return False
-        if self.db.execute('SELECT 1 FROM observations WHERE fingerprint=? AND key<>?',(fingerprint,key)).fetchone():
+        if not clean_setup(payload,context) and self._copy_peers(fingerprint,key):
             return False
         return set(remote_reason[len(MATCHING_METADATA_PREFIX):].split(', ')) <= set(resolved[len(MATCHING_METADATA_PREFIX):].split(', '))
 

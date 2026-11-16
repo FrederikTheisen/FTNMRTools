@@ -216,3 +216,92 @@ class AcquisitionTransitionTests(unittest.TestCase):
         self.params(start=1700001000,pulse='t1');(self.path/'ser').write_bytes(b'fixture');self.sync()
         self.assertFalse(row['ReconciliationReason']);self.assertEqual(row['PulseProgram'],'t1')
         self.assertTrue(row['ObservedFingerprint']);self.assertEqual(len(self.client.rows),1)
+
+    def test_clean_placeholder_reconfiguration_updates_same_row(self):
+        self.params();self.sync();row=self.client.rows[0]['fields']
+        row.update(Sample=30,Notes='keep')
+        self.params(start=1700000100,pulse='t1',td=4096);self.sync()
+        self.assertEqual(len(self.client.rows),1)
+        self.assertEqual(row['PulseProgram'],'t1');self.assertEqual(row['Notes'],'keep')
+        self.assertFalse(row['ReconciliationReason']);self.assertEqual(self.state.pending(),[])
+
+    def test_zero_byte_placeholder_recreation_is_safe(self):
+        self.params();(self.path/'fid').touch();self.sync()
+        replacement=self.path/'new';replacement.touch();os.replace(replacement,self.path/'fid')
+        self.params(start=1700000100,pulse='t1');self.sync()
+        self.assertFalse(self.client.rows[0]['fields']['ReconciliationReason'])
+
+    def test_reviewed_placeholder_reconfiguration_is_blocked(self):
+        self.params();self.sync();row=self.client.rows[0]['fields']
+        row.update(Assessment='Use',ResultCSV=['L',42])
+        self.params(start=1700000100,pulse='t1');self.sync()
+        self.assertIn('existing review or result',row['ReconciliationReason'])
+        self.assertEqual(row['PulseProgram'],'zg');self.assertEqual(row['ResultCSV'],['L',42])
+
+    def test_clean_placeholder_peers_do_not_create_copy_warning(self):
+        self.params();first=self.observation();other=dict(first,AcquisitionKey='src:folder/2',ObservedExpno='2')
+        self.state.observe([first,other]);flush(self.state,self.client)
+        self.assertTrue(all(not r['fields']['ReconciliationReason'] for r in self.client.rows))
+        (self.path/'fid').write_bytes(b'raw')
+        self.state.observe([self.observation(),other]);flush(self.state,self.client)
+        self.assertTrue(all(not r['fields']['ReconciliationReason'] for r in self.client.rows))
+
+    def test_raw_history_prevents_setup_reconfiguration_exemption(self):
+        self.params();(self.path/'fid').write_bytes(b'raw');self.sync()
+        (self.path/'fid').unlink();self.sync()
+        self.params(start=1700000100,pulse='t1');self.sync()
+        self.assertIn('identity changed',self.client.rows[0]['fields']['ReconciliationReason'])
+
+    def test_setup_transition_requires_positive_clean_absence_on_both_sides(self):
+        from nmr_register.acquisition_transition import permitted_transition
+        self.params();first=self.observation()
+        fields={k:v for k,v in first.items() if not k.startswith('_')}
+        context={k:v for k,v in first.items() if k.startswith('_')}
+        self.assertEqual(permitted_transition(fields,context,fields,context),'setup-to-setup')
+        for damaged in ({'_RawFileStats':None}, {'_RawFileStats':[['fid']]},
+                        {'_RawFileStats':[['fid',-1,0,1,1]]}, {'_RawGenerationFiles':[['fid',10,0,1,1]]},
+                        {'_AcquisitionIdentity':dict(context['_AcquisitionIdentity'],raw_clean=False)}):
+            with self.subTest(damaged=damaged):
+                bad=dict(context,**damaged)
+                self.assertIsNone(permitted_transition(fields,bad,fields,context))
+                self.assertIsNone(permitted_transition(fields,context,fields,bad))
+        (self.path/'fid').mkdir()
+        malformed=self.observation()
+        bad={k:v for k,v in malformed.items() if k.startswith('_')}
+        self.assertIsNone(permitted_transition(fields,context,fields,bad))
+
+    def test_remote_prior_raw_blocks_placeholder_reconfiguration(self):
+        self.params();self.sync();row=self.client.rows[0]['fields']
+        row.update(RawPresent=True,RawBytes=100)
+        self.params(start=1700000100,pulse='t1');self.sync()
+        self.assertTrue(row['ReconciliationReason'])
+        self.assertEqual(row['PulseProgram'],'zg')
+
+    def test_placeholder_lineage_preserves_review_guard_through_offline_changes(self):
+        self.params();self.sync();row=self.client.rows[0]['fields'];row['Assessment']='Use'
+        for start in (1700000100,1700000200):
+            self.params(start=start,pulse='t1');self.state.observe([self.observation()])
+        (self.path/'fid').write_bytes(b'new raw');self.state.observe([self.observation()])
+        flush(self.state,self.client)
+        self.assertIn('existing review or result',row['ReconciliationReason'])
+        self.assertEqual(row['PulseProgram'],'zg');self.assertEqual(row['Assessment'],'Use')
+
+    def test_same_fingerprint_zero_byte_placeholder_recreation_is_safe(self):
+        self.params();(self.path/'fid').touch();self.sync()
+        replacement=self.path/'new';replacement.touch();os.replace(replacement,self.path/'fid');self.sync()
+        self.assertFalse(self.client.rows[0]['fields']['ReconciliationReason'])
+
+    def test_setup_reconfiguration_retry_after_uncertain_commit(self):
+        self.params();self.sync();self.params(start=1700000100,pulse='t1')
+        self.state.observe([self.observation()]);self.client.fail_after_commit=True
+        with self.assertRaises(RuntimeError):flush(self.state,self.client)
+        flush(self.state,self.client)
+        self.assertEqual(len(self.client.rows),1);self.assertEqual(self.state.pending(),[])
+        self.assertFalse(self.client.rows[0]['fields']['ReconciliationReason'])
+
+    def test_copied_terminal_audit_does_not_preclude_positive_setup_absence(self):
+        self.params();self.completed_audit();self.sync()
+        self.params(start=1700000100,pulse='t1');self.sync()
+        self.assertFalse(self.client.rows[0]['fields']['ReconciliationReason'])
+        (self.path/'fid').write_bytes(b'new raw');self.sync()
+        self.assertFalse(self.client.rows[0]['fields']['ReconciliationReason'])

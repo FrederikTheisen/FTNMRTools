@@ -6,17 +6,32 @@ def raw_ids(context):
     return {v[0]:tuple(v[3:5]) for v in context.get('_RawFileStats', []) if len(v) >= 5 and v[1] > 0}
 
 
+def clean_setup(record, context):
+    """Positive raw absence with no retained evidence of a prior acquisition."""
+    identity = context.get('_AcquisitionIdentity') or {}
+    stats = context.get('_RawFileStats')
+    if (context.get('_RawGenerationFiles') or record.get('RawPresent') is not False
+            or record.get('RawBytes') != 0 or not isinstance(stats, (list, tuple))):
+        return False
+    if any(not isinstance(item, (list, tuple)) or len(item) != 5
+           or item[0] not in ('fid', 'ser') or item[1] != 0 for item in stats):
+        return False
+    if identity:
+        return bool(identity.get('version') == 1 and identity.get('raw_clean'))
+    # Older collectors supplied explicit file stats and Setup status, but no
+    # acquisition identity. A present, unclean identity never falls back here.
+    return record.get('ObservedAcquisitionStatus') == 'Setup'
+
+
 def permitted_transition(previous, old_context, current, context):
     """Return the explicit transition kind, never authorize a new raw generation."""
     old = old_context.get('_AcquisitionIdentity') or {}
     new = context.get('_AcquisitionIdentity') or {}
     if new.get('version') != 1 or not new.get('raw_clean'):
         return None
-    # Legacy clean Setup is a positive absence observation, not mere missing data.
-    old_setup = (not old_context.get('_RawGenerationFiles') and not previous.get('RawPresent') and previous.get('RawBytes') == 0
-                 and '_RawFileStats' in old_context and all(v[1] == 0 for v in old_context['_RawFileStats'])
-                 and (old.get('version') == 1 and old.get('raw_clean')
-                      or previous.get('ObservedAcquisitionStatus') == 'Setup'))
+    old_setup = clean_setup(previous, old_context)
+    if old_setup and clean_setup(current, context):
+        return 'setup-to-setup'
     if old_setup and current.get('RawPresent') and raw_ids(context):
         return 'setup-to-raw'
     if not (old.get('version') == 1 and old.get('raw_clean') and previous.get('RawPresent')

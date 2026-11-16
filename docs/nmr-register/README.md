@@ -164,6 +164,12 @@ filters. Entries with acquisition reconciliation warnings or scan errors remain
 visible in either setting. The control shows a loading or error message if its
 selection is unavailable.
 
+An EXPNO without raw data is a setup placeholder: changing its pulse program
+or parameters, or copying setup templates between EXPNOs, is normal. These
+changes update the same record without replacement or copy warnings when the
+collector has verified clean raw absence and has never observed raw data there.
+Existing reviews or results require reconciliation before a placeholder changes.
+
 The collector distinguishes a clean setup gaining raw data from an acquired
 dataset being replaced. Metadata finalization during an acquisition requires
 the same start and raw-file generation, with matching audit progress and terminal

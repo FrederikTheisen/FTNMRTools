@@ -157,8 +157,11 @@ def _identity_conflicts(machine,remote,accepted=(),transition_kind=None):
     fingerprint, previous = machine.get('ObservedFingerprint'), remote.get('ObservedFingerprint')
     if fingerprint and previous and fingerprint != previous and previous not in accepted:
         reasons.append('acquisition fingerprint differs from registered identity; reconcile before reusing assessment')
-    if transition_kind == 'setup-to-raw' and previous != fingerprint and reviewed(remote):
-        reasons.append('setup-to-raw transition has existing review or result; reconcile before reusing assessment')
+    if transition_kind in ('setup-to-setup','setup-to-raw') and previous != fingerprint:
+        if reviewed(remote):
+            reasons.append(transition_kind+' transition has existing review or result; reconcile before reusing assessment')
+        if remote.get('RawPresent') or (remote.get('RawBytes') or 0) > 0:
+            reasons.append(transition_kind+' transition conflicts with previously registered raw data; reconcile before reusing assessment')
     return reasons
 
 
