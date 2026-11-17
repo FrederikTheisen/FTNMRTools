@@ -1,5 +1,6 @@
 """Bounded Bruker metadata observations; raw bytes never imply completeness."""
 from nmr_register.split import audit_is_derived_split
+from nmr_register.experiment_taxonomy import classify_pulse
 import hashlib
 import json
 import re
@@ -542,12 +543,13 @@ def observe(path):
         acquisition_pulse = parameters(text_file(path/'acqu')).get('PULPROG', '').strip('<> ')
         if acquisition_pulse and acquisition_pulse != pulse and pulse_type(acquisition_pulse) not in ('calibration', '1d', 'unknown'):
             errors.append(f'Pulse-program metadata conflict: acqus {pulse}; acqu {acquisition_pulse}; verify acquisition type')
-    if observed_type == 'hsqc':
-        # The evolved nucleus distinguishes carbon HSQC from nitrogen HSQC;
-        # a carbon decoupling channel or sample labelling alone does not.
-        indirect = parameters(text_file(path/'acqu2s')).get('NUC1','').strip('<> ').upper()
-        if indirect == '13C':
-            observed_type = '13c_hsqc'
+    indirect = parameters(text_file(path/'acqu2s')).get('NUC1','').strip('<> ').upper()
+    precise = classify_pulse(pulse, indirect)
+    legacy = {'HSQC':'hsqc', '13C HSQC':'13c_hsqc', 'T1':'r1', 'T2':'r2',
+              'T1rho':'r1rho', 'HetNOE':'noe', 'etaXY':'eta_xy',
+              'Water T1 (T1sat)':'water_t1sat', 'CPMG':'cpmg', '1D':'1d',
+              'HMBC':'hmbc', 'COSY':'cosy', 'NOESY':'noesy'}
+    observed_type = legacy.get(precise, precise) if precise else observed_type
     acquisition_records = [r for r in _AUDIT_RECORD.finditer(audit) if re.fullmatch(r'go[0-9]+', r[5].strip(), re.I)]
     latest = acquisition_records[-1][7].strip() if acquisition_records else ''
     uuids = re.findall(r"on data set with UUID '([0-9a-f-]{36})'", latest, re.I)

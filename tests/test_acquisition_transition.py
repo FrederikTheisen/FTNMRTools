@@ -156,7 +156,7 @@ class AcquisitionTransitionTests(unittest.TestCase):
         self.assertNotIn('Pulse-program metadata conflict', self.observation()['ScanError'])
         (self.path/'ser').write_bytes(b'fixture')
         conflict = self.observation()
-        self.assertEqual(conflict['ObservedType'], 'calibration')
+        self.assertEqual(conflict['ObservedType'], 'zg')
         self.assertIn('Pulse-program metadata conflict: acqus zg; acqu nico_nnh_tr_noSE; verify acquisition type', conflict['ScanError'])
         self.assertNotEqual(conflict['ObservedAcquisitionStatus'], 'Completed')
         (self.path/'acqu').write_text('##$PULPROG= <zg>\n')

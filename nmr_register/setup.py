@@ -1,6 +1,6 @@
 """Produce setup actions; caller must provide authenticated Grist transport."""
 import json
-from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA
+from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA
 
 # Reviewed one-time conversion from split observed/confirmed acquisition facts.
 LEGACY_OBSERVED_FACTS = {
@@ -349,7 +349,7 @@ def upgrade_acquisition_workflow_status(client, *, dry_run=True):
     if f.get('formula')!=wanted['EffectiveAcquisitionStatus']['formula']:actions.append(['UpdateRecord','_grist_Tables_column',effective['id'],{'formula':wanted['EffectiveAcquisitionStatus']['formula']}])
     old_attention=PRE_DUMMY_ATTENTION_FORMULA.replace('if $EffectiveAcquisitionStatus == "Aborted": issues.append("Acquisition aborted")\nif $EffectiveAcquisitionStatus == "Unknown": issues.append("Acquisition status unknown")', 'if $EffectiveAcquisitionStatus == "Stopped": issues.append("Acquisition stopped")').replace('$EffectiveAcquisitionStatus == "Completed"','$EffectiveAcquisitionStatus == "Finished"')
     attention=cols['AttentionReason']; f=attention['fields']
-    if not f.get('isFormula') or f.get('formula') not in (old_attention,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('Attention formula differs; review')
+    if not f.get('isFormula') or f.get('formula') not in (old_attention,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('Attention formula differs; review')
     if f.get('formula')!=ATTENTION_FORMULA:actions.append(['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':ATTENTION_FORMULA}])
     status=cols['AcquisitionStatus']; f=status['fields']
     if f.get('isFormula') or f.get('formula','') or f.get('type') not in ('Text','Choice'):raise ValueError('Stored status column differs; review')
@@ -460,7 +460,7 @@ def upgrade_sample_tag_schema(client):
     current_target=ATTENTION_FORMULA if 'AssessmentExplanation' in cols else LEGACY_QC_ATTENTION_FORMULA
     old=current_target.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')
     current=attention['fields'].get('formula','')
-    if current not in (old,current_target,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')):raise ValueError('AttentionReason formula requires review')
+    if current not in (old,current_target,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')):raise ValueError('AttentionReason formula requires review')
     if current!=current_target:actions.append(['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':current_target}])
     if actions:client.apply(actions)
     cols=metadata()
@@ -501,7 +501,7 @@ def upgrade_assessment_schema(client, reviewed=None):
     if af.get('type')!='Choice' or (not old_mode and (not af.get('isFormula') or af.get('formula') not in (ASSESSMENT_FORMULA, PRE_ANALYSIS_ASSESSMENT_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA))):
         raise ValueError('Assessment schema requires review')
     current_attention=attention['fields'].get('formula','')
-    if current_attention not in (LEGACY_QC_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('AttentionReason formula requires review')
+    if current_attention not in (LEGACY_QC_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('AttentionReason formula requires review')
     actions=[]
     for name in (*QC_CRITERIA,'AssessmentExplanation','ImportedAssessment','AssessmentDisplay'):
         spec=expected[name];existing=cols.get(name)
@@ -936,8 +936,8 @@ def build_layout(client, electrostatics_only=False):
             if (section_id,ref) not in current:
                 actions.append(['AddRecord','_grist_Filters',None,{'viewSectionRef':section_id,'colRef':ref,'filter':'{}','pinned':True}])
         if actions: client.apply(actions)
-    experiment_columns=['AcquiredAt','Folder','Instrument','AcquisitionStatus','ExperimentType','PulseProgram','Expno','Sample','Title','Assessment']
-    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','RegisteredAt','Series','Sample','Instrument','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
+    experiment_columns=['AcquiredAt','Folder','Instrument','AcquisitionStatus','ExperimentCategory','ExperimentType','PulseProgram','Expno','Sample','Title','Assessment']
+    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','RegisteredAt','Series','Sample','Instrument','ExperimentCategory','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
     sample_columns=['SampleID','Protein','Series','NaCl_mM','DNA_uM','TFE_pct','StorageRow','StorageColumn','Available']
     sample_detail=['SampleID','PreparedAt','Isotope','Protein','Construct','DistinguishingCondition','SampleNumber','Series','Buffer','pH','NaCl_mM','DNA_uM','TFE_pct','Protein_uM','OtherConditions','StorageRow','StorageColumn','Available','CurrentLocation','Notes']
     if not electrostatics_only:
@@ -1024,7 +1024,7 @@ def build_layout(client, electrostatics_only=False):
         filters=[r for r in client.records('_grist_Filters') if r['fields'].get('viewSectionRef')==coverage and r['fields'].get('colRef')==cols[(st,'Study')]]
         if not filters: client.apply([['AddRecord','_grist_Filters',None,{'viewSectionRef':coverage,'colRef':cols[(st,'Study')],'filter':json.dumps({'included':['Electrostatics']}),'pinned':False}]])
     fields(acquisitions,'Experiments',['EffectiveAcquiredAt','SnapshotSampleID','SourceLabel','EffectiveAcquisitionStatus','AnalysisDisplay','Assessment','ResultCSV'], {'EffectiveAcquiredAt':100,'SnapshotSampleID':210,'SourceLabel':230,'EffectiveAcquisitionStatus':100,'AnalysisDisplay':100,'Assessment':100,'ResultCSV':90})
-    fields(details,'Experiments',['Study','AcquiredAt','Sample','SnapshotSampleID','ExperimentType','SourceID','Folder','Expno','AcquisitionStatus','ObservedAcquisitionEvidence','AnalysisStatus','Assessment','AssessmentReason','ResultCSV','AttentionReason','SnapshotConstruct','SnapshotIsotope','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Instrument','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','Notes'])
+    fields(details,'Experiments',['Study','AcquiredAt','Sample','SnapshotSampleID','ExperimentCategory','ExperimentType','SourceID','Folder','Expno','AcquisitionStatus','ObservedAcquisitionEvidence','AnalysisStatus','Assessment','AssessmentReason','ResultCSV','AttentionReason','SnapshotConstruct','SnapshotIsotope','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Instrument','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','Notes'])
     pins(acquisitions,'Experiments',['EffectiveType','Assessment'])
     if electrostatics_only:
         # Add the two editable human fields to the existing experiment detail
@@ -1315,7 +1315,7 @@ def apply_experiments_ui(client,doc_id):
             if original_field != field_options:
                 actions.append(['UpdateRecord','_grist_Views_section_field',field['id'],{'widgetOptions':json.dumps(field_options)}])
     if actions: client.apply(actions)
-    visible=['Assessment','AcquiredAt','Folder','Expno','Sample','Instrument','EffectiveAcquisitionStatus','ExperimentType','PulseProgram','Title']
+    visible=['Assessment','AcquiredAt','Folder','Expno','Sample','Instrument','EffectiveAcquisitionStatus','ExperimentCategory','ExperimentType','PulseProgram','Title']
     call('grist_set_widget_fields',widget_id=grid,column_ids=visible)
     for name,width in (('AcquiredAt',95),('Folder',220),('Instrument',95),('EffectiveAcquisitionStatus',95),('ExperimentType',85),('PulseProgram',150),('Expno',65),('Sample',200),('Title',210),('Assessment',110)):
         call('grist_update_widget_field',widget_id=grid,column_id=name,options={'width':width})
@@ -1374,4 +1374,73 @@ def apply_completion_ui(client):
         if views.get(f.get('parentId'))=='Electrostatics' and f.get('title')=='Condition coverage' and f.get('description')==old:
             actions.append(['UpdateRecord','_grist_Views_section',section['id'],{'description':new}])
     if actions:client.apply(actions)
+    return actions
+
+
+def upgrade_experiment_taxonomy(client, apply=False):
+    """Upgrade shipped experiment metadata without replacing custom formulas or layouts."""
+    from .schema import columns, ATTENTION_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA
+    tables = [r for r in client.records('_grist_Tables') if r['fields'].get('tableId') == 'Experiments']
+    if len(tables) != 1: raise ValueError('Experiments table missing or ambiguous')
+    tid = tables[0]['id']
+    rows = [r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId') == tid]
+    existing = {r['fields'].get('colId'): r for r in rows}
+    wanted = {c['id']: c for c in columns()['Experiments']}
+    actions = []
+    category = existing.get('ExperimentCategory')
+    target = wanted['ExperimentCategory']
+    if not category:
+        actions.append(['AddColumn', 'Experiments', 'ExperimentCategory', {k:v for k,v in target.items() if k != 'id'}])
+    elif any(category['fields'].get(k) != target[k] for k in ('type', 'isFormula', 'formula')):
+        raise ValueError('ExperimentCategory requires review')
+    for name in ('ExperimentType', 'EffectiveType'):
+        row = existing.get(name)
+        if not row: raise ValueError(name + ' missing')
+        f = row['fields']
+        if name == 'EffectiveType' and (not f.get('isFormula') or f.get('formula') != '$ExperimentType'):
+            raise ValueError('EffectiveType requires review')
+        if f.get('label') in (None, '', name, 'Type', 'ExperimentType', 'Experiment'):
+            update = {}
+            if f.get('label') != 'Experiment': update['label'] = 'Experiment'
+            if not f.get('untieColIdFromLabel'): update['untieColIdFromLabel'] = True
+            if update: actions.append(['UpdateRecord', '_grist_Tables_column', row['id'], update])
+    attention = existing.get('AttentionReason')
+    if not attention or not attention['fields'].get('isFormula'):
+        raise ValueError('AttentionReason requires review')
+    current = attention['fields'].get('formula')
+    if current not in (PRE_CATEGORY_ATTENTION_FORMULA, ATTENTION_FORMULA):
+        raise ValueError('AttentionReason formula requires review')
+    if current != ATTENTION_FORMULA:
+        actions.append(['UpdateRecord', '_grist_Tables_column', attention['id'], {'formula': ATTENTION_FORMULA}])
+    if apply and actions: client.apply(actions)
+    return actions
+
+
+def show_experiment_category(client, apply=False):
+    """Add the category to existing main and attention views without resetting layouts."""
+    tables = [r for r in client.records('_grist_Tables') if r['fields'].get('tableId') == 'Experiments']
+    if len(tables) != 1: raise ValueError('Experiments table missing or ambiguous')
+    tid = tables[0]['id']
+    cols = [r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId') == tid]
+    categories = [r for r in cols if r['fields'].get('colId') == 'ExperimentCategory']
+    if len(categories) != 1: raise ValueError('ExperimentCategory missing or ambiguous')
+    category_id = categories[0]['id']
+    experiment_ids = {r['id'] for r in cols if r['fields'].get('colId') in ('ExperimentType', 'EffectiveType')}
+    views = {r['id']:r['fields'].get('name') for r in client.records('_grist_Views')}
+    targets = {('Experiments','Experiments'), ('Experiments','Experiment details'), ('Needs attention','Needs attention'), ('Needs attention','Attention details')}
+    sections = [r for r in client.records('_grist_Views_section') if r['fields'].get('tableRef') == tid and (views.get(r['fields'].get('parentId')), r['fields'].get('title')) in targets]
+    fields = client.records('_grist_Views_section_field')
+    actions = []
+    for section in sections:
+        current = [r for r in fields if r['fields'].get('parentId') == section['id']]
+        if not any(r['fields'].get('colRef') == category_id for r in current):
+            positions = [r['fields'].get('parentPos') or 0 for r in current if r['fields'].get('colRef') in experiment_ids]
+            if positions:
+                following = min(positions)
+                previous = [r['fields'].get('parentPos') or 0 for r in current if (r['fields'].get('parentPos') or 0) < following]
+                pos = (max(previous) + following) / 2 if previous else following - 1
+            else:
+                pos = max([r['fields'].get('parentPos') or 0 for r in current] + [0]) + 1
+            actions.append(['AddRecord', '_grist_Views_section_field', None, {'parentId':section['id'], 'colRef':category_id, 'parentPos':pos, 'width':120}])
+    if apply and actions: client.apply(actions)
     return actions

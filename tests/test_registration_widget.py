@@ -117,6 +117,19 @@ class WidgetTests(unittest.TestCase):
         self.assertIn("tables.Experiments.map(r=>r[name])",html)
         self.assertNotIn("tables.Experiments.flatMap(r=>[r[name],r[observed]])",html)
 
+    def test_category_filters_shared_choices_without_becoming_stored_input(self):
+        from nmr_register.experiment_taxonomy import experiment_choices_by_category
+        import json
+        html=registration_html('experiment')
+        self.assertIn('const experimentChoices='+json.dumps(experiment_choices_by_category(),ensure_ascii=False),html)
+        self.assertIn("field('experiment','ExperimentCategory','Experiment type','select'",html)
+        self.assertIn("field('experiment','ExperimentType','Experiment')",html)
+        fields=experiment_actions({'ExperimentCategory':'Assignment','ExperimentType':'custom experiment',
+                                  'PulseProgram':'BT_custom+'},self.tables,now=123)['actions'][0][3]
+        self.assertNotIn('ExperimentCategory',fields)
+        self.assertEqual(fields['ExperimentType'],'custom experiment')
+        self.assertEqual(fields['PulseProgram'],'BT_custom+')
+
     def test_linked_experiment_omits_snapshot_so_native_trigger_copies(self):
         self.tables['Series']=[{'id':2,'SeriesID':'S'}]
         self.tables['Samples']=[{'id':5,'SampleID':'tube','Series':2,'DNA_uM':0}]

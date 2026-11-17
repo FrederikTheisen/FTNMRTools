@@ -73,7 +73,7 @@ function message(text,error=false){$('message').textContent=text;$('message').cl
 function render(){
  $('empty').hidden=Boolean(current);$('card').hidden=!current;if(!current)return;
  $('experiment').textContent=[current.SnapshotSampleID||'Sample unassigned',current.ExperimentType||'Experiment'].join(' · ');
- $('source').textContent=[current.Folder,current.Expno].filter(Boolean).join(' / ')+([current.Instrument,current.EffectiveAcquisitionStatus||'Unknown'].filter(Boolean).length?' · '+[current.Instrument,current.EffectiveAcquisitionStatus||'Unknown'].filter(Boolean).join(' · '):'');
+ $('source').textContent=[current.Folder,current.Expno].filter(Boolean).join(' / ')+([current.ExperimentCategory,current.Instrument,current.EffectiveAcquisitionStatus||'Unknown'].filter(Boolean).length?' · '+[current.ExperimentCategory,current.Instrument,current.EffectiveAcquisitionStatus||'Unknown'].filter(Boolean).join(' · '):'');
  const field=Number(current.Field_MHz),salt=current.SnapshotNaCl_mM,date=current.AcquiredAt;let day='';
  if(date){const parsed=new Date(typeof date==='number'?date*1000:date);if(Number.isFinite(parsed.getTime()))day=parsed.toISOString().slice(0,10);}
  if(!day)day=String(current.AcquisitionDateText||'').trim();
@@ -82,7 +82,7 @@ function render(){
  const evidence=['ReconciliationReason','MetadataDifference','ObservedAcquisitionEvidence','TitleSource'].filter(k=>current[k]).map(k=>String(current[k]));$('warnings').hidden=!evidence.length;$('evidence').textContent=evidence.join(' · ');
  $('decision').textContent=current.AssessmentDisplay||current.Assessment||'Assessment incomplete';$('decision').className='decision '+AssessmentCard.decisionTone(current);
  $('explanation').textContent=current.AssessmentExplanation||'Rate each criterion explicitly; the overall decision is calculated from the saved ratings.';
- for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key],choices=AssessmentCard.choicesFor(key,current);select.replaceChildren();for(const choice of choices){const option=el('option',AssessmentCard.choiceLabel(key,choice,current));option.value=choice;select.append(option);}if(!choices.includes(value)){const option=el('option','Saved rating (unavailable for this experiment type): '+AssessmentCard.choiceLabel(key,value,current));option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
+ for(const [key]of AssessmentCard.criteria){const select=$(key),value=draft[key],choices=AssessmentCard.choicesFor(key,current);select.replaceChildren();for(const choice of choices){const option=el('option',AssessmentCard.choiceLabel(key,choice,current));option.value=choice;select.append(option);}if(!choices.includes(value)){const option=el('option','Saved rating (unavailable for this experiment): '+AssessmentCard.choiceLabel(key,value,current));option.value=value;select.append(option);}select.value=value;select.className=AssessmentCard.tone(key,value);select.disabled=busy;}
  $('analysisHelp').hidden=!AssessmentCard.relaxationType(current.ExperimentType);
  $('note').value=draft.AssessmentReason;$('note').disabled=busy;
  $('save').disabled=busy||!SECTION_ID||!dirty();$('discard').disabled=busy||(!dirty()&&pending===undefined);

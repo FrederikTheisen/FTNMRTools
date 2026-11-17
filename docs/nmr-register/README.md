@@ -28,13 +28,12 @@ Workbook typos and duplicate rows alone do not block an identified acquisition.
 Preserve current human assessments and frozen conditions; retain genuine sample,
 source-identity and assessment conflicts for review.
 
-The 2026-11-04 desktop scan found 1,081 acquisitions; all have linked Grist
-records. Reviewed migrations reconciled 79 duplicate workbook entries with
-those linked records, preserving their assessments, notes and sample links.
-After the 2026-11-05 cleanup, the register contains 1,128 experiment records,
-including 47 unlinked workbook entries. Their `MigrationIssue` begins with a specific action shown
-in Needs attention. These are unresolved workbook identities or conflicts,
-not a hidden set of desktop acquisitions waiting for import.
+The 2026-11-17 desktop scan found 1,097 acquisitions; all have linked Grist
+records. The latest reconciliation merged 28 duplicate workbook entries,
+preserving notes, sample links, selected assessments and attachments. The register
+contains 1,122 experiment records, including 15 unlinked workbook entries.
+Those entries need acquisition identity or intent clarified; an old workbook
+"Not Run" or "Planned" label does not establish that an acquisition never ran.
 
 Keep using Grist for samples, registration and assessments. For new instrument
 data, copy the complete experiment folders into the configured desktop data
@@ -51,6 +50,22 @@ block a merge. The compact operational report is
 `~/.local/share/nmr-register/migration-reconciliation.json`; Grist remains the
 working register. Full backups and internally stored attachment bytes were
 verified by a restore after this pass.
+
+## Experiment types
+
+The register uses three levels: **Experiment type → Experiment → Pulse program**.
+Types are Relaxation, HSQC, Assignment, Calibration, 1D and Other. The type is
+calculated from the precise experiment; for example, Relaxation → T1, or
+Assignment → HNCACB. BEST and TROSY variants share the corresponding experiment
+while retaining their exact raw pulse names. HSQC remains the nitrogen experiment;
+carbon HSQC is separate as 13C HSQC. Custom experiment names are accepted and
+unrecognised families appear under Other.
+
+Registration filters experiment suggestions by type. The main list has separate
+native filters for type and experiment, with Calibration and 1D hidden by default.
+The stored `ExperimentType` column still contains the precise experiment name;
+`ExperimentCategory` is the new calculated type. Existing API consumers therefore
+keep their column identifiers.
 
 ## Daily use
 

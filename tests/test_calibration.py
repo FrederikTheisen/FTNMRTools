@@ -24,8 +24,8 @@ class CalibrationTests(unittest.TestCase):
         exec('def run(fields):\n'+''.join('    '+line+'\n' for line in source.splitlines()),namespace)
         fields={'Study':'Electrostatics','AcquisitionStatus':'Completed','EffectiveAcquisitionStatus':'Completed','EffectiveAcquiredAt':now-timedelta(days=2),'RegisteredAt':now,'Sample':1}
         self.assertIn('unassessed',namespace['run'](fields))
-        self.assertEqual(namespace['run']({**fields,'ExperimentType':'Calibration'}),'')
-        reason=namespace['run']({**fields,'ExperimentType':'Calibration','Sample':0,'ReconciliationReason':'identity conflict','ScanError':'scan failed'})
+        self.assertEqual(namespace['run']({**fields,'ExperimentCategory':'Calibration'}),'')
+        reason=namespace['run']({**fields,'ExperimentCategory':'Calibration','Sample':0,'ReconciliationReason':'identity conflict','ScanError':'scan failed'})
         for text in ('Sample not assigned','identity conflict','scan failed'):self.assertIn(text,reason)
         self.assertNotIn('unassessed',reason)
         self.assertEqual(namespace['run']({'AcquisitionStatus':'Dummy'}),'')

@@ -92,6 +92,20 @@ class TypeFilterTests(unittest.TestCase):
         self.assertEqual((fields['viewSectionRef'], fields['colRef'], fields['pinned']), (22, 58, True))
         self.assertEqual(configure_experiment_type_filter(client, apply=True)['actions'], [])
 
+    def test_category_and_precise_filters_preserve_separate_custom_restrictions(self):
+        client = Client({'excluded': ['NOESY'], 'extra': 'keep'})
+        client.data['_grist_Tables_column'].append(
+            {'id': 101, 'fields': {'parentId': 1, 'colId': 'ExperimentCategory'}})
+        client.data['_grist_Filters'].append(
+            {'id': 38, 'fields': {'viewSectionRef': 22, 'colRef': 101,
+                                  'filter': '{"excluded":["Other"]}', 'pinned': False}})
+        configure_experiment_type_filter(client, apply=True)
+        by_col = {r['fields']['colRef']:r['fields'] for r in client.data['_grist_Filters']}
+        self.assertEqual(json.loads(by_col[58]['filter']), {'excluded':['NOESY','1D'],'extra':'keep'})
+        self.assertEqual(json.loads(by_col[101]['filter']), {'excluded':['Other','Calibration']})
+        self.assertTrue(all(row['pinned'] for row in by_col.values()))
+        self.assertEqual(configure_experiment_type_filter(client)['actions'], [])
+
     def test_rejects_ambiguous_or_linked_configuration(self):
         client = Client({'included': ['T1'], 'excluded': ['Other']})
         with self.assertRaises(ValueError):

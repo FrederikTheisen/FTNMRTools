@@ -23,7 +23,7 @@ class SchemaTests(unittest.TestCase):
         namespace={}
         exec('def evaluate(fields,NOW):\n'+''.join('    '+line+'\n' for line in source.splitlines()),namespace)
         now=datetime(2026,1,3,tzinfo=timezone.utc)
-        base=dict(Study='Electrostatics',ExperimentType='',MigrationIssue='',SampleTagIssue='',AssessmentExplanation='',ReconciliationReason='',MetadataDifference='',ScanError='',RegisteredAt=1,Sample=1,
+        base=dict(Study='Electrostatics',ExperimentCategory='Other',ExperimentType='',MigrationIssue='',SampleTagIssue='',AssessmentExplanation='',ReconciliationReason='',MetadataDifference='',ScanError='',RegisteredAt=1,Sample=1,
                   Assessment='',AssessmentDisplay='Not assessed',AssessmentReason='',RawPresent=False,AcquisitionStatus='',EffectiveAcquisitionStatus='Completed',
                   EffectiveAcquiredAt=now-timedelta(days=2))
         check=lambda **updates: namespace['evaluate']({**base,**updates},lambda:now)

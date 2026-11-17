@@ -9,7 +9,14 @@ from nmr_register.schema import (
     PRE_COMPACT_ASSESSMENT_DISPLAY_FORMULA,
 )
 from nmr_register.setup import upgrade_assessment_schema
-from tests.test_assessment_schema import Fake, formula
+from tests.test_assessment_schema import Fake, formula as evaluate_formula
+from nmr_register.experiment_taxonomy import category
+
+
+def formula(source, values):
+    values = dict(values)
+    values.setdefault("ExperimentCategory", category(values.get("ExperimentType"), values.get("PulseProgram", "")))
+    return evaluate_formula(source, values)
 
 
 class PartialAssessmentTests(unittest.TestCase):
@@ -95,6 +102,8 @@ class PartialAssessmentTests(unittest.TestCase):
         values['AssessmentDisplay'] = 'Not assessed'
         self.assertEqual(formula(source, values), 'Acquired over 24 hours ago; unassessed')
         values.update(AssessmentDisplay='Use so far · analysis missing', ExperimentType='Calibration')
+        self.assertEqual(formula(source, values), '')
+        values['ExperimentType'] = '15N calibration'
         self.assertEqual(formula(source, values), '')
         values.update(ExperimentType='Relaxation', AcquisitionStatus='Dummy')
         self.assertEqual(formula(source, values), '')

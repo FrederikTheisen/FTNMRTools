@@ -1,6 +1,6 @@
 """Guarded Dummy schema upgrade and native experiment presentation."""
 import json
-from .schema import columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA
+from .schema import columns, PRE_CATEGORY_ATTENTION_FORMULA, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA
 from .setup import _mcp
 
 ROW_STYLES = (
@@ -20,7 +20,7 @@ def upgrade_dummy_schema(client, apply=False):
     actions=[]
     for name,previous in [('AttentionReason',PRE_DUMMY_ATTENTION_FORMULA),('EffectiveAcquisitionStatus',PRE_DUMMY_EFFECTIVE_FORMULA)]:
         current=existing[name]; fields=current['fields'];target=wanted[name]['formula']
-        if not fields.get('isFormula') or fields.get('formula') not in ((previous,target,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA) if name=='AttentionReason' else (previous,target)): raise ValueError(name+' formula requires review')
+        if not fields.get('isFormula') or fields.get('formula') not in ((previous,target,PRE_CATEGORY_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA) if name=='AttentionReason' else (previous,target)): raise ValueError(name+' formula requires review')
         if fields['formula']!=target:actions.append(['ModifyColumn','Experiments',name,{'formula':target}])
     status=existing['AcquisitionStatus']['fields']
     if status.get('isFormula') or status.get('formula') or status.get('type') not in ('Text','Choice'):raise ValueError('AcquisitionStatus requires review')
@@ -120,7 +120,7 @@ def display_partial_assessment(client, apply=False):
 
 
 def configure_experiment_type_filter(client, apply=False):
-    """Pin the main grid's native type filter and hide calibration / 1D."""
+    """Pin the broad experiment type filter and hide calibration / 1D."""
     def one(rows, message):
         if len(rows) != 1:
             raise ValueError(message)
@@ -143,10 +143,17 @@ def configure_experiment_type_filter(client, apply=False):
            ('linkSrcSectionRef', 'linkSrcColRef', 'linkTargetColRef')):
         raise ValueError('Experiment grid is linked; review before configuring filter')
     columns = client.records('_grist_Tables_column')
-    col = one([r for r in columns
-               if r['fields'].get('parentId') == tid
-               and r['fields'].get('colId') == 'ExperimentType'],
-              'Experiment type column missing or ambiguous')
+    category_columns = [r for r in columns if r['fields'].get('parentId') == tid
+                        and r['fields'].get('colId') == 'ExperimentCategory']
+    precise = one([r for r in columns if r['fields'].get('parentId') == tid
+                   and r['fields'].get('colId') == 'ExperimentType'],
+                  'Experiment column missing or ambiguous')
+    if category_columns:
+        broad = one(category_columns, 'Experiment type column ambiguous')
+        targets = [(broad, ('Calibration',)), (precise, ('1D',))]
+    else:
+        # Pre-taxonomy documents retain their previous native filter behavior.
+        targets = [(precise, ('Calibration', '1D'))]
     all_filters = client.records('_grist_Filters')
     aliases = [r for r in columns
                if r['fields'].get('parentId') == tid
@@ -164,41 +171,43 @@ def configure_experiment_type_filter(client, apply=False):
                 raise ValueError('Legacy experiment type filter requires review') from None
             if condition not in ({}, {'excluded': []}):
                 raise ValueError('Legacy experiment type filter has restrictions; review before removing')
-    filters = [r for r in all_filters
-               if r['fields'].get('viewSectionRef') == grid['id']
-               and r['fields'].get('colRef') == col['id']]
-    if len(filters) > 1:
-        raise ValueError('Experiment type filter ambiguous')
-    try:
-        current = json.loads(filters[0]['fields'].get('filter') or '{}') if filters else {}
-    except (TypeError, ValueError):
-        raise ValueError('Invalid experiment type filter') from None
-    if not isinstance(current, dict) or ('included' in current and 'excluded' in current):
-        raise ValueError('Experiment type filter requires review')
-    for key in ('included', 'excluded'):
-        if key in current and (not isinstance(current[key], list)
-                               or any(not isinstance(x, str) for x in current[key])):
-            raise ValueError('Experiment type filter requires review')
-    target = dict(current)
-    hidden = ('Calibration', '1D')
-    if 'included' in target:
-        target['included'] = [x for x in target['included'] if x not in hidden]
-    else:
-        excluded = list(target.get('excluded', []))
-        target['excluded'] = excluded + [x for x in hidden if x not in excluded]
     actions = [['RemoveRecord', '_grist_Filters', r['id']] for r in alias_filters]
-    if filters:
-        updates = {}
-        if target != current:
-            updates['filter'] = json.dumps(target, separators=(',', ':'))
-        if not filters[0]['fields'].get('pinned'):
-            updates['pinned'] = True
-        if updates:
-            actions.append(['UpdateRecord', '_grist_Filters', filters[0]['id'], updates])
-    else:
-        actions.append(['AddRecord', '_grist_Filters', None,
-                        {'viewSectionRef': grid['id'], 'colRef': col['id'],
-                         'filter': json.dumps(target, separators=(',', ':')), 'pinned': True}])
+    filter_values = {}
+    for col, hidden in targets:
+        filters = [r for r in all_filters
+                   if r['fields'].get('viewSectionRef') == grid['id']
+                   and r['fields'].get('colRef') == col['id']]
+        if len(filters) > 1:
+            raise ValueError('Experiment type filter ambiguous')
+        try:
+            current = json.loads(filters[0]['fields'].get('filter') or '{}') if filters else {}
+        except (TypeError, ValueError):
+            raise ValueError('Invalid experiment type filter') from None
+        if not isinstance(current, dict) or ('included' in current and 'excluded' in current):
+            raise ValueError('Experiment type filter requires review')
+        for key in ('included', 'excluded'):
+            if key in current and (not isinstance(current[key], list)
+                                   or any(not isinstance(x, str) for x in current[key])):
+                raise ValueError('Experiment type filter requires review')
+        target = dict(current)
+        if 'included' in target:
+            target['included'] = [x for x in target['included'] if x not in hidden]
+        else:
+            excluded = list(target.get('excluded', []))
+            target['excluded'] = excluded + [x for x in hidden if x not in excluded]
+        if filters:
+            updates = {}
+            if target != current:
+                updates['filter'] = json.dumps(target, separators=(',', ':'))
+            if not filters[0]['fields'].get('pinned'):
+                updates['pinned'] = True
+            if updates:
+                actions.append(['UpdateRecord', '_grist_Filters', filters[0]['id'], updates])
+        else:
+            actions.append(['AddRecord', '_grist_Filters', None,
+                            {'viewSectionRef': grid['id'], 'colRef': col['id'],
+                             'filter': json.dumps(target, separators=(',', ':')), 'pinned': True}])
+        filter_values[col['fields']['colId']] = target
     if apply and actions:
         client.apply(actions)
-    return {'page': view['id'], 'grid': grid['id'], 'filter_value': target, 'actions': actions}
+    return {'page': view['id'], 'grid': grid['id'], 'filter_value': filter_values.get('ExperimentCategory', target), 'filter_values': filter_values, 'actions': actions}

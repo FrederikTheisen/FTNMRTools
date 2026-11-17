@@ -9,6 +9,7 @@ import json
 import math
 import re
 from nmr_register.storage_widget import RACK_CSS, RACK_JS
+from nmr_register.experiment_taxonomy import experiment_choices_by_category
 
 NUMERIC_RULES = {'pH': [0,14], 'NaCl_mM':[0,None], 'DNA_uM':[0,None],
                  'TFE_pct':[0,100], 'Protein_uM':[0,None]}
@@ -414,7 +415,20 @@ controls.VaryValues.addEventListener('input',refreshRack);
 controls.mode.addEventListener('change',refreshRack);
 field('experiment','ProteinFilter','Filter samples by protein','select',[['','All proteins']]);field('experiment','IncludeUnavailable','Include dead samples','checkbox');
 field('experiment','Sample','Physical sample','select',[['','Not assigned yet']]);field('experiment','Acquired','Acquisition: YYYY-MM-DD or YYYY-MM');
-for(const [name,label]of [['SourceID','Source ID'],['Folder','Acquisition folder'],['Expno','Experiment number'],['Instrument','Instrument'],['ExperimentType','Experiment type'],['PulseProgram','Pulse program']])field('experiment',name,label);
+for(const [name,label]of [['SourceID','Source ID'],['Folder','Acquisition folder'],['Expno','Experiment number'],['Instrument','Instrument']])field('experiment',name,label);
+const experimentChoices=/*EXPERIMENT_CHOICES*/;
+field('experiment','ExperimentCategory','Experiment type','select',[['','All experiment types'],...Object.keys(experimentChoices).map(value=>[value,value])]);
+field('experiment','ExperimentType','Experiment').placeholder='Choose an experiment or enter a custom name';
+field('experiment','PulseProgram','Pulse program (optional)');
+const experimentList=document.createElement('datalist');experimentList.id='experimentChoices';byId('experiment').append(experimentList);controls.ExperimentType.setAttribute('list',experimentList.id);
+function refreshExperimentChoices(){
+ const selected=controls.ExperimentCategory.value;
+ const choices=selected?experimentChoices[selected]:Object.values(experimentChoices).flat();
+ experimentList.replaceChildren();for(const value of choices){const option=document.createElement('option');option.value=value;experimentList.append(option);}
+}
+controls.ExperimentCategory.addEventListener('change',refreshExperimentChoices);refreshExperimentChoices();
+hint('ExperimentType','Custom experiment names are retained. The experiment type is calculated from the saved experiment.');
+hint('PulseProgram','Optional raw acquisition pulse name; no pulse is assigned automatically.');
 field('experiment','AcquisitionStatus','Entry status','select',[['Planned','Planned'],['Dummy','Dummy entry']]);field('experiment','Study','Study','select',[['','Unclassified'],['Electrostatics','Electrostatics'],['DNA','DNA'],['TFE','TFE'],['Other','Other']]);field('experiment','AnalysisStatus','Analysis status','select',[['','Not recorded'],['Not started','Not started'],['In progress','In progress'],['Analyzed','Analyzed']]);controls.SourceID.value='nmrdata';field('experiment','Field_MHz','Field (MHz)','number');field('experiment','Temperature_C','Temperature (°C)','number');field('experiment','D1_s','D1 (s)','number');field('experiment','DelayList_s','Delay list (s)');field('experiment','SpinLock_Hz','Spin-lock field (Hz)','number');field('experiment','SpinLockOffset_Hz','Spin-lock offset (Hz)','number');field('experiment','Notes','Notes','textarea');
 // Protein suggestions preserve existing names. Protocol defaults use only
 // human-confirmed pairs; ambiguity or a nonblank destination leaves entries alone.
@@ -426,6 +440,8 @@ for(const name of ['Protein','Instrument','PulseProgram']){
 function refreshProtocolSuggestions(){
  for(const name of ['Protein','Instrument','PulseProgram']){
   const values=name==='Protein'?NMRRegistration.proteinSuggestions(tables):[...new Set(tables.Experiments.map(r=>r[name]).filter(v=>typeof v==='string'&&v.trim()))].sort();
+  const matching=name==='PulseProgram'&&controls.ExperimentType.value.trim()?new Set(tables.Experiments.filter(r=>r.ExperimentType===controls.ExperimentType.value.trim()).map(r=>r.PulseProgram)):null;
+  if(matching?.size)values.sort((a,b)=>Number(matching.has(b))-Number(matching.has(a))||a.localeCompare(b));
   suggestions[name].replaceChildren();for(const value of values){const option=document.createElement('option');option.value=value;suggestions[name].append(option);}
  }
 }
@@ -447,6 +463,7 @@ function fillUnique(source,target){
  if(next)automaticDefaults[target]=next;else delete automaticDefaults[target];
 }
 controls.PulseProgram.addEventListener('change',()=>fillUnique('PulseProgram','ExperimentType'));
+controls.ExperimentType.addEventListener('input',refreshProtocolSuggestions);
 controls.Instrument.addEventListener('change',()=>fillUnique('Instrument','Field_MHz'));
 function message(text,error=false){const output=byId('message');output.setAttribute('role',error?'alert':'status');output.textContent=text;output.classList.toggle('error',error);if(error)output.scrollIntoView({block:'nearest'});}
 byId('form').addEventListener('invalid',event=>{const name=event.target.name,label=groups[name]?.firstChild?.textContent||name||'Field';message(label+': '+event.target.validationMessage,true);},true);
@@ -475,4 +492,4 @@ modeChanged();refreshChoices().then(()=>{refreshRack();message('Ready.');}).catc
 def registration_html(default_mode='sample'):
     if default_mode not in ('sample','bulk','experiment'): raise ValueError('Unknown registration mode')
     return (HTML.replace('/*LOGIC*/',JS_LOGIC).replace('/*RACK_JS*/',RACK_JS)
-        .replace('/*RACK_CSS*/',RACK_CSS).replace('/*MODE*/',json.dumps(default_mode)))
+        .replace('/*EXPERIMENT_CHOICES*/',json.dumps(experiment_choices_by_category(),ensure_ascii=False)).replace('/*RACK_CSS*/',RACK_CSS).replace('/*MODE*/',json.dumps(default_mode)))

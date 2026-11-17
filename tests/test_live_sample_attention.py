@@ -46,7 +46,7 @@ class LiveSampleAttentionTests(unittest.TestCase):
         values=dict(self.base,MigrationIssue='Sample link unresolved: old',Assessment='',Study='DNA',AssessmentDisplay='Use so far',EffectiveAcquiredAt=now-timedelta(days=2),now=now)
         self.assertEqual(formula(source,values),'Acquired over 24 hours ago; Use so far')
         self.assertEqual(formula(source,dict(values,Study='')),'')
-        self.assertEqual(formula(source,dict(values,ExperimentType='Calibration')),'')
+        self.assertEqual(formula(source,dict(values,ExperimentCategory='Calibration')),'')
         self.assertEqual(formula(source,dict(values,AcquisitionStatus='Dummy',SampleTagIssue='mismatch')),'')
 
     def test_previous_formula_guard_upgrades_once_without_data_writes(self):

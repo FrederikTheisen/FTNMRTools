@@ -34,7 +34,7 @@ class StudyAssessmentAttentionTests(unittest.TestCase):
                                    ({'ReconciliationReason':'identity conflict'},'identity conflict'),
                                    ({'EffectiveAcquisitionStatus':'Aborted'},'Acquisition aborted')]:
                 self.assertEqual(formula(self.source,dict(base,**changes)),wanted)
-        self.assertEqual(formula(self.source,dict(self.values,Study='DNA',ExperimentType='Calibration')), '')
+        self.assertEqual(formula(self.source,dict(self.values,Study='DNA',ExperimentCategory='Calibration')), '')
         self.assertEqual(formula(self.source,dict(self.values,Study='DNA',AcquisitionStatus='Dummy')), '')
 
     def test_previous_attention_upgrades_without_data_changes(self):

@@ -1,5 +1,6 @@
 """Register schema and ownership contract, expressed as Grist user actions."""
 import json
+from .experiment_taxonomy import canonical_experiment, category_formula
 
 CONDITIONS = {'Protein':'Text', 'Construct':'Text', 'Isotope':'Text', 'Buffer':'Text', 'pH':'Numeric',
               'NaCl_mM':'Numeric', 'DNA_uM':'Numeric', 'TFE_pct':'Numeric',
@@ -13,15 +14,9 @@ MACHINE_FIELDS = {'Experiments': CANONICAL_ACQUISITION_FIELDS | frozenset(('Acqu
     'ScanStatus': frozenset(('Scanner','LastScanAt','LastSyncAt','LastError','ScannedRoot'))}
 def canonical_experiment_type(value):
     """Human-readable labels for known instrument classifications; unknown stays unset."""
-    if not isinstance(value,str):return None
-    normalized=''.join(ch for ch in value.lower() if ch not in ' _-\t\r\n')
-    return {'1d':'1D','r1':'T1','t1':'T1','15nt1':'T1','r1rho':'T1rho','t1rho':'T1rho','t1ρ':'T1rho',
-            'noe':'HetNOE','hetnoe':'HetNOE','heteronuclearnoe':'HetNOE',
-            'hsqc':'HSQC','15nhsqc':'HSQC','13chsqc':'13C HSQC','r2':'T2','t2':'T2','etaxy':'etaXY','ηxy':'etaXY',
-            'watert1sat':'Water T1 (T1sat)','t1sat':'Water T1 (T1sat)',
-            'nicot1sat':'Water T1 (T1sat)','watert1(t1sat)':'Water T1 (T1sat)',
-            'watert1':'Water T1 (T1sat)','cpmg':'CPMG','hmbc':'HMBC',
-            'cosy':'COSY','noesy':'NOESY','calibration':'Calibration'}.get(normalized)
+    result = canonical_experiment(value)
+    from .experiment_taxonomy import category
+    return result if result and (category(result) != 'Other' or result in ('HMBC', 'COSY', 'NOESY')) else None
 
 SOURCE_LABEL_FORMULA = """def text(value): return str(value).strip() if value is not None else ""
 hf, he, hs = text($Folder), text($Expno), text($SourceID)
@@ -274,6 +269,9 @@ if migration_issue: issues.append(migration_issue)''')
 PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA = ATTENTION_FORMULA
 ATTENTION_FORMULA = ATTENTION_FORMULA.replace('if $Sample and migration_issue:', 'if migration_issue:')
 
+PRE_CATEGORY_ATTENTION_FORMULA = ATTENTION_FORMULA
+ATTENTION_FORMULA = ATTENTION_FORMULA.replace('$ExperimentType != "Calibration"', '$ExperimentCategory != "Calibration"')
+
 LEGACY_QC_ATTENTION_FORMULA = PRE_DUMMY_ATTENTION_FORMULA.replace(
     ' and not ($AssessmentExplanation or "").strip()', '')
 
@@ -336,7 +334,8 @@ def columns():
         col('RawPresent','Bool'),col('RawBytes','Numeric'),col('TransferStable','Bool'),col('ScanError'),
         col('ObservedSampleID',label='Observed sample tag'),col('ObservedSampleTagEvidence',label='Sample tag source'),col('ObservedSampleTagIssue'),
         col('LastChangedAt','DateTime'),col('ObservedFingerprint'),col('ReconciliationReason'),col('MetadataDifference'),col('ResultCSV','Attachments'),col('ResultSHA256'),col('ResultSourcePath'),
-        col('SourceID'),col('Folder'),col('Expno'),col('Instrument'),col('ExperimentType'),
+        col('SourceID'),col('Folder'),col('Expno'),col('Instrument'),col('ExperimentType',label='Experiment',untieColIdFromLabel=True),
+        col('ExperimentCategory','Choice',category_formula(),True,label='Experiment type',untieColIdFromLabel=True,widgetOptions=json.dumps({'choices':['Relaxation','HSQC','Assignment','Calibration','1D','Other']})),
         col('Study','Choice',widgetOptions=json.dumps({'choices':['Electrostatics','DNA','TFE','Other']})),
         col('AnalysisStatus','Choice',widgetOptions=json.dumps({'choices':['Not started','In progress','Analyzed']})),
         col('AcquiredAt','DateTime',widgetOptions=json.dumps(DATE_ONLY_OPTIONS)),col('AcquisitionDateText'),col('AcquisitionStatus','Choice',label='Acquisition status',widgetOptions=json.dumps({'choices':list(ACQUISITION_STATUSES)})),
@@ -365,7 +364,7 @@ if any(x is None or x == "" for x in axes): return "row:" + str($id)
 if any(x is None or x == "" for x in prep): return ("sample:" + str($Sample.id)) if $Sample else ("row:" + str($id))
 return ""''',True),
         col('EffectiveInstrument','Text', '$Instrument',True,label='Instrument'),
-        col('EffectiveType','Text', '$ExperimentType',True,label='Type'),
+        col('EffectiveType','Text', '$ExperimentType',True,label='Experiment',untieColIdFromLabel=True),
         col('EffectiveAcquiredAt','DateTime', '$AcquiredAt',True,label='Date',widgetOptions=json.dumps(DATE_ONLY_OPTIONS)),
         col('EffectiveField_MHz','Numeric', '$Field_MHz',True,label='Field (MHz)'),
         col('EffectiveTemperature_C','Numeric', '$Temperature_C if $Temperature_C is None else (round($Temperature_C) if abs($Temperature_C - round($Temperature_C)) <= 0.200000001 else (round($Temperature_C * 2) / 2 if abs($Temperature_C - round($Temperature_C * 2) / 2) <= 0.020000001 else $Temperature_C))',True,label='Temperature group (°C)',untieColIdFromLabel=True),

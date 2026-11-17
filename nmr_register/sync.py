@@ -10,6 +10,7 @@ from .schema import MACHINE_FIELDS,CONDITIONS,canonical_experiment_type,FILL_ONL
 from .grist import GristError
 from .state import observation_warning,sufficient_fingerprint,MISSING_FINGERPRINT_WARNING
 from .acquisition_transition import reviewed
+from .experiment_taxonomy import classify_pulse
 
 
 def _tuple(fields, observed=False):
@@ -110,6 +111,13 @@ def _canonical_payload(payload):
             if value in ('Completed','Aborted','Setup','Unknown'):
                 facts[canonical] = value
         elif canonical == 'ExperimentType':
+            # Cached observations from older collectors may contain only the
+            # broad Calibration token or an unknown assignment classification.
+            # Reclassify those from the unchanged raw pulse name so retries
+            # cannot restore a coarse label after the taxonomy upgrade.
+            if value in (None, '', 'unknown', 'Unknown', 'calibration', 'Calibration'):
+                pulse = payload.get('ObservedPulseProgram', payload.get('PulseProgram', ''))
+                value = classify_pulse(pulse) or value
             value = canonical_experiment_type(value)
             if value:
                 facts[canonical] = value
