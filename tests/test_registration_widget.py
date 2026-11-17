@@ -17,6 +17,28 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(fields['PreparedDateText'],'2026-10');self.assertIsNone(fields['PreparedAt'])
         self.assertEqual(fields['SampleID'],'202610_15N_HeTDR1_DNA_titration_1')
 
+    def test_undated_dead_sample_keeps_unknowns_and_allocates_unique_id(self):
+        values={'Protein':'HeTDR1','Label15N':True,'Available':'Dead'}
+        plan=sample_actions(values,self.tables)
+        fields=plan['actions'][0][3]
+        self.assertEqual(fields['SampleID'],'15N_HeTDR1_1')
+        self.assertIsNone(fields['PreparedAt'])
+        self.assertEqual(fields['PreparedDateText'],'')
+        self.assertEqual(fields['Available'],'Dead')
+        self.assertTrue(all(fields[name] is None for name in NUMERIC_RULES))
+        self.assertEqual(fields['StorageRow'],'')
+        self.assertIsNone(fields['StorageColumn'])
+        self.tables['Samples']=[{'id':1,**fields}]
+        self.assertEqual(sample_actions(values,self.tables)['sample_ids'],['15N_HeTDR1_2'])
+        self.assertEqual(self.tables['Samples'][0]['SampleID'],'15N_HeTDR1_1')
+        for invalid in ['2026-02-30','unknown','2026-13']:
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):
+                sample_actions({**values,'Prepared':invalid},self.tables)
+        dated=sample_actions({**values,'Prepared':'2026-11-17'},self.tables)['actions'][0][3]
+        self.assertEqual(dated['SampleID'],'20261117_15N_HeTDR1_1')
+        self.assertIsNotNone(dated['PreparedAt'])
+        self.assertEqual(dated['PreparedDateText'],'')
+
     def test_study_is_explicit_and_never_guessed(self):
         action=experiment_actions({'AcquisitionStatus':'Planned','Study':'DNA','AnalysisStatus':'Analyzed'},self.tables,now=123)['actions'][0]
         self.assertEqual(action[3]['Study'],'DNA')

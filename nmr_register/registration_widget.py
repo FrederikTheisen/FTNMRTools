@@ -104,7 +104,7 @@ def sample_actions(values,tables):
     submission. Explicit row IDs also make simultaneous stale form submissions
     collide safely rather than create duplicate visible sample IDs.
     """
-    datevalue,month,stamp=prepared(values.get('Prepared'),True)
+    datevalue,month,stamp=prepared(values.get('Prepared'))
     selected=next((row for row in _rows(tables,'Series') if str(row['id'])==str(values.get('Series'))),{})
     common={name:str(values.get(name) or '').strip() for name in TEXT_FIELDS}
     common['Isotope']=labelling(values,selected.get('Isotope',''))
@@ -277,7 +277,7 @@ const NMRRegistration = (() => {
   return parts.filter(Boolean).join('_');
  }
  function sampleActions(v,t){
-  const [datevalue,month,stamp]=prepared(v.Prepared,true), common={};
+  const [datevalue,month,stamp]=prepared(v.Prepared), common={};
   const selected=rows(t,'Series').find(row=>String(row.id)===String(v.Series))||{};
   textFields.forEach(k=>common[k]=String(v[k]||'').trim());common.Isotope=labelling(v,selected.Isotope||'');Object.entries(rules).forEach(([k,b])=>common[k]=number(v[k],k,...b));
   const effective=Object.fromEntries(Object.keys(rules).map(k=>[k,common[k]??selected[k]])),condition=conditionLabel(v,effective);
@@ -355,7 +355,7 @@ select[data-tube-status="Suspected degradation"]{background:#FFF1CC;color:#5C430
 <section id="bufferBlock"><h3>2. Buffer and composition</h3><div class="grid" id="buffer"></div></section>
 <details id="compositionBlock"><summary>Additional composition (optional)</summary><div class="grid" id="composition"></div></details>
 <section id="bulkBlock" class="hidden"><h3>Values for each physical sample</h3><div class="grid" id="bulk"></div></section>
-<details id="storageBlock"><summary>Rack position and tube status (optional)</summary><p class="rack-help">Choose a numbered row and lettered column. Bulk placement previews consecutive slots and stops at any occupied position.</p><input type="hidden" id="field_StorageSlot" name="StorageSlot" value=""><div id="rackPicker" aria-label="Sample rack position"></div><div id="storagePreview" class="ok" role="status" aria-live="polite"></div><div class="grid" id="storage"></div></details>
+<details id="storageBlock"><summary>Rack position (optional)</summary><p class="rack-help">Choose a numbered row and lettered column. Bulk placement previews consecutive slots and stops at any occupied position.</p><input type="hidden" id="field_StorageSlot" name="StorageSlot" value=""><div id="rackPicker" aria-label="Sample rack position"></div><div id="storagePreview" class="ok" role="status" aria-live="polite"></div><div class="grid" id="storage"></div></details>
 <div class="grid hidden" id="experiment"></div>
 <div class="actions"><button id="submit" type="submit" disabled>Add sample</button><button id="refresh" class="secondary" type="button">Refresh choices</button></div><div id="message" role="status" aria-live="polite">Loading register…</div></form>
 <script>
@@ -373,8 +373,8 @@ function field(group,name,label,kind='text',options=null){
 field('top','mode','Create','select',[['sample','One sample tube'],['bulk','Several tubes / series'],['experiment','Experiment']]).value=/*MODE*/;
 field('seriesChooser','Series','Series','select',[['','No series'],['new','Create a series']]);field('seriesFields','SeriesID','New series label (optional)');
 function hint(name,text){const note=document.createElement('small');note.textContent=text;groups[name].append(note);}
-field('identity','Protein','Protein').placeholder='Choose an existing name or type a new one';field('identity','Construct','Construct (optional)');field('identity','Prepared','Preparation date');
-hint('Prepared','For example 2026-10-30, or 2026-10 if only the month is known.');
+field('identity','Protein','Protein').placeholder='Choose an existing name or type a new one';field('identity','Construct','Construct (optional)');field('identity','Prepared','Preparation date (optional)');
+hint('Prepared','Leave blank if unknown. For example 2026-10-30, or 2026-10 if only the month is known.');
 field('identity','DistinguishingCondition','Sample label (optional)');hint('DistinguishingCondition','Leave blank to use the composition in the generated label.');
 for(const label of ['15N','13C','2H'])field('labels','Label'+label,label,'checkbox');
 field('customLabels','IsotopeCustom','Custom labelling description');hint('IsotopeCustom','Existing custom descriptions are kept. Clear this entry to use the label choices above.');
@@ -385,7 +385,7 @@ field('buffer','Buffer','Buffer');field('buffer','pH','pH','number');field('buff
 field('composition','DNA_uM','DNA (µM)','number');field('composition','TFE_pct','TFE (%)','number');field('composition','OtherConditions','Composition notes','textarea');groups.OtherConditions.classList.add('wide');
 field('bulk','VaryField','Vary one condition','select',Object.entries(numericLabels));field('bulk','VaryValues','Values separated by commas or lines, e.g. 0, 100, 200, 500','textarea');controls.VaryField.value='DNA_uM';
 controls.StorageSlot=byId('field_StorageSlot');
-field('storage','Available','Tube status','select',[['Usable','Usable'],['Suspected degradation','Suspected degradation'],['Degraded','Degraded'],['Dead','Dead']]);hint('Available','Dead means permanently unavailable: used up, discarded, or irreversibly unusable.');
+field('identity','Available','Tube status','select',[['Usable','Usable'],['Suspected degradation','Suspected degradation'],['Degraded','Degraded'],['Dead','Dead']]);hint('Available','Dead means permanently unavailable: used up, discarded, or irreversibly unusable.');
 function updateTubeStatus(){controls.Available.dataset.tubeStatus=NMRRegistration.sampleStatus(controls.Available.value);}
 controls.Available.addEventListener('change',updateTubeStatus);updateTubeStatus();
 function rackPreviewSlots(){

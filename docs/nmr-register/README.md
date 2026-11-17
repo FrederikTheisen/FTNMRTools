@@ -105,10 +105,12 @@ it. Record numeric salt, DNA, and TFE values in their stated units; zero is a
 valid value. Do not put a sample temperature on the sample record. Temperature
 belongs to the experiment.
 
-Sample IDs are readable labels built from the preparation date, isotope,
-protein, distinguishing condition, and sample number. If only the month is
-known, enter it as `YYYY-MM`; the register keeps month precision without adding
-a day.
+Only protein and labelling are required when registering one sample. Choose
+`Dead` under Identity for an old, permanently unavailable tube; leave unknown
+composition and storage fields blank. Preparation date is optional. A known
+month such as `2024-10` keeps month precision without adding a day. If the date
+is unknown, the generated ID omits it (for example `15N_HeTDR1_1`). Otherwise IDs
+include the preparation date/month, isotope, protein and known conditions.
 
 The sample form suggests protein names already used for samples, series, or
 experiment snapshots, and also accepts new names; saving adds a new spelling to
