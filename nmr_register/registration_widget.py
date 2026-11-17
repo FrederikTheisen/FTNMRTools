@@ -357,7 +357,7 @@ select[data-tube-status="Suspected degradation"]{background:#FFF1CC;color:#5C430
 <section id="bulkBlock" class="hidden"><h3>Values for each physical sample</h3><div class="grid" id="bulk"></div></section>
 <details id="storageBlock"><summary>Rack position (optional)</summary><p class="rack-help">Choose a numbered row and lettered column. Bulk placement previews consecutive slots and stops at any occupied position.</p><input type="hidden" id="field_StorageSlot" name="StorageSlot" value=""><div id="rackPicker" aria-label="Sample rack position"></div><div id="storagePreview" class="ok" role="status" aria-live="polite"></div><div class="grid" id="storage"></div></details>
 <div class="grid hidden" id="experiment"></div>
-<div class="actions"><button id="submit" type="submit" disabled>Add sample</button><button id="refresh" class="secondary" type="button">Refresh choices</button></div><div id="message" role="status" aria-live="polite">Loading register…</div></form>
+<div class="actions"><button id="submit" type="button" disabled>Add sample</button><button id="refresh" class="secondary" type="button">Refresh choices</button></div><div id="message" role="status" aria-live="polite">Loading register…</div></form>
 <script>
 grist.ready({requiredAccess:'full'});
 /*LOGIC*/
@@ -480,12 +480,17 @@ controls.Series.addEventListener('change',()=>{modeChanged();const selected=tabl
 function rowObjects(columns){return (columns.id||[]).map((id,index)=>Object.fromEntries(Object.entries(columns).map(([key,values])=>[key,values[index]])));}
 async function refreshChoices(){const data=await Promise.all(['Series','Samples','Experiments'].map(name=>grist.docApi.fetchTable(name)));['Series','Samples','Experiments'].forEach((name,i)=>tables[name]=rowObjects(data[i]));refreshProtocolSuggestions();options(controls.Series,tables.Series.map(s=>[s.id,s.SeriesID||'(unnamed series — fix label)']),[['','No series'],['new','Create a series']]);options(controls.ProteinFilter,[...new Set(tables.Samples.map(s=>s.Protein).filter(Boolean))].sort().map(p=>[p,p]),[['','All proteins']]);refreshRack();modeChanged();}
 byId('refresh').addEventListener('click',()=>refreshChoices().then(()=>message('Choices refreshed.')).catch(error=>message(error.message,true)));
-byId('form').addEventListener('submit',async event=>{event.preventDefault();if(busy)return;busy=true;byId('submit').disabled=true;byId('refresh').disabled=true;byId('submit').textContent=controls.mode.value==='experiment'?'Registering experiment…':'Adding samples…';message(controls.mode.value==='experiment'?'Registering experiment…':'Adding samples…');
+async function submitRegistration(){if(busy)return;if(!byId('form').checkValidity()){byId('form').reportValidity();return;}busy=true;byId('submit').disabled=true;byId('refresh').disabled=true;byId('submit').textContent=controls.mode.value==='experiment'?'Registering experiment…':'Adding samples…';message(controls.mode.value==='experiment'?'Registering experiment…':'Adding samples…');
  try{const values=Object.fromEntries(Object.entries(controls).map(([name,input])=>[name,input.type==='checkbox'?input.checked:input.value]));await refreshChoices();const plan=values.mode==='experiment'?NMRRegistration.experimentActions(values,tables):NMRRegistration.sampleActions(values,tables);
  if(values.mode!=='experiment'){const [metadataTables,metadataColumns]=await Promise.all(['_grist_Tables','_grist_Tables_column'].map(name=>grist.docApi.fetchTable(name)));plan.actions=[...NMRRegistration.proteinChoiceActions(plan,metadataTables,metadataColumns),...plan.actions];}
  await grist.docApi.applyUserActions(plan.actions);const saved=plan.sample_ids.length?'Added '+plan.sample_ids.length+' physical sample'+(plan.sample_ids.length===1?'':'s')+':\n'+plan.sample_ids.join('\n'):'Experiment registered.';message(saved);if(values.mode==='bulk')controls.VaryValues.value='';try{await refreshChoices();const newSeries=plan.actions.find(a=>a[1]==='Series');if(newSeries){controls.Series.value=String(newSeries[2]);modeChanged();}}catch(error){message(saved+' Choices could not be refreshed: '+(error.message||String(error))+'. Use Refresh choices; the records were saved.');}
  }catch(error){message(error.message||String(error),true);}finally{busy=false;byId('refresh').disabled=false;byId('submit').textContent=submitLabel();refreshRack();}
-});
+}
+// Creator widgets run in a sandbox without allow-forms. Save through clicks
+// rather than native form submission, which the browser blocks before submit.
+byId('submit').addEventListener('click',submitRegistration);
+byId('form').addEventListener('submit',event=>{event.preventDefault();submitRegistration();});
+byId('form').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing&&event.target.tagName==='INPUT'&&!['checkbox','button'].includes(event.target.type)){event.preventDefault();submitRegistration();}});
 modeChanged();refreshChoices().then(()=>{refreshRack();message('Ready.');}).catch(error=>message(error.message,true));
 </script></body></html>'''
 
