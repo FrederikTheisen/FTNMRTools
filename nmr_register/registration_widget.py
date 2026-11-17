@@ -408,7 +408,8 @@ function refreshRack(){
  let text='';if(plan.error)text=plan.error;else if(!plan.slots.length)text='No rack positions will be assigned.';else if(blocked)text='Blocked: '+blocked+' is occupied. Choose a different starting position; the form will not skip occupied slots.';else text=(controls.mode.value==='bulk'?'Bulk positions: ':'Position: ')+plan.slots.join(', ');
  if(result.invalid.length)text+=(text?' ':'')+result.invalid.length+' saved position'+(result.invalid.length===1?' is':'s are')+' incomplete or invalid.';
  const preview=byId('storagePreview');preview.textContent=text;preview.className=(plan.error||blocked)?'error':'ok';
- byId('submit').disabled=busy||(controls.mode.value!=='experiment'&&Boolean(plan.error||blocked));
+ // Keep validation reachable even when its rack preview is inside closed details.
+ byId('submit').disabled=busy;
 }
 controls.StorageSlot.addEventListener('change',refreshRack);
 controls.VaryValues.addEventListener('input',refreshRack);
