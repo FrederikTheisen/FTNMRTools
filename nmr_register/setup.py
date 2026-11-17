@@ -1442,5 +1442,48 @@ def show_experiment_category(client, apply=False):
             else:
                 pos = max([r['fields'].get('parentPos') or 0 for r in current] + [0]) + 1
             actions.append(['AddRecord', '_grist_Views_section_field', None, {'parentId':section['id'], 'colRef':category_id, 'parentPos':pos, 'width':120}])
-    if apply and actions: client.apply(actions)
-    return actions
+    if apply and actions:
+        client.apply(actions)
+        # New field IDs are allocated by Grist, so read them back before
+        # placing them in explicit card layouts.
+        fields = client.records('_grist_Views_section_field')
+    layout_actions = []
+    for section in sections:
+        sf = section['fields']
+        if sf.get('parentKey') != 'single' or not sf.get('layoutSpec'):
+            continue
+        current = [r for r in fields if r['fields'].get('parentId') == section['id']]
+        category_fields = [r for r in current if r['fields'].get('colRef') == category_id]
+        # A dry run cannot know the ID of a field that would be added.
+        if not category_fields:
+            continue
+        if len(category_fields) != 1:
+            raise ValueError('Ambiguous category field in card')
+        category_field = category_fields[0]['id']
+        precise_fields = {r['id'] for r in current if r['fields'].get('colRef') in experiment_ids}
+        layout = json.loads(sf['layoutSpec'])
+        def contains(node, ids):
+            if isinstance(node, dict):
+                return node.get('leaf') in ids or any(contains(v, ids) for v in node.values())
+            if isinstance(node, list):
+                return any(contains(v, ids) for v in node)
+            return False
+        if contains(layout, {category_field}):
+            continue
+        def insert_before(node):
+            if isinstance(node, list):
+                for index, child in enumerate(node):
+                    if isinstance(child, dict) and child.get('leaf') in precise_fields:
+                        node.insert(index, {'leaf': category_field})
+                        return True
+                    if insert_before(child): return True
+            elif isinstance(node, dict):
+                for child in node.values():
+                    if insert_before(child): return True
+            return False
+        if not insert_before(layout):
+            raise ValueError('Cannot place category: card layout has no experiment type field')
+        layout_actions.append(['UpdateRecord', '_grist_Views_section', section['id'],
+                               {'layoutSpec': json.dumps(layout, separators=(',', ':'))}])
+    if apply and layout_actions: client.apply(layout_actions)
+    return actions + layout_actions

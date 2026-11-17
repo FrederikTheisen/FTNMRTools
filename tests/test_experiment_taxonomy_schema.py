@@ -1,4 +1,5 @@
 import re
+import json
 import unittest
 
 from nmr_register.schema import columns, PRE_CATEGORY_ATTENTION_FORMULA
@@ -15,11 +16,12 @@ class Fake:
             if row['fields']['colId'] == 'ExperimentType': row['fields']['label'] = 'ExperimentType'
             if row['fields']['colId'] == 'EffectiveType': row['fields']['label'] = 'Type'
         self.fields = []
+        self.sections = [{'id': 20, 'fields': {'parentId': 10, 'tableRef': 1, 'title': 'Experiments'}}]
     def records(self, name):
         return {'_grist_Tables': [{'id': 1, 'fields': {'tableId': 'Experiments'}}],
                 '_grist_Tables_column': self.cols,
                 '_grist_Views': [{'id': 10, 'fields': {'name': 'Experiments'}}],
-                '_grist_Views_section': [{'id': 20, 'fields': {'parentId': 10, 'tableRef': 1, 'title': 'Experiments'}}],
+                '_grist_Views_section': self.sections,
                 '_grist_Views_section_field': self.fields}[name]
     def apply(self, actions):
         for action in actions:
@@ -27,6 +29,8 @@ class Fake:
                 self.cols.append({'id': 999, 'fields': {'parentId': 1, 'colId': action[2], **action[3]}})
             elif action[1] == '_grist_Tables_column':
                 next(r for r in self.cols if r['id'] == action[2])['fields'].update(action[3])
+            elif action[1] == '_grist_Views_section':
+                next(r for r in self.sections if r['id'] == action[2])['fields'].update(action[3])
             else:
                 self.fields.append({'id': 1000 + len(self.fields), 'fields': action[3]})
 
@@ -53,3 +57,32 @@ class TaxonomySchemaTests(unittest.TestCase):
         self.assertEqual(show_experiment_category(client, apply=True), [])
         next(r for r in client.cols if r['fields']['colId'] == 'AttentionReason')['fields']['formula'] = 'custom'
         with self.assertRaises(ValueError): upgrade_experiment_taxonomy(client, apply=True)
+
+    def test_explicit_card_layout_repaired_and_preserved(self):
+        client = Fake()
+        upgrade_experiment_taxonomy(client, apply=True)
+        precise = next(r['id'] for r in client.cols if r['fields']['colId'] == 'ExperimentType')
+        category_id = next(r['id'] for r in client.cols if r['fields']['colId'] == 'ExperimentCategory')
+        layout = {'children': [{'leaf': 11}, {'children': [{'leaf': 12, 'size': 4}, {'leaf': 13}]}], 'custom': 'kept'}
+        client.sections = [
+            {'id': 21, 'fields': {'parentId': 10, 'tableRef': 1, 'title': 'Experiment details', 'parentKey': 'single', 'layoutSpec': json.dumps(layout)}},
+            {'id': 22, 'fields': {'parentId': 10, 'tableRef': 1, 'title': 'Other card', 'parentKey': 'single', 'layoutSpec': json.dumps(layout)}},
+        ]
+        client.fields = [{'id': 11, 'fields': {'parentId': 21, 'colRef': 123, 'parentPos': 1}},
+                         {'id': 12, 'fields': {'parentId': 21, 'colRef': precise, 'parentPos': 2}},
+                         {'id': 13, 'fields': {'parentId': 21, 'colRef': 124, 'parentPos': 3}}]
+        actions = show_experiment_category(client, apply=True)
+        new_id = next(r['id'] for r in client.fields if r['fields'].get('colRef') == category_id)
+        expected = {'children': [{'leaf': 11}, {'children': [{'leaf': new_id}, {'leaf': 12, 'size': 4}, {'leaf': 13}]}], 'custom': 'kept'}
+        self.assertEqual(json.loads(client.sections[0]['fields']['layoutSpec']), expected)
+        self.assertEqual(json.loads(client.sections[1]['fields']['layoutSpec']), layout)
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(show_experiment_category(client, apply=True), [])
+
+    def test_automatic_card_layout_is_not_rewritten(self):
+        client = Fake()
+        upgrade_experiment_taxonomy(client, apply=True)
+        client.sections = [{'id': 21, 'fields': {'parentId': 10, 'tableRef': 1, 'title': 'Experiment details', 'parentKey': 'single', 'layoutSpec': ''}}]
+        actions = show_experiment_category(client, apply=True)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(client.sections[0]['fields']['layoutSpec'], '')
