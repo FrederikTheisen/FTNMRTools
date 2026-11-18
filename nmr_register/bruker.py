@@ -202,6 +202,91 @@ def _delay_seconds(token):
     return value
 
 
+def _spectral_metadata(path, acqus, pulse):
+    """Observe spectral axes from bounded acquisition status files only.
+
+    SW is already ppm; SW_h/SFO1 and O1/BF1 use frequencies from the same
+    dimension. Channel numbers in acqus do not describe indirect axes.
+    """
+    fields = {'ObservedSpectralWidths_ppm':'', 'ObservedSpectralOffsets_ppm':''}
+    try:
+        direct = protocol_parameters(acqus)
+    except ValueError:
+        return fields, ['acqus: malformed; spectral summaries unknown']
+    mode = numeric(direct.get('PARMODE'))
+    if 'PARMODE' not in direct:
+        dimensions = 8  # Older status copies: inspect only explicitly named files.
+    elif mode is not None and mode.is_integer() and 0 <= mode <= 7:
+        dimensions = int(mode)+1
+    else:
+        return fields, ['acqus: invalid PARMODE; spectral summaries unknown']
+    widths, offsets, notes = [], [], []
+    widths_complete = offsets_complete = True
+    # These reviewed relaxation programs store the array index as a QF third
+    # dimension, even when its copied NUC1 happens to name a real nucleus.
+    array_programs = {'15n_t1_hsqc', 'hsqct1etf3gpsitc3d.3.ts3',
+                      'hsqctretf3gpsitc3d.3.ts3', '15n_t1rho', 't1rhon15_rk.nl'}
+    for dimension in range(1, dimensions+1):
+        name = 'acqus' if dimension == 1 else 'acqu'+str(dimension)+'s'
+        try:
+            if dimension == 1:
+                params = direct
+            else:
+                data = _read_metadata(path/name)
+                if data is None:
+                    if 'PARMODE' in direct:
+                        widths_complete = offsets_complete = False
+                        notes.append(name+': declared dimension missing; spectral summaries unknown')
+                    continue
+                params = protocol_parameters(data.decode('utf-8'))
+        except (OSError, ValueError, UnicodeError):
+            widths_complete = offsets_complete = False
+            notes.append(name+': unreadable or malformed; spectral summaries unknown')
+            continue
+        if (dimension == 3 and mode == 2 and pulse.lower() in array_programs
+                and numeric(params.get('FnMODE')) == 1):
+            notes.append(name+': QF relaxation array excluded from spectral axes')
+            continue
+        nucleus = params.get('NUC1', '')
+        if isinstance(nucleus, str) and nucleus.casefold() == 'off':
+            continue
+        if not isinstance(nucleus, str) or not re.fullmatch(r'[0-9]{1,3}[A-Za-z]{1,2}', nucleus):
+            widths_complete = offsets_complete = False
+            notes.append(name+': nucleus unknown; spectral summaries unknown')
+            continue
+        label = ('Direct' if dimension == 1 else 'Indirect '+str(dimension-1))+' ('+nucleus+')'
+        width = numeric(params.get('SW'))
+        width_source = 'SW'
+        if width is None or width <= 0:
+            hz, frequency = numeric(params.get('SW_h')), numeric(params.get('SFO1'))
+            width = hz/frequency if hz is not None and hz > 0 and frequency is not None and frequency > 0 else None
+            width_source = 'SW_h/SFO1'
+        offset = numeric(params.get('O1P'))
+        offset_source = 'O1P'
+        if offset is None:
+            hz, frequency = numeric(params.get('O1')), numeric(params.get('BF1'))
+            offset = hz/frequency if hz is not None and frequency is not None and frequency > 0 else None
+            offset_source = 'O1/BF1'
+        sources = []
+        if width is not None and math.isfinite(width) and width > 0:
+            widths.append(label+': '+format(width, '.6g'))
+            sources.append(width_source)
+        else:
+            widths_complete = False
+            notes.append(name+': width unknown; width summary withheld')
+        if offset is not None and math.isfinite(offset):
+            offsets.append(label+': '+format(offset, '.6g'))
+            sources.append(offset_source)
+        else:
+            offsets_complete = False
+            notes.append(name+': offset unknown; offset summary withheld')
+        if sources:
+            notes.append(name+': '+', '.join(sources)+' ppm')
+    fields['ObservedSpectralWidths_ppm'] = '\n'.join(widths) if widths_complete else ''
+    fields['ObservedSpectralOffsets_ppm'] = '\n'.join(offsets) if offsets_complete else ''
+    return fields, notes
+
+
 def _protocol(path, acqus, pulse):
     fields = {'ObservedD1_s':None, 'ObservedDelayList_s':'',
               'ObservedSpinLock_Hz':None, 'ObservedSpinLockOffset_Hz':None, 'ObservedField_MHz':None}
@@ -585,6 +670,11 @@ def observe(path):
     if temperature is not None and 0 < temperature <= 1000:
         fields['ObservedTemperature_C'] = round(temperature-273.15, 6)
     fields.update(protocol)
+    spectral, spectral_notes = _spectral_metadata(path, acqus, pulse)
+    fields.update(spectral)
+    if spectral_notes:
+        fields['ObservedProtocolEvidence'] = '; '.join(filter(None, [
+            fields.get('ObservedProtocolEvidence', ''), *spectral_notes]))
     # A missing audit can accompany a setup copy; an unsafe/unreadable audit
     # cannot establish a clean setup observation. No raw bytes are opened.
     fields.update(acquisition_status(acqus, audit,

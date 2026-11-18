@@ -124,6 +124,14 @@ title is missing or unreadable; a readable empty title can clear them.
 Unreadable or unsafe original titles and explicit conflicting or malformed
 sample tags still require attention.
 
+The experiment, attention and electrostatics detail cards include **Spectral
+widths (ppm)** and **Spectral offsets (ppm)**, with one nucleus-labelled line per
+spectral dimension. The collector reads acquisition status files (`acqus`,
+`acqu2s`, and further dimensions), uses `SW` in ppm and the TopSpin carrier
+convention `O1P` or `O1/BF1`. It uses `SW_h/SFO1` only when `SW` is unavailable.
+Known relaxation array dimensions are excluded. Missing or incomplete metadata
+stays unknown and does not replace a previously collected complete value.
+
 ### Link an acquisition title to a tube
 
 Register the physical tube in Grist first. In TopSpin, copy that tube's exact

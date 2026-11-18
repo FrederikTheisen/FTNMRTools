@@ -5,7 +5,7 @@ from .experiment_taxonomy import canonical_experiment, category_formula
 CONDITIONS = {'Protein':'Text', 'Construct':'Text', 'Isotope':'Text', 'Buffer':'Text', 'pH':'Numeric',
               'NaCl_mM':'Numeric', 'DNA_uM':'Numeric', 'TFE_pct':'Numeric',
               'Protein_uM':'Numeric', 'OtherConditions':'Text'}
-CANONICAL_ACQUISITION_FIELDS = frozenset(('Instrument','ExperimentType','AcquiredAt','AcquisitionStatus','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz'))
+CANONICAL_ACQUISITION_FIELDS = frozenset(('Instrument','ExperimentType','AcquiredAt','AcquisitionStatus','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm'))
 # Identity remains human-editable; the collector may only fill verified blanks.
 FILL_ONLY_IDENTITY_FIELDS = ('SourceID','Folder','Expno')
 MACHINE_FIELDS = {'Experiments': CANONICAL_ACQUISITION_FIELDS | frozenset(('AcquisitionKey','SourcePath','ObservedSourceID',
@@ -320,6 +320,14 @@ def acquisition_columns():
                    col('EffectivePulseProgram','Text','$PulseProgram',True,label='Pulse program')]
 
 
+def spectral_columns():
+    """Stored, human-readable acquisition dimensions, collected from the source."""
+    return [col(name, label=label, description='Acquisition setting collected from the source.',
+                widgetOptions=json.dumps({'widget':'TextBox','wrap':True}))
+            for name, label in [('SpectralWidths_ppm', 'Spectral widths (ppm)'),
+                                ('SpectralOffsets_ppm', 'Spectral offsets (ppm)')]]
+
+
 def columns():
     common = [col(k,'Choice',widgetOptions=json.dumps({'choices':list(LABELLING_CHOICES) if k=='Isotope' else []})) if k in ('Protein','Isotope') else col(k,v) for k,v in CONDITIONS.items()]
     snapshot = [col('Snapshot'+k,v, '$Sample.'+k+' if $Sample else None', label={'Protein':'Protein','NaCl_mM':'NaCl (mM)'}.get(k,'Sample '+k)) for k,v in CONDITIONS.items()]
@@ -343,7 +351,7 @@ def columns():
         col('EffectiveAcquisitionStatus','Text', '"Completed" if $AcquisitionStatus in ("Completed", "Finished", "Done", "Acquired") else ("Aborted" if $AcquisitionStatus in ("Aborted", "Stopped") else ($AcquisitionStatus if $AcquisitionStatus in ("Planned", "Dummy", "Setup", "Running") else "Unknown"))',True,label='Acquisition status'),col('Field_MHz','Numeric'),
         col('Series','Ref:Series'), col('ProteinSelector'), col('RegisteredAt','DateTime',widgetOptions=json.dumps(DATE_ONLY_OPTIONS)),
         col('Sample','Ref:Samples',SAMPLE_TAG_TRIGGER,widgetOptions=json.dumps({'dropdownCondition':{'text':'not $Series or choice.Series == $Series'}})),col('SnapshotSampleID','Text','$Sample.SampleID if $Sample else None'),*snapshot,
-        col('Temperature_C','Numeric',label='Temperature (°C)'),col('PulseProgram',label='Pulse program'),*acquisition_columns(),*[col(name,'Choice', '"Not assessed"', label=label, untieColIdFromLabel=True, recalcWhen=0,recalcDeps=['L'],widgetOptions=json.dumps({'choices':[QC_DEFAULT,*choices]})) for name,(label,choices) in QC_CRITERIA.items()],
+        col('Temperature_C','Numeric',label='Temperature (°C)'),col('PulseProgram',label='Pulse program'),*acquisition_columns(),*spectral_columns(),*[col(name,'Choice', '"Not assessed"', label=label, untieColIdFromLabel=True, recalcWhen=0,recalcDeps=['L'],widgetOptions=json.dumps({'choices':[QC_DEFAULT,*choices]})) for name,(label,choices) in QC_CRITERIA.items()],
         col('ImportedAssessment','Choice',widgetOptions=json.dumps({'choices':list(DECISIONS)})),
         col('Assessment','Choice',ASSESSMENT_FORMULA,True,widgetOptions=json.dumps({'choices':list(DECISIONS)})),
         col('AssessmentDisplay','Text',ASSESSMENT_DISPLAY_FORMULA,True,label='Assessment',untieColIdFromLabel=True),

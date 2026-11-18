@@ -1,6 +1,6 @@
 """Produce setup actions; caller must provide authenticated Grist transport."""
 import json
-from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA
+from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, spectral_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA
 
 # Reviewed one-time conversion from split observed/confirmed acquisition facts.
 LEGACY_OBSERVED_FACTS = {
@@ -937,7 +937,7 @@ def build_layout(client, electrostatics_only=False):
                 actions.append(['AddRecord','_grist_Filters',None,{'viewSectionRef':section_id,'colRef':ref,'filter':'{}','pinned':True}])
         if actions: client.apply(actions)
     experiment_columns=['AcquiredAt','Folder','Instrument','AcquisitionStatus','ExperimentCategory','ExperimentType','PulseProgram','Expno','Sample','Title','Assessment']
-    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','RegisteredAt','Series','Sample','Instrument','ExperimentCategory','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
+    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','RegisteredAt','Series','Sample','Instrument','ExperimentCategory','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
     sample_columns=['SampleID','Protein','Series','NaCl_mM','DNA_uM','TFE_pct','StorageRow','StorageColumn','Available']
     sample_detail=['SampleID','PreparedAt','Isotope','Protein','Construct','DistinguishingCondition','SampleNumber','Series','Buffer','pH','NaCl_mM','DNA_uM','TFE_pct','Protein_uM','OtherConditions','StorageRow','StorageColumn','Available','CurrentLocation','Notes']
     if not electrostatics_only:
@@ -1024,7 +1024,7 @@ def build_layout(client, electrostatics_only=False):
         filters=[r for r in client.records('_grist_Filters') if r['fields'].get('viewSectionRef')==coverage and r['fields'].get('colRef')==cols[(st,'Study')]]
         if not filters: client.apply([['AddRecord','_grist_Filters',None,{'viewSectionRef':coverage,'colRef':cols[(st,'Study')],'filter':json.dumps({'included':['Electrostatics']}),'pinned':False}]])
     fields(acquisitions,'Experiments',['EffectiveAcquiredAt','SnapshotSampleID','SourceLabel','EffectiveAcquisitionStatus','AnalysisDisplay','Assessment','ResultCSV'], {'EffectiveAcquiredAt':100,'SnapshotSampleID':210,'SourceLabel':230,'EffectiveAcquisitionStatus':100,'AnalysisDisplay':100,'Assessment':100,'ResultCSV':90})
-    fields(details,'Experiments',['Study','AcquiredAt','Sample','SnapshotSampleID','ExperimentCategory','ExperimentType','SourceID','Folder','Expno','AcquisitionStatus','ObservedAcquisitionEvidence','AnalysisStatus','Assessment','AssessmentReason','ResultCSV','AttentionReason','SnapshotConstruct','SnapshotIsotope','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Instrument','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','Notes'])
+    fields(details,'Experiments',['Study','AcquiredAt','Sample','SnapshotSampleID','ExperimentCategory','ExperimentType','SourceID','Folder','Expno','AcquisitionStatus','ObservedAcquisitionEvidence','AnalysisStatus','Assessment','AssessmentReason','ResultCSV','AttentionReason','SnapshotConstruct','SnapshotIsotope','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Instrument','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','Notes'])
     pins(acquisitions,'Experiments',['EffectiveType','Assessment'])
     if electrostatics_only:
         # Add the two editable human fields to the existing experiment detail
@@ -1035,7 +1035,7 @@ def build_layout(client, electrostatics_only=False):
         existing_fields=[r for r in client.records('_grist_Views_section_field') if r['fields'].get('parentId')==exp_card]
         existing_refs={r['fields'].get('colRef') for r in existing_fields}
         position=max((r['fields'].get('parentPos') or 0 for r in existing_fields),default=0)
-        for name in ('Study','AnalysisStatus','EffectivePulseProgram','PulseProgram','EffectiveD1_s','D1_s','EffectiveDelayList_s','DelayList_s','EffectiveSpinLock_Hz','SpinLock_Hz','EffectiveSpinLockOffset_Hz','SpinLockOffset_Hz','ObservedProtocolEvidence'):
+        for name in ('Study','AnalysisStatus','EffectivePulseProgram','PulseProgram','EffectiveD1_s','D1_s','EffectiveDelayList_s','DelayList_s','EffectiveSpinLock_Hz','SpinLock_Hz','EffectiveSpinLockOffset_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm','ObservedProtocolEvidence'):
             if cols[('Experiments',name)] not in existing_refs:
                 position+=1
                 client.apply([['AddRecord','_grist_Views_section_field',None,{'parentId':exp_card,'colRef':cols[('Experiments',name)],'parentPos':position,'width':150}]])
@@ -1485,5 +1485,101 @@ def show_experiment_category(client, apply=False):
             raise ValueError('Cannot place category: card layout has no experiment type field')
         layout_actions.append(['UpdateRecord', '_grist_Views_section', section['id'],
                                {'layoutSpec': json.dumps(layout, separators=(',', ':'))}])
+    if apply and layout_actions: client.apply(layout_actions)
+    return actions + layout_actions
+
+
+def upgrade_spectral_schema(client, apply=False):
+    """Plan or apply only spectral columns and their three acquisition cards.
+
+    New column and field IDs require metadata rereads. A dry run reports the
+    immediately actionable changes; call again after applying to verify them.
+    """
+    names = ('SpectralWidths_ppm', 'SpectralOffsets_ppm')
+    tables = [r for r in client.records('_grist_Tables') if r['fields'].get('tableId') == 'Experiments']
+    if len(tables) != 1: raise ValueError('Experiments table missing or ambiguous')
+    tid = tables[0]['id']
+    metadata = [r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId') == tid]
+    byname = {}
+    for r in metadata:
+        name = r['fields'].get('colId')
+        if name in names:
+            if name in byname: raise ValueError('Ambiguous spectral column: ' + name)
+            byname[name] = r
+            f = r['fields']
+            if f.get('type') != 'Text' or f.get('isFormula') or f.get('formula', '') not in ('', None):
+                raise ValueError('Unexpected spectral schema: ' + name)
+    views = {r['id']: r['fields'].get('name') for r in client.records('_grist_Views')}
+    targets = {('Experiments', 'Experiment details'), ('Needs attention', 'Attention details'), ('Electrostatics', 'Acquisition details')}
+    sections = []
+    for r in client.records('_grist_Views_section'):
+        f = r['fields']; key = (views.get(f.get('parentId')), f.get('title'))
+        if key in targets:
+            if f.get('tableRef') != tid or f.get('parentKey') != 'single':
+                raise ValueError('Unexpected spectral detail card: ' + str(key))
+            sections.append(r)
+    if len(sections) != 3 or len({(views.get(r['fields'].get('parentId')), r['fields'].get('title')) for r in sections}) != 3:
+        raise ValueError('Spectral detail cards missing or ambiguous')
+    fields = client.records('_grist_Views_section_field')
+    # Validate existing explicit layouts before the first mutation.
+    layouts = {}
+    for section in sections:
+        raw = section['fields'].get('layoutSpec')
+        if raw:
+            try: layout = json.loads(raw)
+            except (TypeError, ValueError): raise ValueError('Invalid spectral card layout')
+            if not isinstance(layout, dict) or not isinstance(layout.get('children'), list):
+                raise ValueError('Unexpected spectral card layout')
+            layouts[section['id']] = layout
+    def contains(node, leaf):
+        if isinstance(node, dict): return node.get('leaf') == leaf or any(contains(v, leaf) for v in node.values())
+        if isinstance(node, list): return any(contains(v, leaf) for v in node)
+        return False
+    d1_cols = {r['id'] for r in metadata if r['fields'].get('colId') == 'D1_s'}
+    for sid, layout in layouts.items():
+        d1_fields = {r['id'] for r in fields if r['fields'].get('parentId') == sid and r['fields'].get('colRef') in d1_cols}
+        if not any(contains(layout, field_id) for field_id in d1_fields):
+            raise ValueError('Cannot place spectral fields: D1 is absent from card layout')
+    actions = [['AddColumn', 'Experiments', c['id'], {k:v for k,v in c.items() if k != 'id'}]
+               for c in spectral_columns() if c['id'] not in byname]
+    if apply and actions:
+        client.apply(actions)
+        metadata = [r for r in client.records('_grist_Tables_column') if r['fields'].get('parentId') == tid]
+        byname = {r['fields'].get('colId'): r for r in metadata if r['fields'].get('colId') in names}
+        if set(byname) != set(names): raise ValueError('Spectral columns not allocated')
+    field_actions = []
+    for section in sections:
+        current = [r for r in fields if r['fields'].get('parentId') == section['id']]
+        position = max([r['fields'].get('parentPos') or 0 for r in current] + [0])
+        for name in names:
+            if name not in byname: continue
+            found = [r for r in current if r['fields'].get('colRef') == byname[name]['id']]
+            if len(found) > 1: raise ValueError('Ambiguous spectral card field: ' + name)
+            if not found:
+                position += 1
+                field_actions.append(['AddRecord', '_grist_Views_section_field', None,
+                                      {'parentId': section['id'], 'colRef': byname[name]['id'], 'parentPos': position, 'width': 150}])
+    if apply and field_actions:
+        client.apply(field_actions)
+        fields = client.records('_grist_Views_section_field')
+    actions += field_actions
+    layout_actions = []
+    for sid, layout in layouts.items():
+        current = [r for r in fields if r['fields'].get('parentId') == sid]
+        missing = []
+        for name in names:
+            if name not in byname: continue
+            matches = [r['id'] for r in current if r['fields'].get('colRef') == byname[name]['id']]
+            if len(matches) > 1: raise ValueError('Ambiguous spectral card field: ' + name)
+            if matches and not contains(layout, matches[0]): missing.append({'leaf': matches[0]})
+        if missing:
+            row = {'children': missing} if len(missing) > 1 else missing[0]
+            d1_cols = {r['id'] for r in metadata if r['fields'].get('colId') == 'D1_s'}
+            d1_fields = {r['id'] for r in current if r['fields'].get('colRef') in d1_cols}
+            index = next((i for i, child in enumerate(layout['children'])
+                          if any(contains(child, field_id) for field_id in d1_fields)), None)
+            if index is None: raise ValueError('Cannot place spectral fields: D1 is absent from card layout')
+            layout['children'].insert(index + 1, row)
+            layout_actions.append(['UpdateRecord', '_grist_Views_section', sid, {'layoutSpec': json.dumps(layout, separators=(',', ':'))}])
     if apply and layout_actions: client.apply(layout_actions)
     return actions + layout_actions

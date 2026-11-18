@@ -78,7 +78,8 @@ METADATA_PAIRS = (('Instrument','ObservedInstrument'),('ExperimentType','Observe
                   ('AcquiredAt','ObservedAcquiredAt'),('Field_MHz','ObservedField_MHz'),
                   ('PulseProgram','ObservedPulseProgram'),('Temperature_C','ObservedTemperature_C'),
                   ('D1_s','ObservedD1_s'),('DelayList_s','ObservedDelayList_s'),
-                  ('SpinLock_Hz','ObservedSpinLock_Hz'),('SpinLockOffset_Hz','ObservedSpinLockOffset_Hz'))
+                  ('SpinLock_Hz','ObservedSpinLock_Hz'),('SpinLockOffset_Hz','ObservedSpinLockOffset_Hz'),
+                  ('SpectralWidths_ppm','ObservedSpectralWidths_ppm'),('SpectralOffsets_ppm','ObservedSpectralOffsets_ppm'))
 
 
 SOURCE_FACTS = dict(METADATA_PAIRS + (('AcquisitionStatus','ObservedAcquisitionStatus'),))
