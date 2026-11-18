@@ -450,7 +450,7 @@ def _title_sample_ids(text, marker='SAMPLE_ID'):
 def title_observation(path):
     """Read only expno/pdata/1/title; processing titles never supply acquisition facts.
 
-    Both sample markers are optional. Explicit malformed/conflicting declarations
+    All sample markers are optional. Explicit malformed/conflicting declarations
     fail closed, while ordinary comments and absent markers require no action.
     """
     fields = {'ObservedSampleID':'', 'ObservedSampleTagEvidence':'', 'ObservedSampleTagIssue':''}
@@ -462,7 +462,7 @@ def title_observation(path):
         text = data.decode('utf-8')
         fields['Title'] = ''.join(line for line in text.splitlines(keepends=True)
             if not any(_title_sample_ids(line, marker)[0] and not _title_sample_ids(line, marker)[1]
-                       for marker in ('SAMPLE_ID', 'SAMPLE_ID_FOLDER')))
+                       for marker in ('SAMPLE_ID', 'SAMPLE_ID_FOLDER', 'SAMPLE_ID_BLOCK')))
         fields['TitleSource'] = 'pdata/1/title'
         values, malformed = _title_sample_ids(text)
         issues = []
@@ -475,16 +475,18 @@ def title_observation(path):
         if len(set(values)) == 1 and not issues:
             fields['ObservedSampleID'] = values[0]
         fields['ObservedSampleTagIssue'] = '; '.join(issues)
-        folder_values, folder_malformed = _title_sample_ids(text, 'SAMPLE_ID_FOLDER')
-        if folder_values or folder_malformed:
-            folder_issues = []
-            if folder_malformed:
-                folder_issues.append('pdata/1/title: malformed SAMPLE_ID_FOLDER line')
-            if len(set(folder_values)) > 1:
-                folder_issues.append('Conflicting SAMPLE_ID_FOLDER declarations in acquisition title')
-            fields['_FolderSampleID'] = folder_values[0] if folder_values and not folder_issues else ''
-            fields['_FolderSampleEvidence'] = 'pdata/1/title'
-            fields['_FolderSampleIssue'] = '; '.join(folder_issues)
+        for scope in ('Folder', 'Block'):
+            marker = 'SAMPLE_ID_'+scope.upper()
+            scoped_values, scoped_malformed = _title_sample_ids(text, marker)
+            if scoped_values or scoped_malformed:
+                scoped_issues = []
+                if scoped_malformed:
+                    scoped_issues.append('pdata/1/title: malformed '+marker+' line')
+                if len(set(scoped_values)) > 1:
+                    scoped_issues.append('Conflicting '+marker+' declarations in acquisition title')
+                fields['_'+scope+'SampleID'] = scoped_values[0] if scoped_values and not scoped_issues else ''
+                fields['_'+scope+'SampleEvidence'] = 'pdata/1/title'
+                fields['_'+scope+'SampleIssue'] = '; '.join(scoped_issues)
     except (OSError, ValueError, UnicodeError) as error:
         issue = 'Acquisition title unreadable or unsafe ('+error.__class__.__name__+')'
         fields['ObservedSampleTagIssue'] = issue

@@ -150,11 +150,34 @@ limited to that source and its immediate folder and does not descend into
 nested folders. An individual `SAMPLE_ID` takes precedence over a folder
 default. Keep the title files with the transferred acquisitions.
 
+For a folder containing several tubes arranged in hundred-number EXPNO blocks,
+put one block declaration in an acquisition title within each block:
+
+```text
+SAMPLE_ID_BLOCK=20251017_HeTDR1_15N_NaCl50
+```
+
+For example, a declaration in EXPNO 105 supplies the default for 100–199 in
+that same source and immediate folder. Blocks are 0–99, 100–199, 200–299, and
+so on; a declaration never extends into another block. Copy the declaring
+acquisition with its peers into a monitored source. No separate setting is
+required, and a plain `SAMPLE_ID` never enables block inheritance.
+
+A block default takes precedence over a folder default. A direct `SAMPLE_ID`
+remains local to its own acquisition; if it disagrees with the block default,
+inheritance stops for the other acquisitions in that block. Conflicting or
+malformed block declarations and unreadable or unsafe titles also stop block
+inheritance, with no fallback to the folder default. Missing titles alone are
+eligible. Existing Grist sample links remain unchanged; disagreements appear in
+Needs attention. The sample tag source identifies inherited assignments and the
+EXPNO containing their declaration. Removing a declaration clears the observed
+default at the next scan but does not remove existing sample links.
+
 After a title edit, the next scan observes the change and may fill an unassigned
 Sample link only when the marker matches exactly one registered Sample ID and
 the acquisition identity is unique and clear. A folder default can fill an
 unassigned sibling only when there is one clear folder marker; conflicting
-folder defaults are flagged for review. Both markers are optional; an absent marker produces no warning or absence evidence. A missing marker leaves the current
+folder defaults are flagged for review. All three markers are optional; an absent marker produces no warning or absence evidence. A missing marker leaves the current
 Sample link alone. It does not create a Sample record or replace an existing
 human-owned link. Conflicting markers, unreadable titles, duplicate Sample IDs,
 or ambiguous acquisition identity appear for review; resolve the source or the

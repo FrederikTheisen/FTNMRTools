@@ -35,12 +35,67 @@ def acquisition_key(source_id, folder, expno):
     return source_id+':'+(folder+'/' if folder else '')+str(expno)
 
 
+def _block_key(record):
+    source, folder, expno = (record.get(key) for key in
+                           ('ObservedSourceID', 'ObservedFolder', 'ObservedExpno'))
+    if (not isinstance(source, str) or not source or not isinstance(folder, str)
+            or not isinstance(expno, (str, int)) or isinstance(expno, bool)
+            or not str(expno).isascii() or not str(expno).isdigit()):
+        return None
+    return source, folder, int(expno)//100
+
+
+def resolve_block_sample_defaults(observations):
+    """Resolve hundred-block opt-ins using only the acquisitions already observed."""
+    groups = {}
+    for record in observations:
+        # Inherited values are never direct evidence on a subsequent resolution,
+        # including when records from separately scanned scopes are combined.
+        evidence = record.get('ObservedSampleTagEvidence', '')
+        if evidence.startswith(('SAMPLE_ID_FOLDER default from ', 'SAMPLE_ID_BLOCK default from ')):
+            record.update(ObservedSampleID='', ObservedSampleTagEvidence='', ObservedSampleTagIssue='')
+        key = _block_key(record)
+        if key is not None:
+            groups.setdefault(key, []).append(record)
+    for records in groups.values():
+        declared = [r for r in records if r.get('_BlockSampleEvidence')]
+        if not declared:
+            continue
+        defaults = {r['_BlockSampleID'] for r in declared if r.get('_BlockSampleID')}
+        problems = []
+        if len(defaults) > 1:
+            problems.append('Conflicting SAMPLE_ID_BLOCK defaults in monitored hundred block')
+        for record in records:
+            issue = record.get('_BlockSampleIssue', '') or record.get('ObservedSampleTagIssue', '')
+            if issue:
+                problems.append('EXPNO '+str(record.get('ObservedExpno', ''))+': '+issue)
+            direct = record.get('ObservedSampleID')
+            if direct and len(defaults) == 1 and direct not in defaults:
+                problems.append('EXPNO '+str(record.get('ObservedExpno', ''))+': conflicting direct SAMPLE_ID in SAMPLE_ID_BLOCK')
+        origin = '; '.join('EXPNO '+str(r.get('ObservedExpno', ''))+': '+r['_BlockSampleEvidence'] for r in declared[:8])
+        if len(declared) > 8:
+            origin += '; ... ('+str(len(declared))+' declaring acquisitions)'
+        evidence = 'SAMPLE_ID_BLOCK default from '+origin
+        for record in records:
+            if record.get('ObservedSampleID') or record.get('ObservedSampleTagIssue'):
+                continue  # Preserve direct valid IDs and direct errors.
+            record['ObservedSampleTagEvidence'] = evidence
+            if problems or len(defaults) != 1:
+                record['ObservedSampleID'] = ''
+                record['ObservedSampleTagIssue'] = '; '.join(problems[:8]) or 'No coherent SAMPLE_ID_BLOCK default'
+            else:
+                record['ObservedSampleID'] = next(iter(defaults))
+    return observations
+
+
 def resolve_folder_sample_defaults(observations):
     """Resolve explicit defaults only across acquisitions already in this scan.
 
     No filesystem inspection, cached inheritance, parent-folder matching, sample
     creation, or human-link writes happen here. A direct valid tag always wins.
     """
+    resolve_block_sample_defaults(observations)
+    blocked = {_block_key(r) for r in observations if r.get('_BlockSampleEvidence')}
     groups = {}
     for record in observations:
         key = (record.get('ObservedSourceID'),record.get('ObservedFolder'))
@@ -57,7 +112,8 @@ def resolve_folder_sample_defaults(observations):
             issue = record.get('_FolderSampleIssue','')
             # Unreadable titles could hide another explicit declaration. Missing
             # titles alone remain eligible for a readable sibling's default.
-            if not issue and 'Title' not in record and record.get('ObservedSampleTagIssue'):
+            if (not issue and 'Title' not in record and record.get('ObservedSampleTagIssue')
+                    and not record.get('ObservedSampleTagEvidence', '').startswith('SAMPLE_ID_BLOCK default from ')):
                 issue = record['ObservedSampleTagIssue']
             if issue:
                 problems.append('EXPNO '+str(record.get('ObservedExpno',''))+': '+issue)
@@ -68,6 +124,8 @@ def resolve_folder_sample_defaults(observations):
             origin += '; ... ('+str(len(declared))+' declaring acquisitions)'
         evidence = 'SAMPLE_ID_FOLDER default from '+origin
         for record in records:
+            if _block_key(record) in blocked:
+                continue  # Explicit blocks supersede folder defaults, even when broken.
             if record.get('ObservedSampleID') and not record.get('ObservedSampleTagIssue'):
                 continue  # Acquisition-local SAMPLE_ID has explicit priority.
             if record.get('ObservedSampleTagIssue'):
