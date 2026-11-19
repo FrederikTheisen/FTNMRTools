@@ -92,15 +92,18 @@ Tube status is independent of experiment assessment.
 
 The Storage grid shows occupied positions in blue, suspected degradation in
 yellow, degraded samples in orange and dead samples in red; empty positions
-stay white. Click an occupied position to inspect its sample without moving it.
+stay white. The box has 88 usable positions: A1, B1, G1, H1, A12, B12, G12
+and H12 are unavailable and shown grey. Click an occupied position to inspect
+its sample without moving it.
 
 `Series (optional)` is collapsed by default. Use it only to reuse shared
 preparation defaults; it can be ignored for one-off samples or bulk tube entry.
 
 Create a sample for each physical tube using the embedded sample registration
 form, then optionally choose its rack position visually (numbered rows 1–12,
-lettered columns A–H). Bulk entry previews the exact consecutive positions and
-stops if any are occupied; it never skips to a later slot. Existing rack
+lettered columns A–H). Bulk entry previews consecutive physical positions,
+skipping the eight non-existent positions. It stops if any physical position is
+occupied; it never skips an occupied slot. Existing rack
 locations keep their current A–H/1–12 storage values. Use the experiment registration form to register an acquisition
 and link it to its sample. Leave a numeric condition blank when it is unknown;
 enter `0` only when zero was measured or deliberately set. Blank/unknown values

@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 import json
 import math
 import re
-from nmr_register.storage_widget import RACK_CSS, RACK_JS
+from nmr_register.storage_widget import RACK_CSS, RACK_JS, RACK_SLOTS, UNAVAILABLE_SLOTS
 from nmr_register.experiment_taxonomy import experiment_choices_by_category
 
 NUMERIC_RULES = {'pH': [0,14], 'NaCl_mM':[0,None], 'DNA_uM':[0,None],
@@ -147,6 +147,9 @@ def sample_actions(values,tables):
         if bool(row) != (raw_column is not None) or (row and not re.fullmatch('[A-H]',row)) or (raw_column is not None and not raw_column.is_integer()):
             raise ValueError('Storage position needs a letter A-H and numbered row 1-12')
         column=int(raw_column) if raw_column is not None else None
+    start_slot=row+str(column) if row else ''
+    if start_slot in UNAVAILABLE_SLOTS: raise ValueError('Storage position is unavailable due to rack construction')
+    first_slot=RACK_SLOTS.index(start_slot) if row else None
     availability=sample_status(values.get('Available'))
     ids={row.get('SampleID') for row in _rows(tables,'Samples')}
     occupied=set()
@@ -167,9 +170,9 @@ def sample_actions(values,tables):
         ids.add(sample_id);created.append(sample_id)
         slot_row,slot_col='',None
         if row:
-            slot='ABCDEFGH'.index(row)*12+column-1+index
-            if slot>=96: raise ValueError('Bulk storage slots exceed the rack')
-            slot_row='ABCDEFGH'[slot//12];slot_col=slot%12+1
+            slot=first_slot+index
+            if slot>=len(RACK_SLOTS): raise ValueError('Bulk storage slots exceed the rack')
+            slot_row=RACK_SLOTS[slot][0];slot_col=int(RACK_SLOTS[slot][1:])
             if (slot_row,slot_col) in occupied: raise ValueError('A selected storage slot is already occupied')
             planned_slots.append(slot_row+str(slot_col))
         else: planned_slots.append('')
@@ -221,6 +224,7 @@ def experiment_actions(values,tables,now=None):
 JS_LOGIC = r'''
 const NMRRegistration = (() => {
  const rules = __RULES__, units = __UNITS__, textFields = __TEXT__,labels=['15N','13C','2H'];
+ const rackSlots=__RACK_SLOTS__, unavailableSlots=new Set(__UNAVAILABLE_SLOTS__);
  const sampleStatuses=['Usable','Suspected degradation','Degraded','Dead'];
  function sampleStatus(value){if(value==null||['','Available','Unknown'].includes(value))return 'Usable';if(['Unavailable','Retired'].includes(value))return 'Dead';if(!sampleStatuses.includes(value))throw Error('Invalid sample status');return value;}
  function selectableSample(row,includeDead=false){try{return sampleStatus(row.Available)!=='Dead'||includeDead;}catch(error){return false;}}
@@ -299,6 +303,8 @@ const NMRRegistration = (() => {
   if(position){const match=/^([A-H])(1[0-2]|[1-9])$/.exec(position);if(!match)throw Error('Storage position must be a letter A-H and numbered row 1-12');row=match[1];column=Number(match[2]);}
   else{row=String(v.StorageRow||'').trim().toUpperCase();column=number(v.StorageColumn,'Storage column',1,12);
    if(Boolean(row)!==(column!==null)||(row&&!/^[A-H]$/.test(row))||(column!==null&&!Number.isInteger(column)))throw Error('Storage position needs a letter A-H and numbered row 1-12');}
+  const startSlot=row?row+column:'';if(unavailableSlots.has(startSlot))throw Error('Storage position is unavailable due to rack construction');
+  const firstSlot=row?rackSlots.indexOf(startSlot):-1;
   const available=sampleStatus(v.Available);
   const ids=new Set(rows(t,'Samples').map(r=>r.SampleID)),created=[],plannedSlots=[],firstID=next(t,'Samples');
   varying.forEach((value,i)=>{
@@ -307,7 +313,7 @@ const NMRRegistration = (() => {
    const base=[stamp,token(common.Isotope),token(common.Protein),suffix].filter(Boolean).join('_');let counter=1;while(ids.has(base+'_'+counter))counter++;
    const sampleID=base+'_'+counter;ids.add(sampleID);created.push(sampleID);
    let slotRow='',slotCol=null;
-   if(row){const slot='ABCDEFGH'.indexOf(row)*12+column-1+i;if(slot>=96)throw Error('Bulk storage slots exceed the rack');slotRow='ABCDEFGH'[Math.floor(slot/12)];slotCol=slot%12+1;
+   if(row){const slot=firstSlot+i;if(slot>=rackSlots.length)throw Error('Bulk storage slots exceed the rack');slotRow=rackSlots[slot][0];slotCol=Number(rackSlots[slot].slice(1));
     if(rows(t,'Samples').some(s=>String(s.StorageRow||'').trim().toUpperCase()===slotRow&&Number(s.StorageColumn)===slotCol))throw Error('A selected storage slot is already occupied');}
    plannedSlots.push(slotRow?slotRow+slotCol:'');
    const fields={SampleID:sampleID,PreparedAt:datevalue,PreparedDateText:month,Series:seriesRef,...common,DistinguishingCondition:suffix,SampleNumber:String(counter),StorageRow:slotRow,StorageColumn:slotCol,Available:available};
@@ -335,7 +341,7 @@ const NMRRegistration = (() => {
  }
  return {number,prepared,labellingState,labelling,sampleStatus,selectableSample,proteinSuggestions,proteinChoiceActions,sampleActions,experimentActions};
 })();
-'''.replace('__RULES__',json.dumps(NUMERIC_RULES)).replace('__UNITS__',json.dumps(UNITS)).replace('__TEXT__',json.dumps(TEXT_FIELDS))
+'''.replace('__RULES__',json.dumps(NUMERIC_RULES)).replace('__UNITS__',json.dumps(UNITS)).replace('__TEXT__',json.dumps(TEXT_FIELDS)).replace('__RACK_SLOTS__',json.dumps(RACK_SLOTS)).replace('__UNAVAILABLE_SLOTS__',json.dumps(sorted(UNAVAILABLE_SLOTS)))
 
 HTML = r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <script src="grist-plugin-api.js"></script><style>
@@ -355,7 +361,7 @@ select[data-tube-status="Suspected degradation"]{background:#FFF1CC;color:#5C430
 <section id="bufferBlock"><h3>2. Buffer and composition</h3><div class="grid" id="buffer"></div></section>
 <details id="compositionBlock"><summary>Additional composition (optional)</summary><div class="grid" id="composition"></div></details>
 <section id="bulkBlock" class="hidden"><h3>Values for each physical sample</h3><div class="grid" id="bulk"></div></section>
-<details id="storageBlock"><summary>Rack position (optional)</summary><p class="rack-help">Choose a numbered row and lettered column. Bulk placement previews consecutive slots and stops at any occupied position.</p><input type="hidden" id="field_StorageSlot" name="StorageSlot" value=""><div id="rackPicker" aria-label="Sample rack position"></div><div id="storagePreview" class="ok" role="status" aria-live="polite"></div><div class="grid" id="storage"></div></details>
+<details id="storageBlock"><summary>Rack position (optional)</summary><p class="rack-help">Choose a numbered row and lettered column. Eight positions are unavailable due to rack construction. Bulk placement previews consecutive available positions and stops at any occupied position.</p><input type="hidden" id="field_StorageSlot" name="StorageSlot" value=""><div id="rackPicker" aria-label="Sample rack position"></div><div id="storagePreview" class="ok" role="status" aria-live="polite"></div><div class="grid" id="storage"></div></details>
 <div class="grid hidden" id="experiment"></div>
 <div class="actions"><button id="submit" type="button" disabled>Add sample</button><button id="refresh" class="secondary" type="button">Refresh choices</button></div><div id="message" role="status" aria-live="polite">Loading register…</div></form>
 <script>
@@ -397,8 +403,9 @@ function rackPreviewSlots(){
   if(!values.length||values.length>96)return {slots:[],error:'Enter 1–96 varying values to preview positions.'};
   count=values.length;
  }
- const first='ABCDEFGH'.indexOf(match[1])*12+Number(match[2])-1,slots=[];
- for(let i=0;i<count;i++){const index=first+i;if(index>=96)return {slots,error:'This batch extends beyond the last rack position.'};slots.push('ABCDEFGH'[Math.floor(index/12)]+String(index%12+1));}
+ if(Rack.unavailable(raw))return {slots:[],error:'This position is unavailable due to rack construction.'};
+ const first=Rack.slots.indexOf(raw),slots=[];
+ for(let i=0;i<count;i++){const index=first+i;if(index>=Rack.slots.length)return {slots,error:'This batch extends beyond the last rack position.'};slots.push(Rack.slots[index]);}
  return {slots,error:''};
 }
 function refreshRack(){

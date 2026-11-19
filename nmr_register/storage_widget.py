@@ -1,8 +1,13 @@
 """Document-owned recorded-position picker; storage encoding is unchanged."""
 import json
 
+UNAVAILABLE_SLOTS = frozenset({'A1', 'B1', 'G1', 'H1', 'A12', 'B12', 'G12', 'H12'})
+RACK_SLOTS = tuple(f'{letter}{number}' for letter in 'ABCDEFGH' for number in range(1, 13)
+                   if f'{letter}{number}' not in UNAVAILABLE_SLOTS)
+
 RACK_JS = r'''
 const Rack=(()=>{
+ const slots=Object.freeze(__RACK_SLOTS__),blocked=new Set(__UNAVAILABLE_SLOTS__),unavailable=key=>blocked.has(key);
  const rows=t=>Array.isArray(t)?t.map(r=>r.fields?{...r.fields,id:r.id}:r):(t?.id||[]).map((id,i)=>Object.fromEntries(Object.keys(t).map(k=>[k,t[k][i]])));
  const blank=v=>v===null||v===undefined||typeof v==='string'&&!v.trim();
  function normalizePosition(record){
@@ -10,7 +15,7 @@ const Rack=(()=>{
   const column=blank(raw)?null:typeof raw==='boolean'?NaN:Number(raw);
   if(!row&&column===null)return {key:'',row:'',column:null,issue:''};
   if(!/^[A-H]$/.test(row)||!Number.isInteger(column)||column<1||column>12)return {key:'',row,column:Number.isFinite(column)?column:null,issue:'Incomplete or invalid recorded position'};
-  return {key:row+column,row,column,issue:''};
+  return {key:row+column,row,column,issue:unavailable(row+column)?'Unavailable — box construction':''};
  }
  function occupancy(records){const result=new Map();for(const sample of rows(records)){const p=normalizePosition(sample);if(p.key){if(!result.has(p.key))result.set(p.key,[]);result.get(p.key).push(sample);}}return result;}
  const token=r=>JSON.stringify(['id','SampleID','StorageBox','StorageRow','StorageColumn'].map(k=>r?.[k]??null));
@@ -26,6 +31,7 @@ const Rack=(()=>{
  function placementActions(id,records,destination,baseline){
   const sample=validate(id,baseline,records),match=/^([A-H])([1-9]|1[0-2])$/.exec(String(destination));
   if(!match)throw Error('Choose a valid empty position.');
+  if(unavailable(destination))throw Error('Unavailable — box construction. Choose an existing rack position.');
   const occupants=occupancy(records).get(destination)||[];
   if(occupants.length)throw Error('That recorded position is occupied. Choose another slot.');
   return [['UpdateRecord','Samples',sample.id,{StorageRow:match[1],StorageColumn:Number(match[2])}]];
@@ -40,28 +46,28 @@ const Rack=(()=>{
   const body=document.createElement('tbody');
   for(let n=1;n<=12;n++){const tr=document.createElement('tr'),number=document.createElement('th');number.scope='row';number.textContent=String(n);tr.append(number);
    for(const letter of 'ABCDEFGH'){
-    const key=letter+n,occupants=occupied.get(key)||[],selected=occupants.some(r=>r.id===selectedId),ambiguous=occupants.length>1,isDead=occupants.some(dead),state=occupants.length?['dead','degraded','suspected','occupied'].find(s=>occupants.some(r=>status(r)===s)):'';
+    const key=letter+n,isUnavailable=unavailable(key),occupants=occupied.get(key)||[],selected=occupants.some(r=>r.id===selectedId),ambiguous=occupants.length>1,isDead=occupants.some(dead),state=occupants.length?['dead','degraded','suspected','occupied'].find(s=>occupants.some(r=>status(r)===s)):'';
     const td=document.createElement('td'),button=document.createElement('button');button.type='button';button.dataset.slot=key;
-    button.className=['rack-slot',occupants.length?'occupied':'empty',selected?'current':'',destination===key?'destination':'',state,ambiguous?'ambiguous':''].filter(Boolean).join(' ');
-    button.textContent=key+(ambiguous?' !':isDead?' ×':state==='degraded'?' D':state==='suspected'?' ?':occupants.length?' •':'');button.title=key+(occupants.length?' — '+occupants.map(r=>label(r)+' ('+(r.Available||'status unrecorded')+')').join('; '):' — no sample recorded');
+    button.className=['rack-slot',occupants.length?'occupied':'empty',selected?'current':'',destination===key?'destination':'',state,ambiguous?'ambiguous':'',isUnavailable?'unavailable':''].filter(Boolean).join(' ');
+    button.textContent=key+(isUnavailable?' —':ambiguous?' !':isDead?' ×':state==='degraded'?' D':state==='suspected'?' ?':occupants.length?' •':'');button.title=key+(isUnavailable?' — Unavailable — box construction':'')+(occupants.length?' — '+occupants.map(r=>label(r)+' ('+(r.Available||'status unrecorded')+')').join('; '):' — no sample recorded');
     if(selected)button.title+='; selected sample';if(ambiguous)button.title+='; conflicting occupancy — review required';
     button.setAttribute('aria-label',button.title);
-    const canSelect=Boolean(onSelect)&&!ambiguous&&(!occupants.length||allowOccupiedSelect),canInspect=Boolean(onInspect)&&occupants.length>0;
+    const canSelect=Boolean(onSelect)&&!isUnavailable&&!ambiguous&&(!occupants.length||allowOccupiedSelect),canInspect=Boolean(onInspect)&&occupants.length>0;
     if(canSelect&&!canInspect)button.setAttribute('aria-pressed',String(destination===key));
     button.disabled=!canSelect&&!canInspect;
     if(!button.disabled)button.addEventListener('click',()=>{if(canInspect)onInspect(key,occupants);else if(canSelect)onSelect(key,{StorageRow:letter,StorageColumn:n});});td.append(button);tr.append(td);
    }body.append(tr);
-  }table.append(body);const legend=document.createElement('p');legend.className='rack-legend';legend.textContent='White: empty · Blue •: occupied · Yellow ?: suspected degradation · Orange D: degraded · Red ×: dead · !: conflict';element.replaceChildren(table,legend);return {occupancy:occupied,invalid};
+  }table.append(body);const legend=document.createElement('p');legend.className='rack-legend';legend.textContent='White: empty · Blue •: occupied · Yellow ?: suspected degradation · Orange D: degraded · Red ×: dead · Grey hatch —: unavailable (box construction) · !: conflict';element.replaceChildren(table,legend);return {occupancy:occupied,invalid};
  }
- return {rows,normalizePosition,occupancy,token,dead,label,placementActions,clearActions,mountRack};
+ return {slots,unavailable,rows,normalizePosition,occupancy,token,dead,label,placementActions,clearActions,mountRack};
 })();
-'''
+'''.replace('__RACK_SLOTS__', json.dumps(RACK_SLOTS)).replace('__UNAVAILABLE_SLOTS__', json.dumps(sorted(UNAVAILABLE_SLOTS)))
 
 RACK_CSS = r'''
 .nmr-rack{border-collapse:separate;border-spacing:3px;width:100%;table-layout:fixed;font:12px system-ui,sans-serif;color:var(--grist-theme-text,#262633)}
 .nmr-rack caption{text-align:left;font-size:13px;font-weight:600;padding:0 0 7px}.nmr-rack th{text-align:center;font-weight:600;height:21px}.nmr-rack th:first-child{width:25px}.nmr-rack td{padding:0}
 .nmr-rack .rack-slot{display:block;width:100%;height:29px;padding:0 1px;font:inherit;border:1px solid #cbd4dc;border-radius:4px;background:#fff;color:#334155;cursor:pointer;white-space:nowrap}
-.rack-legend{font:11px system-ui,sans-serif;line-height:1.4;margin:5px 0}.nmr-rack .rack-slot.occupied{background:#bfdbfe;color:#1e3a8a}.nmr-rack .rack-slot.suspected{background:#fef08a;color:#713f12}.nmr-rack .rack-slot.degraded{background:#fdba74;color:#7c2d12}.nmr-rack .rack-slot.dead{background:#F8B4B4;color:#7F1D1D;border-color:#dca99b}.nmr-rack .rack-slot.ambiguous{border:2px dashed #7c2d12}.nmr-rack .rack-slot.current{outline:2px solid #426ea2;outline-offset:-2px}.nmr-rack .rack-slot.destination{background:#dceafb;border-color:#426ea2}.nmr-rack .rack-slot:focus-visible{outline:3px solid #1d4ed8;outline-offset:1px}.nmr-rack .rack-slot:disabled{cursor:default;opacity:1}
+.rack-legend{font:11px system-ui,sans-serif;line-height:1.4;margin:5px 0}.nmr-rack .rack-slot.occupied{background:#bfdbfe;color:#1e3a8a}.nmr-rack .rack-slot.suspected{background:#fef08a;color:#713f12}.nmr-rack .rack-slot.degraded{background:#fdba74;color:#7c2d12}.nmr-rack .rack-slot.dead{background:#F8B4B4;color:#7F1D1D;border-color:#dca99b}.nmr-rack .rack-slot.ambiguous{border:2px dashed #7c2d12}.nmr-rack .rack-slot.current{outline:2px solid #426ea2;outline-offset:-2px}.nmr-rack .rack-slot.destination{background:#dceafb;border-color:#426ea2}.nmr-rack .rack-slot.unavailable{background:repeating-linear-gradient(135deg,#e2e5e9,#e2e5e9 4px,#cbd0d6 4px,#cbd0d6 6px);color:#4b5563;border-color:#9ca3af}.nmr-rack .rack-slot:focus-visible{outline:3px solid #1d4ed8;outline-offset:1px}.nmr-rack .rack-slot:disabled{cursor:default;opacity:1}
 '''
 
 UI_JS = r'''
@@ -71,18 +77,18 @@ function message(text,error=false){$('message').textContent=text;$('message').cl
 function renderInspector(){
  const panel=$('inspector');panel.replaceChildren();if(!inspectedSlot){panel.textContent='Click an occupied slot to inspect its samples.';return;}
  const occupants=Rack.occupancy(samples).get(inspectedSlot)||[];
- const heading=document.createElement('strong');heading.textContent=inspectedSlot+' — '+(occupants.length>1?'conflicting sample records':occupants.length?'sample details':'no sample recorded');panel.append(heading);
+ const heading=document.createElement('strong');heading.textContent=inspectedSlot+' — '+(occupants.length>1?'conflicting sample records':occupants.length?'sample details':'no sample recorded');panel.append(heading);if(Rack.unavailable(inspectedSlot)){const warning=document.createElement('p');warning.textContent='Unavailable — box construction. Recorded samples require review.';panel.append(warning);}
  for(const sample of occupants){const line=document.createElement('p');line.textContent=[Rack.label(sample),'Protein: '+(sample.Protein||'not recorded'),'Labeling: '+(sample.Isotope||'not recorded'),'Tube status: '+(sample.Available||'not recorded')].join(' · ');panel.append(line);}
 }
 function render(){
  $('sample').textContent=current?Rack.label(current):'Select a sample in the sample list.';
  const position=current?Rack.normalizePosition(current):null;
- $('position').textContent=current?'Recorded position: '+(position.key||position.issue||'not assigned'):'';
+ $('position').textContent=current?'Recorded position: '+(position.key||position.issue||'not assigned')+(position.key&&position.issue?' — '+position.issue:''):'';
  $('preview').textContent=destination?'Place '+Rack.label(current)+' at '+destination+'?':'';
  const result=Rack.mountRack($('rack'),{records:samples,selectedId:current?.id,destination,onInspect:(key)=>{inspectedSlot=key;renderInspector();},onSelect:busy||!current?null:(key)=>{destination=key;message('');render();$('rack').querySelector('[data-slot="'+key+'"]').focus();}});
  renderInspector();
  const conflicts=[...result.occupancy.values()].filter(v=>v.length>1).length;
- $('issues').textContent=[conflicts?conflicts+' positions have conflicting sample records.':'',result.invalid.length?result.invalid.length+' samples have incomplete or invalid positions.':''].filter(Boolean).join(' ');
+ $('issues').textContent=[conflicts?conflicts+' positions have conflicting sample records.':'',result.invalid.length?result.invalid.length+' samples have incomplete, invalid or unavailable positions.':''].filter(Boolean).join(' ');
  $('place').disabled=busy||!SECTION_ID||!current||!destination;
  $('place').textContent=position?.key?'Move':'Place';
  $('clear').disabled=busy||!SECTION_ID||!current||!position||(!position.key&&!position.issue);

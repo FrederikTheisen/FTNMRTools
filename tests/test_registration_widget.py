@@ -84,12 +84,12 @@ class WidgetTests(unittest.TestCase):
 
     def test_storage_grid_created_idempotently_and_slots_checked(self):
         self.tables['StorageGrid']=[{'id':4,'StorageBox':'legacy','Row':'A'}]
-        values={**self.values,'StorageRow':'A','StorageColumn':'12','mode':'bulk','VaryValues':'0,100','VaryField':'DNA_uM'}
+        values={**self.values,'StorageRow':'A','StorageColumn':'11','mode':'bulk','VaryValues':'0,100','VaryField':'DNA_uM'}
         plan=sample_actions(values,self.tables)
         grid=[a for a in plan['actions'] if a[1]=='StorageGrid'];self.assertEqual(grid,[])
         tubes=[a[3] for a in plan['actions'] if a[1]=='Samples']
-        self.assertEqual([(s['StorageRow'],s['StorageColumn']) for s in tubes],[('A',12),('B',1)])
-        self.tables['Samples']=[{'id':2,'StorageBox':'old box','StorageRow':'a','StorageColumn':'12'}]
+        self.assertEqual([(s['StorageRow'],s['StorageColumn']) for s in tubes],[('A',11),('B',2)])
+        self.tables['Samples']=[{'id':2,'StorageBox':'old box','StorageRow':'a','StorageColumn':'11'}]
         with self.assertRaisesRegex(ValueError,'occupied'):sample_actions(values,self.tables)
         with self.assertRaises(ValueError):sample_actions({**self.values,'StorageRow':'AB','StorageColumn':'1'},self.tables)
 
@@ -99,12 +99,22 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual((fields['StorageRow'],fields['StorageColumn']),('A',6))
         self.assertEqual(plan['storage_slots'],['A6'])
         bulk=sample_actions({**self.values,'mode':'bulk','VaryValues':'0,100,200','VaryField':'DNA_uM','StorageSlot':'A11'},self.tables)
-        self.assertEqual(bulk['storage_slots'],['A11','A12','B1'])
-        self.assertEqual([(a[3]['StorageRow'],a[3]['StorageColumn']) for a in bulk['actions']], [('A',11),('A',12),('B',1)])
+        self.assertEqual(bulk['storage_slots'],['A11','B2','B3'])
+        self.assertEqual([(a[3]['StorageRow'],a[3]['StorageColumn']) for a in bulk['actions']], [('A',11),('B',2),('B',3)])
+
+    def test_unavailable_starts_and_capacity(self):
+        for slot in ('A1','B1','G1','H1','A12','B12','G12','H12'):
+            with self.subTest(slot=slot):
+                with self.assertRaisesRegex(ValueError,'unavailable'):
+                    sample_actions({**self.values,'StorageSlot':slot},self.tables)
+                with self.assertRaisesRegex(ValueError,'unavailable'):
+                    sample_actions({**self.values,'StorageRow':slot[0],'StorageColumn':slot[1:]},self.tables)
+        with self.assertRaisesRegex(ValueError,'exceed'):
+            sample_actions({**self.values,'mode':'bulk','VaryValues':'0,100','StorageSlot':'H11'},self.tables)
 
     def test_bulk_rack_preview_does_not_skip_occupied_slot(self):
-        self.tables['Samples']=[{'id':2,'StorageRow':'B','StorageColumn':1,'Available':'Dead'}]
-        values={**self.values,'mode':'bulk','VaryValues':'0,100','VaryField':'DNA_uM','StorageSlot':'A12'}
+        self.tables['Samples']=[{'id':2,'StorageRow':'B','StorageColumn':2,'Available':'Dead'}]
+        values={**self.values,'mode':'bulk','VaryValues':'0,100','VaryField':'DNA_uM','StorageSlot':'A11'}
         with self.assertRaisesRegex(ValueError,'occupied'):
             sample_actions(values,self.tables)
         unplaced=sample_actions({**self.values,'mode':'bulk','VaryValues':'0,100','VaryField':'DNA_uM'},self.tables)
