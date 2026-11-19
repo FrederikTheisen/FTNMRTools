@@ -37,15 +37,24 @@ setTimeout(async()=>{
  const assert=(ok,why)=>{if(!ok)throw Error(why);},tick=()=>new Promise(r=>setTimeout(r,0));
  try{
   assert(rackTestResults.passed===9,'pure core cases');
-  assert(current.id===1&&samples.length===5,'partial onRecord and filtered onRecords still fetch full Samples');
+  assert(current.id===1&&samples.length===7,'partial onRecord and filtered onRecords still fetch full Samples');
   assert(document.querySelectorAll('.rack-slot').length===96,'96 slots');
   assert([...document.querySelectorAll('thead th')].slice(1).map(x=>x.textContent).join('')==='ABCDEFGH','letters across');
   assert([...document.querySelectorAll('tbody th')].map(x=>x.textContent).join(',')==='1,2,3,4,5,6,7,8,9,10,11,12','numbers down');
   assert(document.querySelector('tbody tr:nth-child(6) td:first-of-type button').dataset.slot==='A6','A6 encoding and orientation');
   assert(document.querySelector('[data-slot="A6"]').classList.contains('current'),'current position highlighted');
-  assert(document.querySelector('[data-slot="C2"]').disabled&&document.querySelector('[data-slot="C2"]').classList.contains('dead'),'dead remains occupied and red');
-  assert(document.querySelector('[data-slot="A12"]').disabled&&document.querySelector('[data-slot="A12"]').classList.contains('ambiguous'),'ambiguous occupancy read only');
+  assert(!document.querySelector('[data-slot="C2"]').disabled&&document.querySelector('[data-slot="C2"]').classList.contains('dead'),'dead remains occupied and red');
+  assert(!document.querySelector('[data-slot="A12"]').disabled&&document.querySelector('[data-slot="A12"]').classList.contains('ambiguous'),'ambiguous occupancy inspectable');
   assert(!$('sample').querySelector('img'),'sample labels displayed as text');
+  const editing=current,base=baseline;
+  for(const [slot,state,marker] of [['A6','occupied','•'],['D3','suspected','?'],['E4','degraded','D'],['C2','dead','×']]){const b=document.querySelector('[data-slot="'+slot+'"]');assert(b.classList.contains(state)&&b.textContent.includes(marker)&&b.getAttribute('aria-label').includes('('),'visible and accessible status '+state);b.click();}
+  document.querySelector('[data-slot="A6"]').click();assert($('inspector').textContent.includes('Protein: Test protein')&&$('inspector').textContent.includes('Labeling: 15N')&&$('inspector').textContent.includes('Tube status: Usable')&&!$('inspector').querySelector('img'),'inspector fields use text');
+  document.querySelector('[data-slot="A12"]').click();assert($('inspector').textContent.includes('Conflict 1')&&$('inspector').textContent.includes('Conflict 2'),'all conflicting occupants inspectable');
+  assert(!WRITES.length&&current===editing&&baseline===base&&selectedId===1&&!destination,'inspection never changes editing selection, baseline, destination or writes');
+  const fixture=document.createElement('div');let selections=0,inspections=0;
+  Rack.mountRack(fixture,{records:RECORDS,onSelect:()=>selections++});assert(fixture.querySelector('[data-slot="C2"]').disabled,'placement contract blocks occupied');
+  Rack.mountRack(fixture,{records:RECORDS,onSelect:()=>selections++,allowOccupiedSelect:true});fixture.querySelector('[data-slot="C2"]').click();assert(selections===1&&fixture.querySelector('[data-slot="A12"]').disabled,'registration occupied selection preserved and conflicts blocked');
+  Rack.mountRack(fixture,{records:RECORDS,onSelect:()=>selections++,onInspect:()=>inspections++});fixture.querySelector('[data-slot="A12"]').click();assert(inspections===1&&selections===1,'inspection separate from placement callback');
   document.querySelector('[data-slot="B6"]').click();assert(!WRITES.length&&$('preview').textContent.includes('B6'),'click previews without autosave');
   await save(false);assert(RECORDS[0].StorageRow==='B'&&RECORDS[0].StorageColumn===6,'explicit move changes position');
   await save(true);assert(RECORDS[0].StorageRow===''&&RECORDS[0].StorageColumn===null,'explicit clear');
@@ -64,7 +73,7 @@ setTimeout(async()=>{
 
 def browser_harness():
     fake=r'''<script>
-const RECORDS=[{id:1,SampleID:'Tube <img src=x> 1',StorageRow:'A',StorageColumn:6,Available:'Usable',Notes:'keep'},{id:2,SampleID:'Dead tube',StorageRow:'C',StorageColumn:2,Available:'Dead'},{id:3,SampleID:'Conflict 1',StorageRow:'A',StorageColumn:12,Available:'Usable'},{id:4,SampleID:'Conflict 2',StorageRow:'A',StorageColumn:12,Available:'Usable'},{id:5,SampleID:'Incomplete position',StorageRow:'B',StorageColumn:null,Available:'Usable'}];
+const RECORDS=[{id:1,SampleID:'Tube <img src=x> 1',StorageRow:'A',StorageColumn:6,Available:'Usable',Protein:'Test protein',Isotope:'15N',Notes:'keep'},{id:2,SampleID:'Dead tube',StorageRow:'C',StorageColumn:2,Available:'Dead'},{id:3,SampleID:'Conflict 1',StorageRow:'A',StorageColumn:12,Available:'Usable'},{id:4,SampleID:'Conflict 2',StorageRow:'A',StorageColumn:12,Available:'Usable'},{id:5,SampleID:'Incomplete position',StorageRow:'B',StorageColumn:null,Available:'Usable'},{id:6,SampleID:'Suspected tube',StorageRow:'D',StorageColumn:3,Available:'Suspected degradation'},{id:7,SampleID:'Degraded tube',StorageRow:'E',StorageColumn:4,Available:'Degraded'}];
 const WRITES=[],table=rows=>Object.fromEntries([...new Set(rows.flatMap(r=>Object.keys(r)))].map(k=>[k,rows.map(r=>r[k])]));
 window.grist={ready:settings=>window.readySettings=settings,onRecord:cb=>cb({id:1}),onRecords:cb=>cb([{id:1}]),docApi:{fetchTable:async name=>name==='Samples'?table(RECORDS):name==='_grist_Views_section'?{id:[28],tableRef:[9],parentKey:['custom'],options:[JSON.stringify({html:'<html data-nmr-storage="1">'})]}:{id:[9],tableId:['Samples']},applyUserActions:async actions=>{WRITES.push(actions);Object.assign(RECORDS.find(r=>r.id===actions[0][2]),actions[0][3]);return {};}}};
 </script>'''

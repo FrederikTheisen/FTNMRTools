@@ -90,6 +90,10 @@ rack slots until the position is cleared or moved; status alone does not prove
 physical removal. Older `Retired` or `Unavailable` values are read as `Dead`.
 Tube status is independent of experiment assessment.
 
+The Storage grid shows occupied positions in blue, suspected degradation in
+yellow, degraded samples in orange and dead samples in red; empty positions
+stay white. Click an occupied position to inspect its sample without moving it.
+
 `Series (optional)` is collapsed by default. Use it only to reuse shared
 preparation defaults; it can be ignored for one-off samples or bulk tube entry.
 
