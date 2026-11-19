@@ -104,7 +104,7 @@ def _legacy(row,by_key):
     return fields
 
 
-def _payload(row, obs, legacy, registration_timestamp):
+def _payload(row, obs, legacy):
     # The source adapter validates the canonical allowlist and keeps observed
     # facts out of the destination's retired columns.
     if any(k in obs for k in ('ResultCSV','ResultSHA256','ResultSourcePath')):
@@ -120,7 +120,6 @@ def _payload(row, obs, legacy, registration_timestamp):
         if name in facts:continue
         value=legacy.get(name)
         if value not in (None,''):values[name]=value
-    values['RegisteredAt']=registration_timestamp
     for name in ('SourceID','Folder','Expno'):values[name]=row[name]
     context=row.get('legacy_source_context') or {}
     if not isinstance(context,dict):raise ValueError('Invalid legacy source context')
@@ -135,14 +134,13 @@ def _payload(row, obs, legacy, registration_timestamp):
     return values
 
 
-def plan_batch(manifest_path, observations, client, *, expected_manifest_sha256, source_reconciliation_path, registration_timestamp):
+def plan_batch(manifest_path, observations, client, *, expected_manifest_sha256, source_reconciliation_path):
     """Read current Grist records and return an exact, guarded insert plan.
 
     observations must be a fresh full inventory, not only selected rows: this
     detects fingerprints shared with acquisitions outside the proposed batch.
     No writes are made. Previously inserted identical-identity rows are skipped.
     """
-    if type(registration_timestamp) not in (int,float) or not math.isfinite(registration_timestamp) or registration_timestamp<=0:raise ValueError('A fixed registration timestamp is required')
     digest,rows,manifest=_manifest(manifest_path,expected_manifest_sha256)
     by_source,legacy_identities=_provenance(manifest,source_reconciliation_path)
     if not isinstance(observations,list):raise ValueError('A fresh full observation inventory is required')
@@ -194,31 +192,31 @@ def plan_batch(manifest_path, observations, client, *, expected_manifest_sha256,
             if f.get('AcquisitionKey')!=key or _identity(f,True)!=ident or _identity(f)!=ident or f.get('ObservedFingerprint')!=finger or f.get('MigrationKey')!=mkey or f.get('ReconciliationReason'):
                 raise ValueError('Registered identity or provenance conflicts: '+key)
             skipped.append(key);continue
-        planned.append({'key':key,'fields':_payload(row,obs,legacy,registration_timestamp)})
+        planned.append({'key':key,'fields':_payload(row,obs,legacy)})
     return {'manifest_sha256':digest,'insert':planned,'skipped':skipped}
 
 
-def apply_batch(manifest_path, observations, client, *, expected_manifest_sha256, source_reconciliation_path, registration_timestamp, batch_size=50, dry_run=True):
+def apply_batch(manifest_path, observations, client, *, expected_manifest_sha256, source_reconciliation_path, batch_size=50, dry_run=True):
     """Preview or insert; after an uncertain POST, re-read before a later retry.
 
     Re-run with the same reviewed manifest to resume. Existing matched records
     are never updated, including records whose human fields have since changed.
     """
     if not isinstance(batch_size,int) or isinstance(batch_size,bool) or not 1<=batch_size<=100:raise ValueError('Invalid batch size')
-    plan=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path,registration_timestamp=registration_timestamp)
+    plan=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path)
     if dry_run:return plan
     committed=[]
     for start in range(0,len(plan['insert']),batch_size):
         # A fresh preflight catches edits since the previous batch. A single
         # writer remains necessary between this read and Grist's POST.
-        current=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path,registration_timestamp=registration_timestamp)
+        current=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path)
         pending={r['key']:r for r in current['insert']}
         batch=[pending[r['key']] for r in plan['insert'][start:start+batch_size] if r['key'] in pending]
         if not batch:continue
         try:client.add_records('Experiments',[r['fields'] for r in batch])
         except Exception as error:
             try:
-                checked=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path,registration_timestamp=registration_timestamp)
+                checked=plan_batch(manifest_path,observations,client,expected_manifest_sha256=expected_manifest_sha256,source_reconciliation_path=source_reconciliation_path)
                 remaining={r['key'] for r in checked['insert']}
             except Exception:
                 raise BatchUncertainError('POST outcome could not be reconciled; stop and inspect before retry',committed, [r['key'] for r in batch]) from error

@@ -41,12 +41,12 @@ class AcquisitionTransitionTests(unittest.TestCase):
     def test_setup_to_raw_pulse_and_start_changes_sync_without_new_row(self):
         self.params();self.sync();row=self.client.rows[0]['fields']
         self.assertEqual(row['AcquisitionStatus'],'Setup')
-        row.update(Sample=30,Study='Electrostatics',Notes='keep',RegisteredAt=123)
+        row.update(Sample=30,Study='Electrostatics',Notes='keep')
         self.params(start=1700001000,end=1700001010,pulse='hsqctretf3gpsitc3d.3')
         (self.path/'ser').write_bytes(b'fixture raw');self.sync()
         self.assertEqual(len(self.client.rows),1);self.assertEqual(row['ExperimentType'],'T1rho')
         self.assertEqual(row['PulseProgram'],'hsqctretf3gpsitc3d.3');self.assertEqual(row['Notes'],'keep')
-        self.assertEqual(row['Sample'],30);self.assertEqual(row['RegisteredAt'],123)
+        self.assertEqual(row['Sample'],30)
         self.assertFalse(row['ReconciliationReason']);self.assertEqual(self.state.pending(),[])
         self.sync();self.assertEqual(len(self.client.rows),1)
     def test_zero_length_template_file_may_be_replaced_by_actual_raw(self):

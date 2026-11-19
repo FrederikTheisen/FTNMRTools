@@ -1,6 +1,4 @@
 import copy
-from datetime import datetime, timezone
-from unittest.mock import patch
 import unittest
 from nmr_register.migration import apply_pilot
 
@@ -17,37 +15,24 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(apply_pilot(p,c,False),{'samples':[],'experiments':[]})
         with self.assertRaises(ValueError): apply_pilot({'scope':'full','samples':[],'experiments':[]},c,False)
 
-    def test_actual_new_import_records_registration_time_without_mutating_plan(self):
-        stamp = datetime(2026,11,5,12,30,tzinfo=timezone.utc)
+    def test_new_import_omits_registration_time_without_mutating_plan(self):
         for scope in ('pilot','full'):
-            for previous in ('absent', None, 0, 1700000000):
-                with self.subTest(scope=scope, previous=previous):
-                    fields = {'MigrationKey':'workbook:1'}
-                    if previous != 'absent': fields['RegisteredAt'] = previous
-                    plan = {'scope':scope,'samples':[], 'experiments':[{'fields':fields,'sample_id':None}]}
-                    before = copy.deepcopy(plan); client = Client()
-                    client.tables['Unclassified'] = []
-                    with patch('nmr_register.migration.datetime') as clock:
-                        clock.now.return_value = stamp
-                        apply_pilot(plan,client,dry_run=False,full_accepted=True)
-                        if previous == 1700000000: clock.now.assert_not_called()
-                        else: clock.now.assert_called_once_with(timezone.utc)
-                    expected = 1700000000 if previous == 1700000000 else stamp.timestamp()
-                    self.assertEqual(client.tables['Experiments'][0]['fields']['RegisteredAt'], expected)
-                    self.assertEqual(plan, before)
+            with self.subTest(scope=scope):
+                plan = {'scope':scope,'samples':[], 'experiments':[{'fields':{'MigrationKey':'workbook:1'},'sample_id':None}]}
+                before = copy.deepcopy(plan); client = Client()
+                client.tables['Unclassified'] = []
+                apply_pilot(plan,client,dry_run=False,full_accepted=True)
+                self.assertNotIn('RegisteredAt', client.tables['Experiments'][0]['fields'])
+                self.assertEqual(plan, before)
 
-    def test_dry_run_and_repeat_leave_missing_historical_timestamps_untouched(self):
+    def test_dry_run_and_repeat_preserve_existing_records(self):
         plan = {'scope':'pilot','samples':[], 'experiments':[{'fields':{'MigrationKey':'workbook:1'},'sample_id':None}]}
         before = copy.deepcopy(plan); client = Client()
-        with patch('nmr_register.migration.datetime') as clock:
-            apply_pilot(plan,client)
-            clock.now.assert_not_called()
+        apply_pilot(plan,client)
         self.assertEqual(client.tables['Experiments'], [])
-        client.tables['Experiments'] = [{'id':1,'fields':{'MigrationKey':'workbook:1','RegisteredAt':None,'Notes':'preserve'}}]
+        client.tables['Experiments'] = [{'id':1,'fields':{'MigrationKey':'workbook:1','Notes':'preserve'}}]
         existing = copy.deepcopy(client.tables)
-        with patch('nmr_register.migration.datetime') as clock:
-            self.assertEqual(apply_pilot(plan,client,dry_run=False), {'samples':[],'experiments':[]})
-            clock.now.assert_not_called()
+        self.assertEqual(apply_pilot(plan,client,dry_run=False), {'samples':[],'experiments':[]})
         self.assertEqual(client.tables, existing)
         self.assertEqual(plan, before)
 

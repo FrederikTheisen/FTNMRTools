@@ -1,6 +1,6 @@
 """Produce setup actions; caller must provide authenticated Grist transport."""
 import json
-from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, spectral_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA
+from .schema import schema_actions, trigger_actions, DATE_ONLY_OPTIONS, DATE_ONLY_EXPERIMENT_COLUMNS, LABELLING_CHOICES, acquisition_columns, spectral_columns, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_CATEGORY_ATTENTION_FORMULA, PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA
 
 # Reviewed one-time conversion from split observed/confirmed acquisition facts.
 LEGACY_OBSERVED_FACTS = {
@@ -349,7 +349,7 @@ def upgrade_acquisition_workflow_status(client, *, dry_run=True):
     if f.get('formula')!=wanted['EffectiveAcquisitionStatus']['formula']:actions.append(['UpdateRecord','_grist_Tables_column',effective['id'],{'formula':wanted['EffectiveAcquisitionStatus']['formula']}])
     old_attention=PRE_DUMMY_ATTENTION_FORMULA.replace('if $EffectiveAcquisitionStatus == "Aborted": issues.append("Acquisition aborted")\nif $EffectiveAcquisitionStatus == "Unknown": issues.append("Acquisition status unknown")', 'if $EffectiveAcquisitionStatus == "Stopped": issues.append("Acquisition stopped")').replace('$EffectiveAcquisitionStatus == "Completed"','$EffectiveAcquisitionStatus == "Finished"')
     attention=cols['AttentionReason']; f=attention['fields']
-    if not f.get('isFormula') or f.get('formula') not in (old_attention,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('Attention formula differs; review')
+    if not f.get('isFormula') or f.get('formula') not in (old_attention,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('Attention formula differs; review')
     if f.get('formula')!=ATTENTION_FORMULA:actions.append(['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':ATTENTION_FORMULA}])
     status=cols['AcquisitionStatus']; f=status['fields']
     if f.get('isFormula') or f.get('formula','') or f.get('type') not in ('Text','Choice'):raise ValueError('Stored status column differs; review')
@@ -457,10 +457,11 @@ def upgrade_sample_tag_schema(client):
         raise ValueError('Existing Sample formula requires review')
     if not formula and samplefields.get('recalcDeps') not in (None,[],['L']):
         raise ValueError('Existing Sample trigger dependencies require review')
-    current_target=ATTENTION_FORMULA if 'AssessmentExplanation' in cols else LEGACY_QC_ATTENTION_FORMULA
+    current_target=ATTENTION_FORMULA if 'AssessmentExplanation' in cols else LEGACY_QC_ATTENTION_FORMULA.replace('if not $RegisteredAt: issues.append("Registration incomplete")\n', '')
+    legacy_without_tag=LEGACY_QC_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')
     old=current_target.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')
     current=attention['fields'].get('formula','')
-    if current not in (old,current_target,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')):raise ValueError('AttentionReason formula requires review')
+    if current not in (old,current_target,LEGACY_QC_ATTENTION_FORMULA,legacy_without_tag,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')):raise ValueError('AttentionReason formula requires review')
     if current!=current_target:actions.append(['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':current_target}])
     if actions:client.apply(actions)
     cols=metadata()
@@ -501,7 +502,7 @@ def upgrade_assessment_schema(client, reviewed=None):
     if af.get('type')!='Choice' or (not old_mode and (not af.get('isFormula') or af.get('formula') not in (ASSESSMENT_FORMULA, PRE_ANALYSIS_ASSESSMENT_FORMULA, PRE_TOLERANCE_ASSESSMENT_FORMULA, LEGACY_ASSESSMENT_FORMULA))):
         raise ValueError('Assessment schema requires review')
     current_attention=attention['fields'].get('formula','')
-    if current_attention not in (LEGACY_QC_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('AttentionReason formula requires review')
+    if current_attention not in (LEGACY_QC_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_DUMMY_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,PRE_CATEGORY_ATTENTION_FORMULA,PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA,ATTENTION_FORMULA):raise ValueError('AttentionReason formula requires review')
     actions=[]
     for name in (*QC_CRITERIA,'AssessmentExplanation','ImportedAssessment','AssessmentDisplay'):
         spec=expected[name];existing=cols.get(name)
@@ -937,7 +938,7 @@ def build_layout(client, electrostatics_only=False):
                 actions.append(['AddRecord','_grist_Filters',None,{'viewSectionRef':section_id,'colRef':ref,'filter':'{}','pinned':True}])
         if actions: client.apply(actions)
     experiment_columns=['AcquiredAt','Folder','Instrument','AcquisitionStatus','ExperimentCategory','ExperimentType','PulseProgram','Expno','Sample','Title','Assessment']
-    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','RegisteredAt','Series','Sample','Instrument','ExperimentCategory','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
+    experiment_detail=['Study','AnalysisStatus','SourceID','Folder','Expno','Series','Sample','Instrument','ExperimentCategory','ExperimentType','AcquiredAt','AcquisitionStatus','ObservedAcquisitionEvidence','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz','SpectralWidths_ppm','SpectralOffsets_ppm','ObservedProtocolEvidence','ObservedSampleID','ObservedSampleTagEvidence','Title','SnapshotProtein','SnapshotConstruct','SnapshotBuffer','SnapshotpH','SnapshotNaCl_mM','SnapshotDNA_uM','SnapshotTFE_pct','SnapshotProtein_uM','SnapshotOtherConditions','Assessment','AssessmentReason','Notes','AttentionReason','ResultCSV']
     sample_columns=['SampleID','Protein','Series','NaCl_mM','DNA_uM','TFE_pct','StorageRow','StorageColumn','Available']
     sample_detail=['SampleID','PreparedAt','Isotope','Protein','Construct','DistinguishingCondition','SampleNumber','Series','Buffer','pH','NaCl_mM','DNA_uM','TFE_pct','Protein_uM','OtherConditions','StorageRow','StorageColumn','Available','CurrentLocation','Notes']
     if not electrostatics_only:
@@ -1408,7 +1409,7 @@ def upgrade_experiment_taxonomy(client, apply=False):
     if not attention or not attention['fields'].get('isFormula'):
         raise ValueError('AttentionReason requires review')
     current = attention['fields'].get('formula')
-    if current not in (PRE_CATEGORY_ATTENTION_FORMULA, ATTENTION_FORMULA):
+    if current not in (PRE_CATEGORY_ATTENTION_FORMULA, PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA, ATTENTION_FORMULA):
         raise ValueError('AttentionReason formula requires review')
     if current != ATTENTION_FORMULA:
         actions.append(['UpdateRecord', '_grist_Tables_column', attention['id'], {'formula': ATTENTION_FORMULA}])

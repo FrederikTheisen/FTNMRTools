@@ -218,8 +218,6 @@ def apply_pilot(plan, client, dry_run=True, full_accepted=False):
         if sample and not dry_run: fields['Sample']=sample_map[sample]
         actions['experiments'].append(key)
         if not dry_run:
-            if fields.get('RegisteredAt') in (None, 0):
-                fields['RegisteredAt'] = datetime.now(timezone.utc).timestamp()
             client.add('Experiments',fields)
         exp_map[key]=True
     return actions

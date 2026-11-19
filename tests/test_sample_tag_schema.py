@@ -66,4 +66,15 @@ class UpgradeTests(unittest.TestCase):
                     if a[0]=='AddColumn':self.cols.append({'id':1000+len(self.cols),'fields':{'parentId':4,'colId':a[2],**a[3]}})
                     else:next(c for c in self.cols if c['id']==a[2])['fields'].update(a[3])
         client=Fake();actions=upgrade_sample_tag_schema(client);self.assertTrue(actions);self.assertEqual([r['fields']['Sample'] for r in client.records_data],[9,0]);self.assertEqual(upgrade_sample_tag_schema(client),[])
+        from nmr_register.schema import LEGACY_QC_ATTENTION_FORMULA
+        for old in (LEGACY_QC_ATTENTION_FORMULA, LEGACY_QC_ATTENTION_FORMULA.replace('if $SampleTagIssue: issues.append($SampleTagIssue)\n','')):
+            with self.subTest(old=old):
+                client=Fake()
+                client.cols=[c for c in client.cols if c['fields']['colId']!='AssessmentExplanation']
+                attention=next(c for c in client.cols if c['fields']['colId']=='AttentionReason')
+                attention['fields']['formula']=old
+                upgrade_sample_tag_schema(client)
+                self.assertEqual(attention['fields']['formula'], LEGACY_QC_ATTENTION_FORMULA.replace('if not $RegisteredAt: issues.append("Registration incomplete")\n',''))
+                self.assertNotIn('RegisteredAt',attention['fields']['formula'])
+                self.assertEqual(upgrade_sample_tag_schema(client),[])
 if __name__=='__main__':unittest.main()

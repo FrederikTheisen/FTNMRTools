@@ -1,7 +1,13 @@
 import unittest
-from nmr_register.schema import MACHINE_FIELDS, columns, trigger_actions, snapshot_values, series_defaults
+from nmr_register.schema import MACHINE_FIELDS, columns, trigger_actions, snapshot_values, series_defaults, DATE_ONLY_EXPERIMENT_COLUMNS, ATTENTION_FORMULA, PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA
 
 class SchemaTests(unittest.TestCase):
+    def test_registration_field_removed_and_previous_formula_preserved(self):
+        self.assertNotIn('RegisteredAt', {c['id'] for c in columns()['Experiments']})
+        self.assertNotIn('RegisteredAt', DATE_ONLY_EXPERIMENT_COLUMNS)
+        self.assertEqual(PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA.replace(
+            'if not $RegisteredAt: issues.append("Registration incomplete")\n', ''), ATTENTION_FORMULA)
+        self.assertNotIn('RegisteredAt', ATTENTION_FORMULA)
     def test_ownership_and_snapshots(self):
         self.assertFalse({'Study','Sample','Assessment'} & MACHINE_FIELDS['Experiments'])
         self.assertEqual(snapshot_values({'NaCl_mM':0})['SnapshotNaCl_mM'],0)
@@ -23,7 +29,7 @@ class SchemaTests(unittest.TestCase):
         namespace={}
         exec('def evaluate(fields,NOW):\n'+''.join('    '+line+'\n' for line in source.splitlines()),namespace)
         now=datetime(2026,1,3,tzinfo=timezone.utc)
-        base=dict(Study='Electrostatics',ExperimentCategory='Other',ExperimentType='',MigrationIssue='',SampleTagIssue='',AssessmentExplanation='',ReconciliationReason='',MetadataDifference='',ScanError='',RegisteredAt=1,Sample=1,
+        base=dict(Study='Electrostatics',ExperimentCategory='Other',ExperimentType='',MigrationIssue='',SampleTagIssue='',AssessmentExplanation='',ReconciliationReason='',MetadataDifference='',ScanError='',Sample=1,
                   Assessment='',AssessmentDisplay='Not assessed',AssessmentReason='',RawPresent=False,AcquisitionStatus='',EffectiveAcquisitionStatus='Completed',
                   EffectiveAcquiredAt=now-timedelta(days=2))
         check=lambda **updates: namespace['evaluate']({**base,**updates},lambda:now)

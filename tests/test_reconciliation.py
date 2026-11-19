@@ -49,15 +49,15 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_notes_reasons_dates_and_observed(self):
         row = self.plan({'ImportedAssessment': 'Good', 'AssessmentReason': 'one',
-                         'AcquiredAt': 1, 'RegisteredAt': 2, 'ObservedExtra': 'old observation',
+                         'AcquiredAt': 1, 'ObservedExtra': 'old observation',
                          'SourceEvidence': 'workbook'},
                         {'ImportedAssessment': 'Good', 'AssessmentReason': 'two',
-                         'AcquiredAt': 3, 'RegisteredAt': 4, 'ObservedExtra': None,
+                         'AcquiredAt': 3, 'ObservedExtra': None,
                          'SourceEvidence': 'disk'}).after['Experiments'][0]['fields']
         self.assertEqual(row['AssessmentReason'], 'two\none')
-        self.assertEqual((row['AcquiredAt'], row['RegisteredAt']), (3, 4))
+        self.assertEqual(row['AcquiredAt'], 3)
         self.assertEqual(row['ObservedExtra'], 'old observation')
-        for text in ('workbook', 'disk', 'legacy AcquiredAt: 1', 'legacy RegisteredAt: 2'):
+        for text in ('workbook', 'disk', 'legacy AcquiredAt: 1'):
             self.assertIn(text, row['SourceEvidence'])
 
     def test_selected_results_conflict_and_source_only_bundle(self):

@@ -22,7 +22,7 @@ class CalibrationTests(unittest.TestCase):
         source=re.sub(r'\$(\w+)',lambda m:'fields.get('+repr(m[1])+')',ATTENTION_FORMULA)
         namespace={'NOW':lambda:now}
         exec('def run(fields):\n'+''.join('    '+line+'\n' for line in source.splitlines()),namespace)
-        fields={'Study':'Electrostatics','AcquisitionStatus':'Completed','EffectiveAcquisitionStatus':'Completed','EffectiveAcquiredAt':now-timedelta(days=2),'RegisteredAt':now,'Sample':1}
+        fields={'Study':'Electrostatics','AcquisitionStatus':'Completed','EffectiveAcquisitionStatus':'Completed','EffectiveAcquiredAt':now-timedelta(days=2),'Sample':1}
         self.assertIn('unassessed',namespace['run'](fields))
         self.assertEqual(namespace['run']({**fields,'ExperimentCategory':'Calibration'}),'')
         reason=namespace['run']({**fields,'ExperimentCategory':'Calibration','Sample':0,'ReconciliationReason':'identity conflict','ScanError':'scan failed'})

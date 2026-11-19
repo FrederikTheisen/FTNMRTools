@@ -11,7 +11,7 @@ class StudyAssessmentAttentionTests(unittest.TestCase):
     def setUp(self):
         now=datetime(2026,11,5,12)
         self.values=dict(Study='',AcquisitionStatus='Completed',EffectiveAcquisitionStatus='Completed',
-                         EffectiveAcquiredAt=now-timedelta(hours=25),RegisteredAt=now,Sample=1,
+                         EffectiveAcquiredAt=now-timedelta(hours=25),Sample=1,
                          ExperimentType='T1',Assessment='',AssessmentDisplay='Not assessed',now=now)
         self.source=ATTENTION_FORMULA.replace('NOW()', "values.get('now')")
 
@@ -30,7 +30,6 @@ class StudyAssessmentAttentionTests(unittest.TestCase):
         for study in (None,'DNA'):
             base=dict(self.values,Study=study,Assessment='Use')
             for changes,wanted in [({'Sample':0},'Sample not assigned'),
-                                   ({'RegisteredAt':None},'Registration incomplete'),
                                    ({'ReconciliationReason':'identity conflict'},'identity conflict'),
                                    ({'EffectiveAcquisitionStatus':'Aborted'},'Acquisition aborted')]:
                 self.assertEqual(formula(self.source,dict(base,**changes)),wanted)
@@ -44,7 +43,7 @@ class StudyAssessmentAttentionTests(unittest.TestCase):
             client.cols=[{'id':i+1,'fields':{'parentId':4,'colId':s['id'],**{k:v for k,v in s.items() if k!='id'}}} for i,s in enumerate(columns()['Experiments'])]
             attention=next(c for c in client.cols if c['fields']['colId']=='AttentionReason')
             attention['fields']['formula']=PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA
-            client.rows=[{'id':9,'fields':dict(Study='',Assessment='Use',Notes='keep',RegisteredAt=1700000000)}]
+            client.rows=[{'id':9,'fields':dict(Study='',Assessment='Use',Notes='keep')}]
             before=copy.deepcopy(client.rows)
             upgrade(client)
             expected=['UpdateRecord','_grist_Tables_column',attention['id'],{'formula':ATTENTION_FORMULA}] if kind=='assessment' else ['ModifyColumn','Experiments','AttentionReason',{'formula':ATTENTION_FORMULA}]

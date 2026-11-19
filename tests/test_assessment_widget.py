@@ -31,14 +31,10 @@ check('analysis tones and type validation preserve saved values',()=>{const excl
 check('decision tone preserves incomplete amber and canonical veto red',()=>{assert(AssessmentCard.decisionTone({Assessment:'',AssessmentDisplay:'Not assessed'})==='unchecked');assert(AssessmentCard.decisionTone({Assessment:'',AssessmentDisplay:'Use so far · analysis missing'})==='limited');assert(AssessmentCard.decisionTone({Assessment:'Do not use',AssessmentDisplay:'Do not use (partial)'})==='fail');assert(AssessmentCard.decisionTone({Assessment:'Use',AssessmentDisplay:'Use'})==='pass');});
 check('only the bound Experiments creator is eligible to write',()=>{const section={id:88,tableRef:42,parentKey:'custom',options:JSON.stringify({html:'<html data-nmr-assessment="1">'})};AssessmentCard.context([section],[{id:42,tableId:'Experiments'}],88);throws(()=>AssessmentCard.context([{...section,tableRef:9}],[{id:42,tableId:'Experiments'}],88));throws(()=>AssessmentCard.context([{...section,options:'{}'}],[{id:42,tableId:'Experiments'}],88));});
 
-const linked={...record,Sample:30,SnapshotSampleID:'tube30',ObservedSampleID:'tube30',AcquisitionKey:'main:folder/1',SourceID:'main',Folder:'folder',Expno:'1',ObservedSourceID:'main',ObservedFolder:'folder',ObservedExpno:'1',RegisteredAt:null};
-const samples=[{id:30,SampleID:'tube30'}],rating={...AssessmentCard.snapshot(linked),QCFID:'Unusable'},stamp=1794475200;
-check('explicit rating save confirms verified discovered acquisition atomically',()=>{const action=AssessmentCard.action(1,linked,rating,linked,[linked],samples,stamp);assert(action[3].RegisteredAt===stamp&&action[3].QCFID==='Unusable'&&action[3].QCAnalysis==='Not assessed');assert(!('Assessment'in action[3])&&!('Sample'in action[3]));assert(linked.RegisteredAt===null);});
-check('note only reset and normalized default differences do not register',()=>{for(const draft of [{...AssessmentCard.snapshot(linked),AssessmentReason:'note'},AssessmentCard.snapshot(linked),{...AssessmentCard.snapshot(linked),QCFID:'Not assessed'}])assert(AssessmentCard.registrationTimestamp(linked,draft,linked,[linked],samples,stamp)===undefined);const absent={...linked,QCFID:null};assert(AssessmentCard.registrationTimestamp(absent,AssessmentCard.snapshot(absent),absent,[absent],samples,stamp)===undefined);const rated={...linked,QCFID:'Clean'};assert(AssessmentCard.registrationTimestamp(rated,{...AssessmentCard.snapshot(rated),QCFID:'Not assessed'},rated,[rated],samples,stamp)===undefined);});
-check('existing registration timestamps and unqualified ratings are preserved',()=>{for(const changes of [{RegisteredAt:1700000000},{Sample:0},{ObservedSampleID:'another tube'},{SampleTagIssue:'mismatch'},{ObservedSampleTagIssue:'bad marker'},{ReconciliationReason:'copy requires review'},{SourceID:'other'},{ObservedExpno:'2'},{AcquisitionKey:'wrong'},{ObservedSourceID:''}]){const fresh={...linked,...changes};assert(!Object.hasOwn(AssessmentCard.action(1,fresh,rating,fresh,[fresh],samples,stamp)[3],'RegisteredAt'));}assert(!Object.hasOwn(AssessmentCard.action(1,linked,rating,linked,[linked],[],stamp)[3],'RegisteredAt'));});
-check('duplicate exact identities and conflicting samples block registration only',()=>{for(const other of [{...linked,id:2},{id:2,SourceID:'main',Folder:'folder',Expno:'1'},{id:2,ObservedSourceID:'main',ObservedFolder:'folder',ObservedExpno:'1'}])assert(AssessmentCard.registrationTimestamp(linked,rating,linked,[linked,other],samples,stamp)===undefined);assert(AssessmentCard.registrationTimestamp(linked,rating,linked,[linked],[...samples,...samples],stamp)===undefined);});
-check('timestamp and tag changes while editing fail freshness guard',()=>{for(const changes of [{RegisteredAt:stamp},{SampleTagIssue:'new mismatch'},{ObservedSampleTagIssue:'malformed'},{ObservedSampleID:'another tube'}])throws(()=>AssessmentCard.action(1,linked,rating,{...linked,...changes},[linked],samples,stamp));});
-check('root folder identity and zero missing timestamp remain supported',()=>{const root={...linked,RegisteredAt:0,Folder:'',ObservedFolder:'',AcquisitionKey:'main:1'};assert(AssessmentCard.registrationTimestamp(root,rating,root,[root],samples,stamp)===stamp);});
+const linked={...record,Sample:30,SnapshotSampleID:'tube30',ObservedSampleID:'tube30',AcquisitionKey:'main:folder/1',SourceID:'main',Folder:'folder',Expno:'1',ObservedSourceID:'main',ObservedFolder:'folder',ObservedExpno:'1'};
+const rating={...AssessmentCard.snapshot(linked),QCFID:'Unusable'};
+check('rating save writes no registration field',()=>{const action=AssessmentCard.action(1,linked,rating,linked);assert(action[3].QCFID==='Unusable'&&!Object.hasOwn(action[3],'RegisteredAt'));});
+check('tag and identity changes while editing fail freshness guard',()=>{for(const changes of [{SampleTagIssue:'new mismatch'},{ObservedSampleTagIssue:'malformed'},{ObservedSampleID:'another tube'},{AcquisitionKey:'wrong'}])throws(()=>AssessmentCard.action(1,linked,rating,{...linked,...changes}));});
 globalThis.assessmentTestResults={passed:checks.length,checks};
 '''
 
@@ -60,7 +56,6 @@ setTimeout(async()=>{
   assert($('decision').textContent==='Do not use'&&!document.querySelector('input[name="Assessment"]'),'imported decision is read only and participates as the current fallback');
   assert($('explanation').textContent==='Imported assessment: Do not use; checklist not yet completed','formula-provided imported-decision origin is visible in the dialog');
   $('QCSample').value='Unacceptable';$('QCSample').dispatchEvent(new Event('change'));await save();
-  assert(Number.isFinite(current.RegisteredAt)&&current.RegisteredAt>0,'first verified rating save confirms registration at actual save time');
   assert($('decision').textContent==='Do not use'&&current.QCSettings==='Not assessed'&&current.ImportedAssessment===''&&$('explanation').textContent==='Sample during acquisition: Unacceptable','saved checklist rating supersedes and clears the imported decision');
   const positives=['Sufficient','Appropriate','Clean','Adequate','Acceptable','Reliable'];
   AssessmentCard.keys.forEach((k,i)=>{$(k).value=positives[i];$(k).dispatchEvent(new Event('change'));});await save();
@@ -81,7 +76,7 @@ setTimeout(async()=>{
   assert(WRITES.at(-1)[0][2]===1&&RECORDS[0].AssessmentReason==='captured record one'&&current.id===2,'save captures source row across asynchronous selection switch');
   $('note').value='local conflicting draft';$('note').dispatchEvent(new Event('input'));const before=WRITES.length;RECORDS[1].QCSNR='Marginal';await save();
   assert(WRITES.length===before&&draft.AssessmentReason==='local conflicting draft'&&$('message').className==='error','concurrent change blocks write and retains draft');
-  assert(WRITES.every(batch=>batch.length===1&&batch[0][0]==='UpdateRecord'&&batch[0][1]==='Experiments'&&Object.keys(batch[0][3]).sort().join()===(Object.hasOwn(batch[0][3],'ImportedAssessment')?['AssessmentReason','ImportedAssessment',...AssessmentCard.keys].sort():['AssessmentReason',...AssessmentCard.keys].sort()).concat(Object.hasOwn(batch[0][3],'RegisteredAt')?['RegisteredAt']:[]).sort().join()),'exact rating/note mutation whitelist with conditional imported clear');
+  assert(WRITES.every(batch=>batch.length===1&&batch[0][0]==='UpdateRecord'&&batch[0][1]==='Experiments'&&Object.keys(batch[0][3]).sort().join()===(Object.hasOwn(batch[0][3],'ImportedAssessment')?['AssessmentReason','ImportedAssessment',...AssessmentCard.keys].sort():['AssessmentReason',...AssessmentCard.keys].sort()).sort().join()),'exact rating/note mutation whitelist with conditional imported clear');
   assert(WRITES[0][0][3].ImportedAssessment===''&&!Object.hasOwn(WRITES.at(-1)[0][3],'ImportedAssessment'),'rating edit clears imported fallback; later note-only edit does not touch it');
   $('discard').click();
   const fetchLatest=grist.docApi.fetchTable,waiting=[];grist.docApi.fetchTable=name=>name==='Experiments'?new Promise(resolve=>waiting.push(resolve)):fetchLatest(name);
@@ -137,7 +132,7 @@ class AssessmentPackagingTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node CLI absent; run core_check_script in JS runtime or browser fixture')
     def test_core(self):
         result = subprocess.run(['node', '-e', core_check_script()+'\nconsole.log(JSON.stringify(assessmentTestResults))'], check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)['passed'], 18)
+        self.assertEqual(json.loads(result.stdout)['passed'], 14)
 
 
 if __name__ == '__main__':

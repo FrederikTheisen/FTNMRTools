@@ -167,7 +167,7 @@ def build_plan(snapshot, columns, old_id, target_id, target_key):
                 patch[name] += '\n' + str(a)
             else:
                 patch[name] = deepcopy(a)
-        elif name in ('AcquiredAt', 'RegisteredAt'):
+        elif name == 'AcquiredAt':
             evidence.append('Preserved legacy ' + name + ': ' + str(a) +
                             '; linked record ' + name + ': ' + str(b))
         elif name == 'ExperimentType' and semantic_type(a) == semantic_type(b):

@@ -16,7 +16,7 @@ const AssessmentCard=(()=>{
  const rows=table=>Array.isArray(table)?table.map(r=>r.fields?{...r.fields,id:r.id}:r):(table.id||[]).map((id,i)=>Object.fromEntries(Object.keys(table).map(k=>[k,table[k][i]])));
  const snapshot=record=>Object.fromEntries([...keys,note].map(k=>[k,k===note?String(record?.[k]||''):String(record?.[k]||'Not assessed')]).concat([['ImportedAssessment',String(record?.ImportedAssessment||'')]]));
  const equal=(a,b)=>JSON.stringify(snapshot(a))===JSON.stringify(snapshot(b));
- const identityKeys=['AcquisitionKey','SourceID','Folder','Expno','ObservedSourceID','ObservedFolder','ObservedExpno','ObservedFingerprint','ReconciliationReason','SampleTagIssue','ObservedSampleTagIssue','ObservedSampleID','RegisteredAt','Sample','SnapshotSampleID','Title','Instrument','ExperimentType','AcquiredAt','AcquisitionDateText','AcquisitionStatus','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz'];
+ const identityKeys=['AcquisitionKey','SourceID','Folder','Expno','ObservedSourceID','ObservedFolder','ObservedExpno','ObservedFingerprint','ReconciliationReason','SampleTagIssue','ObservedSampleTagIssue','ObservedSampleID','Sample','SnapshotSampleID','Title','Instrument','ExperimentType','AcquiredAt','AcquisitionDateText','AcquisitionStatus','Field_MHz','Temperature_C','PulseProgram','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz'];
  const sameIdentity=(a,b)=>JSON.stringify(identityKeys.map(k=>a?.[k]??null))===JSON.stringify(identityKeys.map(k=>b?.[k]??null));
  const decisionTone=record=>record?.Assessment==='Do not use'?'fail':record?.Assessment==='Limited use'?'limited':record?.Assessment==='Use'?'pass':record?.AssessmentDisplay&&record.AssessmentDisplay!=='Not assessed'?'limited':'unchecked';
  const restrictedAnalysis=['Reliable — early points excluded','Two-phase — unresolved'];
@@ -24,34 +24,13 @@ const AssessmentCard=(()=>{
  const choicesFor=(key,record)=>{const choices=criteria.find(c=>c[0]===key)?.[2]||[];return key==='QCAnalysis'&&!relaxationType(record?.ExperimentType)?choices.filter(v=>!restrictedAnalysis.includes(v)):choices;};
  const choiceLabel=(key,value,record)=>{if(key!=='QCAnalysis')return value;const fit={'Reliable':'Good fit — all points','Reliable — early points excluded':'Good fit — early points excluded','Limited':'Usable fit — other concerns','Two-phase — unresolved':'Unusable fit — two-phase','Unreliable':'Unusable fit — other problem'},other={'Reliable':'Reliable','Limited':'Usable with reservations','Unreliable':'Unusable'};return (relaxationType(record?.ExperimentType)||restrictedAnalysis.includes(value)?fit:other)[value]||value;};
  const tone=(key,value)=>{if(value==='Not assessed'||!criteria.find(c=>c[0]===key)?.[2].includes(value))return 'unchecked';if(key==='QCAnalysis')return ({'Reliable':'pass','Reliable — early points excluded':'pass','Two-phase — unresolved':'fail','Limited':'limited','Unreliable':'fail'})[value];const choices=criteria.find(c=>c[0]===key)[2],index=choices.indexOf(value);return index===choices.length-1?'fail':key==='QCAcquisitionCoverage'||index===1?'pass':'limited';};
- function registrationTimestamp(base,draft,fresh,experimentRows,sampleRows,now){
-  if(fresh.RegisteredAt!=null&&fresh.RegisteredAt!==0)return undefined;
-  const before=snapshot(base),after=snapshot(draft);
-  if(!criteria.some(([key,,choices])=>after[key]!==before[key]&&after[key]!=='Not assessed'&&choices.includes(after[key])))return undefined;
-  if(['ReconciliationReason','SampleTagIssue','ObservedSampleTagIssue'].some(k=>String(fresh[k]||'').trim()))return undefined;
-  if(!Number.isInteger(fresh.Sample)||fresh.Sample<=0)return undefined;
-  const sample=rows(sampleRows).filter(r=>r.id===fresh.Sample);
-  if(sample.length!==1||!String(sample[0].SampleID||'').trim())return undefined;
-  if(fresh.ObservedSampleID&&fresh.ObservedSampleID!==sample[0].SampleID)return undefined;
-  const text=v=>String(v??'').trim(),tuple=r=>['SourceID','Folder','Expno'].map(k=>text(r[k]));
-  const observed=['ObservedSourceID','ObservedFolder','ObservedExpno'].map(k=>text(fresh[k]));
-  if(!observed[0]||!/^\d+$/.test(observed[2])||observed[1].split('/').some(p=>p==='.'||p==='..'||p.includes('211@950'))||observed[1].startsWith('/'))return undefined;
-  if(JSON.stringify(tuple(fresh))!==JSON.stringify(observed))return undefined;
-  const key=observed[0]+':'+(observed[1]?observed[1]+'/':'')+observed[2];
-  if(fresh.AcquisitionKey!==key)return undefined;
-  const matches=rows(experimentRows).filter(r=>r.AcquisitionKey===key||JSON.stringify(tuple(r))===JSON.stringify(observed)||JSON.stringify(['ObservedSourceID','ObservedFolder','ObservedExpno'].map(k=>text(r[k])))===JSON.stringify(observed));
-  if(matches.length!==1||matches[0].id!==fresh.id)return undefined;
-  return Number.isFinite(now)&&now>0?now:undefined;
- }
- function action(id,base,draft,fresh,experimentRows=[],sampleRows=[],now=Date.now()/1000){
+ function action(id,base,draft,fresh){
   if(!Number.isInteger(id)||id<=0||fresh?.id!==id)throw Error('The selected experiment is unavailable.');
   if(!equal(base,fresh)||!sameIdentity(base,fresh))throw Error('This experiment changed elsewhere. Discard this draft and review the current ratings before saving.');
   const fields=snapshot(draft),imported=fields.ImportedAssessment;
   delete fields.ImportedAssessment;
   for(const [key,label]of criteria)if(!choicesFor(key,fresh).includes(fields[key])&&!(key==='QCAnalysis'&&restrictedAnalysis.includes(fields[key])&&fields[key]===snapshot(base)[key]))throw Error('Choose a valid rating for '+label+'.');
   if(imported&&keys.some(key=>fields[key]!==base[key]))fields.ImportedAssessment='';
-  const registered=registrationTimestamp(base,draft,fresh,experimentRows,sampleRows,now);
-  if(registered!==undefined)fields.RegisteredAt=registered;
   return ['UpdateRecord','Experiments',id,fields];
  }
  function context(sectionRows,tableRows,id){
@@ -60,7 +39,7 @@ const AssessmentCard=(()=>{
   const options=JSON.parse(section.options||'{}');
   if(typeof options.html!=='string'||!options.html.includes('data-nmr-assessment="1"'))throw Error('This is not the expected assessment widget.');
  }
- return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,registrationTimestamp,action,context,choicesFor,choiceLabel,relaxationType};
+ return {criteria,keys,rows,snapshot,equal,sameIdentity,tone,decisionTone,action,context,choicesFor,choiceLabel,relaxationType};
 })();
 '''.replace('__CRITERIA__', json.dumps(CRITERIA, ensure_ascii=False))
 
@@ -97,11 +76,11 @@ async function receive(record){const sequence=++selectionSequence,id=record?.id;
 async function save(){if(!current||!dirty()||busy||!SECTION_ID)return;
  const requestedId=current.id,requestedBase={...base},requestedDraft={...draft};busy=true;message('Saving…');render();
  try{
-  const [experiments,sections,tables,samples]=await Promise.all([grist.docApi.fetchTable('Experiments'),grist.docApi.fetchTable('_grist_Views_section'),grist.docApi.fetchTable('_grist_Tables'),grist.docApi.fetchTable('Samples')]);
+  const [experiments,sections,tables]=await Promise.all([grist.docApi.fetchTable('Experiments'),grist.docApi.fetchTable('_grist_Views_section'),grist.docApi.fetchTable('_grist_Tables')]);
   AssessmentCard.context(sections,tables,SECTION_ID);
   const fresh=AssessmentCard.rows(experiments).find(r=>r.id===requestedId);
   if(fresh&&(!AssessmentCard.equal(requestedBase,fresh)||!AssessmentCard.sameIdentity(requestedBase,fresh))&&pending===undefined)pending=fresh;
-  const action=AssessmentCard.action(requestedId,requestedBase,requestedDraft,fresh,experiments,samples);
+  const action=AssessmentCard.action(requestedId,requestedBase,requestedDraft,fresh);
   await grist.docApi.applyUserActions([action]);
   const updated=AssessmentCard.rows(await grist.docApi.fetchTable('Experiments')).find(r=>r.id===requestedId);
   const next=pending!==undefined&&pending?.id!==requestedId?pending:updated;

@@ -32,20 +32,18 @@ class Tests(unittest.TestCase):
    fields={k:r[k] for k in ('SourceID','Folder','Expno','MigrationKey','SourceEvidence')};fields.update(r['legacy_source_context']);fields['Instrument']='600Cryo';entries.append({'fields':fields})
   source=json.dumps({'source_files':[{'path':str(self.input),'sha256':hashlib.sha256(self.input.read_bytes()).hexdigest()}],'planned_targets':entries}).encode();self.source.write_bytes(source)
   b=json.dumps({'records':self.rows,'source_sha256':{str(self.source):hashlib.sha256(source).hexdigest()}}).encode();self.path.write_bytes(b);self.digest=hashlib.sha256(b).hexdigest()
- def plan(self,c=None,observations=None):return plan_batch(self.path,self.obs if observations is None else observations,c or Client(),expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000)
+ def plan(self,c=None,observations=None):return plan_batch(self.path,self.obs if observations is None else observations,c or Client(),expected_manifest_sha256=self.digest,source_reconciliation_path=self.source)
  def test_fields_and_zero_preservation(self):
   p=self.plan();f=p['insert'][0]['fields'];self.assertEqual((f['Temperature_C'],f['D1_s'],f['SpinLockOffset_Hz']),(0,0,0));self.assertEqual(f['Field_MHz'],600)
-  self.assertEqual(f['ExperimentType'],'T1');self.assertEqual(f['Instrument'],'600Cryo');self.assertEqual(f['RegisteredAt'],1000);self.assertEqual(f['SnapshotNaCl_mM'],None);self.assertEqual(f['Notes'],'note');self.assertEqual(f['MigrationIssue'],'Sample link unresolved')
+  self.assertEqual(f['ExperimentType'],'T1');self.assertEqual(f['Instrument'],'600Cryo');self.assertNotIn('RegisteredAt',f);self.assertEqual(f['SnapshotNaCl_mM'],None);self.assertEqual(f['Notes'],'note');self.assertEqual(f['MigrationIssue'],'Sample link unresolved')
   for name in ('Assessment','AssessmentReason','Sample','Series','Study','QCSNR','ResultCSV'):self.assertNotIn(name,f)
  def test_hash_tampering_and_protected_path_fail(self):
-  with self.assertRaisesRegex(ValueError,'hash'):plan_batch(self.path,self.obs,Client(),expected_manifest_sha256='bad',source_reconciliation_path=self.source,registration_timestamp=1000)
+  with self.assertRaisesRegex(ValueError,'hash'):plan_batch(self.path,self.obs,Client(),expected_manifest_sha256='bad',source_reconciliation_path=self.source)
   o=observation('prefix211@950suffix','1');self.obs=[o];self.rows=[manifest_row(o)];self.write()
   with self.assertRaisesRegex(ValueError,'identity'):self.plan()
- def test_source_hash_change_and_fixed_timestamp_guard(self):
+ def test_source_hash_change(self):
   self.input.write_bytes(b'changed')
   with self.assertRaisesRegex(ValueError,'hash changed'):self.plan()
-  self.input.write_bytes(b'original')
-  with self.assertRaisesRegex(ValueError,'timestamp'):plan_batch(self.path,self.obs,Client(),expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=0)
  def test_unknown_acquisition_status_does_not_fall_back(self):
   self.obs[0]['ObservedAcquisitionStatus']='Unknown';self.rows[0]['ObservedAcquisitionStatus']='Unknown';self.write()
   f=self.plan()['insert'][0]['fields'];self.assertEqual(f['AcquisitionStatus'],'Unknown');self.assertEqual(f['Instrument'],'600Cryo')
@@ -70,9 +68,9 @@ class Tests(unittest.TestCase):
    obs=copy.deepcopy(self.obs);obs[0][key]=value
    with self.subTest(key=key),self.assertRaises(ValueError):self.plan(observations=obs)
  def test_existing_human_data_is_never_overwritten(self):
-  client=Client();apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  client=Client();apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   client.rows[0]['fields']['Notes']='human edit';before=copy.deepcopy(client.rows)
-  again=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  again=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual(client.rows,before);self.assertEqual(len(client.writes),1);self.assertEqual(again['skipped'],[self.rows[0]['AcquisitionKey']])
  def test_partial_manual_identity_and_colliding_migration_fail(self):
   for row in ({'Folder':'tube','SourceID':'src'}, {'MigrationKey':'workbook:A:3','SourceID':'else','Folder':'x','Expno':'2'}):
@@ -80,7 +78,7 @@ class Tests(unittest.TestCase):
    with self.assertRaises(ValueError):self.plan(c)
    self.assertEqual(c.writes,[])
  def test_timeout_after_full_commit_reconciles_without_retry(self):
-  client=Client(mode='timeout');result=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  client=Client(mode='timeout');result=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual(result['inserted'],[self.rows[0]['AcquisitionKey']]);self.assertEqual(len(client.writes),1)
  def test_nonfinite_historical_numeric_rejected(self):
   source=json.loads(self.source.read_text());source['planned_targets'][0]['fields']['Field_MHz']=float('nan')
@@ -89,10 +87,10 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'Non-finite'):self.plan()
  def test_inventory_only_retry_and_human_preservation(self):
   r=self.rows[0];r.update(origin='inventory',MigrationKey='discovery:'+r['AcquisitionKey'],SourceEvidence='Observed acquisition: '+r['AcquisitionKey'],legacy_source_context={});self.write()
-  c=Client(mode='timeout');result=apply_batch(self.path,self.obs,c,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  c=Client(mode='timeout');result=apply_batch(self.path,self.obs,c,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual(len(result['inserted']),1);f=c.rows[0]['fields'];self.assertEqual(f['Notes'],'');self.assertNotIn('Sample',f);self.assertNotIn('Study',f);self.assertNotIn('Assessment',f)
   c.rows[0]['fields']['Notes']='human edit';before=copy.deepcopy(c.rows)
-  apply_batch(self.path,self.obs,c,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  apply_batch(self.path,self.obs,c,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual(c.rows,before);self.assertEqual(len(c.writes),1)
  def test_inventory_origin_cannot_hide_legacy_or_fake_evidence(self):
   r=self.rows[0];r.update(origin='inventory',MigrationKey='discovery:'+r['AcquisitionKey'],SourceEvidence='Observed acquisition: '+r['AcquisitionKey'],legacy_source_context={});self.write()
@@ -106,8 +104,8 @@ class Tests(unittest.TestCase):
  def test_partial_commit_stops_and_resumes_only_remaining(self):
   second=observation('tube','2','b'*64);self.obs.append(second);self.rows.append({**manifest_row(second),'MigrationKey':'workbook:A:4'});self.write()
   client=Client(mode='partial')
-  with self.assertRaises(BatchUncertainError) as caught:apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  with self.assertRaises(BatchUncertainError) as caught:apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual((len(caught.exception.committed),len(caught.exception.remaining)),(1,1));self.assertEqual(len(client.writes),1)
-  client.mode='ok';res=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,registration_timestamp=1000,dry_run=False)
+  client.mode='ok';res=apply_batch(self.path,self.obs,client,expected_manifest_sha256=self.digest,source_reconciliation_path=self.source,dry_run=False)
   self.assertEqual(len(res['inserted']),1);self.assertEqual(len(client.rows),2)
 if __name__=='__main__':unittest.main()

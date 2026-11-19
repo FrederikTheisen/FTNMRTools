@@ -9,7 +9,7 @@ from tests.test_assessment_schema import Fake,formula
 
 class LiveSampleAttentionTests(unittest.TestCase):
     def setUp(self):
-        self.base=dict(RegisteredAt=1700000000,Sample=9,Assessment='Use',Study='',AcquisitionStatus='Completed',EffectiveAcquisitionStatus='Completed')
+        self.base=dict(Sample=9,Assessment='Use',Study='',AcquisitionStatus='Completed',EffectiveAcquisitionStatus='Completed')
 
     def test_sample_assignment_and_unlink_recompute_without_changing_stored_issue(self):
         values=dict(self.base,Sample=0,MigrationIssue='Sample link unresolved: 15N_SeV_Ntail; workbook condition: 250 mM NaCl')

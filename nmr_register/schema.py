@@ -57,7 +57,7 @@ return ""
 """
 
 DATE_ONLY_OPTIONS = {'dateFormat': 'YYYY-MM-DD', 'timeFormat': ''}
-DATE_ONLY_EXPERIMENT_COLUMNS = frozenset(('AcquiredAt', 'EffectiveAcquiredAt', 'RegisteredAt'))
+DATE_ONLY_EXPERIMENT_COLUMNS = frozenset(('AcquiredAt', 'EffectiveAcquiredAt'))
 LABELLING_CHOICES = ('15N', '13C', '2H', '15N+13C', '15N+2H', '13C+2H', '15N+13C+2H')
 SAMPLE_STATUSES = ('Usable', 'Suspected degradation', 'Degraded', 'Dead')
 DECISIONS = ('Use', 'Limited use', 'Do not use')
@@ -272,6 +272,9 @@ ATTENTION_FORMULA = ATTENTION_FORMULA.replace('if $Sample and migration_issue:',
 PRE_CATEGORY_ATTENTION_FORMULA = ATTENTION_FORMULA
 ATTENTION_FORMULA = ATTENTION_FORMULA.replace('$ExperimentType != "Calibration"', '$ExperimentCategory != "Calibration"')
 
+PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA = ATTENTION_FORMULA
+ATTENTION_FORMULA = ATTENTION_FORMULA.replace('if not $RegisteredAt: issues.append("Registration incomplete")\n', '')
+
 LEGACY_QC_ATTENTION_FORMULA = PRE_DUMMY_ATTENTION_FORMULA.replace(
     ' and not ($AssessmentExplanation or "").strip()', '')
 
@@ -349,7 +352,7 @@ def columns():
         col('AcquiredAt','DateTime',widgetOptions=json.dumps(DATE_ONLY_OPTIONS)),col('AcquisitionDateText'),col('AcquisitionStatus','Choice',label='Acquisition status',widgetOptions=json.dumps({'choices':list(ACQUISITION_STATUSES)})),
         col('ObservedAcquisitionEvidence',label='Acquisition status source'),
         col('EffectiveAcquisitionStatus','Text', '"Completed" if $AcquisitionStatus in ("Completed", "Finished", "Done", "Acquired") else ("Aborted" if $AcquisitionStatus in ("Aborted", "Stopped") else ($AcquisitionStatus if $AcquisitionStatus in ("Planned", "Dummy", "Setup", "Running") else "Unknown"))',True,label='Acquisition status'),col('Field_MHz','Numeric'),
-        col('Series','Ref:Series'), col('ProteinSelector'), col('RegisteredAt','DateTime',widgetOptions=json.dumps(DATE_ONLY_OPTIONS)),
+        col('Series','Ref:Series'), col('ProteinSelector'),
         col('Sample','Ref:Samples',SAMPLE_TAG_TRIGGER,widgetOptions=json.dumps({'dropdownCondition':{'text':'not $Series or choice.Series == $Series'}})),col('SnapshotSampleID','Text','$Sample.SampleID if $Sample else None'),*snapshot,
         col('Temperature_C','Numeric',label='Temperature (°C)'),col('PulseProgram',label='Pulse program'),*acquisition_columns(),*spectral_columns(),*[col(name,'Choice', '"Not assessed"', label=label, untieColIdFromLabel=True, recalcWhen=0,recalcDeps=['L'],widgetOptions=json.dumps({'choices':[QC_DEFAULT,*choices]})) for name,(label,choices) in QC_CRITERIA.items()],
         col('ImportedAssessment','Choice',widgetOptions=json.dumps({'choices':list(DECISIONS)})),

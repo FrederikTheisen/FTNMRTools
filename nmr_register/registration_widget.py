@@ -184,7 +184,7 @@ def sample_actions(values,tables):
     return {'actions':actions,'sample_ids':created,'storage_slots':planned_slots}
 
 
-def experiment_actions(values,tables,now=None):
+def experiment_actions(values,tables):
     series=int(values.get('Series') or 0);sample=int(values.get('Sample') or 0)
     samples={row['id']:row for row in _rows(tables,'Samples')}
     if series and not any(row['id']==series for row in _rows(tables,'Series')): raise ValueError('Selected series no longer exists')
@@ -211,7 +211,7 @@ def experiment_actions(values,tables,now=None):
                 raise ValueError('Acquisition already exists; edit its existing record')
     fields={name:str(values.get(name) or '').strip() for name in ('Instrument','ExperimentType','PulseProgram','DelayList_s','Notes')}
     fields.update(Series=series,Sample=sample,SourceID=source,Folder=folder,Expno=expno,
-        Study=study,AnalysisStatus=analysis,AcquisitionStatus=status,AcquiredAt=acquired,AcquisitionDateText=month,RegisteredAt=now if now is not None else datetime.now(timezone.utc).timestamp(),
+        Study=study,AnalysisStatus=analysis,AcquisitionStatus=status,AcquiredAt=acquired,AcquisitionDateText=month,
         Field_MHz=number(values.get('Field_MHz'),'Field (MHz)',0.000001),
         Temperature_C=number(values.get('Temperature_C'),'Temperature (C)',-273.15),
         D1_s=number(values.get('D1_s'),'D1 (s)',0),
@@ -320,7 +320,7 @@ const NMRRegistration = (() => {
    if(field)fields[field]=value;actions.push(['AddRecord','Samples',firstID+i,fields]);
   });return {actions,sample_ids:created,storage_slots:plannedSlots};
  }
- function experimentActions(v,t,now=Date.now()/1000){
+ function experimentActions(v,t){
   const series=Number(v.Series||0),sample=Number(v.Sample||0),selected=rows(t,'Samples').find(r=>r.id===sample);
   if(series&&!rows(t,'Series').some(r=>r.id===series))throw Error('Selected series no longer exists');
   if(sample&&(!selected||(series&&selected.Series!==series)))throw Error('Sample is not in the selected series');
@@ -334,7 +334,7 @@ const NMRRegistration = (() => {
   if(expno&&!/^\d+$/.test(expno))throw Error('Experiment number must contain digits');
   if(source&&folder&&expno&&rows(t,'Experiments').some(r=>['','Observed'].some(p=>String(r[p+'SourceID']||'')===source&&String(r[p+'Folder']||'')===folder&&String(r[p+'Expno']||'')===expno)))throw Error('Acquisition already exists; edit its existing record');
   const fields={};['Instrument','ExperimentType','PulseProgram','DelayList_s','Notes'].forEach(k=>fields[k]=String(v[k]||'').trim());
-  Object.assign(fields,{Series:series,Sample:sample,SourceID:source,Folder:folder,Expno:expno,Study:study,AnalysisStatus:analysis,AcquisitionStatus:status,AcquiredAt:acquired,AcquisitionDateText:month,RegisteredAt:now,
+  Object.assign(fields,{Series:series,Sample:sample,SourceID:source,Folder:folder,Expno:expno,Study:study,AnalysisStatus:analysis,AcquisitionStatus:status,AcquiredAt:acquired,AcquisitionDateText:month,
    Field_MHz:number(v.Field_MHz,'Field (MHz)',.000001),Temperature_C:number(v.Temperature_C,'Temperature (C)',-273.15),D1_s:number(v.D1_s,'D1 (s)',0),DelayList_s:String(v.DelayList_s||'').trim(),SpinLock_Hz:number(v.SpinLock_Hz,'Spin-lock field (Hz)',0),SpinLockOffset_Hz:number(v.SpinLockOffset_Hz,'Spin-lock offset (Hz)')});
   if(!sample)Object.keys(rules).forEach(k=>fields['Snapshot'+k]=null);
   return {actions:[['AddRecord','Experiments',next(t,'Experiments'),fields]],sample_ids:[]};

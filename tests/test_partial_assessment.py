@@ -93,7 +93,7 @@ class PartialAssessmentTests(unittest.TestCase):
         from datetime import datetime, timedelta
         now = datetime(2026, 11, 4, 12)
         values = dict(self.good, Study='Electrostatics', AcquisitionStatus='Completed', EffectiveAcquisitionStatus='Completed',
-                      ExperimentType='Relaxation', RegisteredAt=now, Sample=True,
+                      ExperimentType='Relaxation', Sample=True,
                       EffectiveAcquiredAt=now-timedelta(hours=25), now=now, Assessment='')
         source = ATTENTION_FORMULA.replace('NOW()', "values.get('now')")
         for display in ('Use so far · analysis missing', 'Limited use so far'):

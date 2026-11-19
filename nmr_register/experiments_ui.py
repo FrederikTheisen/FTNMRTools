@@ -1,6 +1,6 @@
 """Guarded Dummy schema upgrade and native experiment presentation."""
 import json
-from .schema import columns, PRE_CATEGORY_ATTENTION_FORMULA, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA
+from .schema import columns, PRE_CATEGORY_ATTENTION_FORMULA, PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA, PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA, PRE_CALIBRATION_ATTENTION_FORMULA, PRE_PARTIAL_ATTENTION_FORMULA, PRE_DUMMY_ATTENTION_FORMULA, PRE_DUMMY_EFFECTIVE_FORMULA, PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA
 from .setup import _mcp
 
 ROW_STYLES = (
@@ -20,7 +20,7 @@ def upgrade_dummy_schema(client, apply=False):
     actions=[]
     for name,previous in [('AttentionReason',PRE_DUMMY_ATTENTION_FORMULA),('EffectiveAcquisitionStatus',PRE_DUMMY_EFFECTIVE_FORMULA)]:
         current=existing[name]; fields=current['fields'];target=wanted[name]['formula']
-        if not fields.get('isFormula') or fields.get('formula') not in ((previous,target,PRE_CATEGORY_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA) if name=='AttentionReason' else (previous,target)): raise ValueError(name+' formula requires review')
+        if not fields.get('isFormula') or fields.get('formula') not in ((previous,target,PRE_CATEGORY_ATTENTION_FORMULA,PRE_ASSIGNED_SAMPLE_ATTENTION_FORMULA, PRE_LIVE_SAMPLE_ATTENTION_FORMULA,PRE_STUDY_ASSESSMENT_ATTENTION_FORMULA,PRE_CALIBRATION_ATTENTION_FORMULA,PRE_PARTIAL_ATTENTION_FORMULA,PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA) if name=='AttentionReason' else (previous,target)): raise ValueError(name+' formula requires review')
         if fields['formula']!=target:actions.append(['ModifyColumn','Experiments',name,{'formula':target}])
     status=existing['AcquisitionStatus']['fields']
     if status.get('isFormula') or status.get('formula') or status.get('type') not in ('Text','Choice'):raise ValueError('AcquisitionStatus requires review')
@@ -211,3 +211,67 @@ def configure_experiment_type_filter(client, apply=False):
     if apply and actions:
         client.apply(actions)
     return {'page': view['id'], 'grid': grid['id'], 'filter_value': filter_values.get('ExperimentCategory', target), 'filter_values': filter_values, 'actions': actions}
+
+
+def remove_registration_timestamp(client, apply=False):
+    """Remove the retired column and its shipped warning without resetting views.
+
+    The caller refreshes embedded forms in the same action batch. Unknown
+    formula dependencies are rejected before any document changes.
+    """
+    import re
+    from .schema import ATTENTION_FORMULA
+    tables = [r for r in client.records('_grist_Tables') if r['fields'].get('tableId') == 'Experiments']
+    if len(tables) != 1: raise ValueError('Experiments table missing or ambiguous')
+    columns = client.records('_grist_Tables_column')
+    retired = [r for r in columns if r['fields'].get('parentId') == tables[0]['id'] and r['fields'].get('colId') == 'RegisteredAt']
+    if len(retired) > 1: raise ValueError('Registration timestamp column is ambiguous')
+    actions = []
+    for row in columns:
+        f = row['fields']
+        if re.search(r'\bRegisteredAt\b', f.get('formula') or ''):
+            if (f.get('parentId') != tables[0]['id'] or f.get('colId') != 'AttentionReason'
+                    or not f.get('isFormula') or f['formula'] != PRE_REGISTRATION_REMOVAL_ATTENTION_FORMULA):
+                raise ValueError('Custom registration timestamp dependency requires review')
+            actions.append(['UpdateRecord', '_grist_Tables_column', row['id'], {'formula': ATTENTION_FORMULA}])
+    if retired:
+        column = retired[0]; ref = column['id']; f = column['fields']
+        if f.get('isFormula') or f.get('formula') or f.get('type') not in ('DateTime', 'DateTime:UTC'):
+            raise ValueError('Registration timestamp schema requires review')
+        if any(r['fields'].get(k) == ref for r in columns for k in ('summarySourceCol', 'displayCol', 'visibleCol', 'reverseCol')):
+            raise ValueError('Registration timestamp has a linked column dependency')
+        if any(r['fields'].get('colRef') == ref for r in client.records('_grist_Filters')):
+            raise ValueError('Registration timestamp has a filter dependency')
+        for table in ('_grist_ACLResources', '_grist_ACLRules'):
+            for row in client.records(table):
+                f = row['fields']
+                if f.get('aclColumn') == ref or any(re.search(r'\bRegisteredAt\b', str(f.get(k) or ''))
+                        for k in ('colIds', 'aclFormula', 'aclFormulaParsed', 'userAttributes')):
+                    raise ValueError('Registration timestamp has an access-rule dependency')
+        fields = client.records('_grist_Views_section_field')
+        removed = {r['id'] for r in fields if r['fields'].get('colRef') == ref}
+        def prune(node):
+            if not isinstance(node, dict): raise ValueError('Invalid card layout')
+            if node.get('leaf') in removed: return None
+            result = dict(node)
+            if 'children' in node:
+                if not isinstance(node['children'], list): raise ValueError('Invalid card layout children')
+                result['children'] = [child for child in (prune(c) for c in node['children']) if child is not None]
+                if not result['children']: return None
+            return result
+        for row in client.records('_grist_Views_section'):
+            f = row['fields']; update = {}
+            if f.get('linkSrcColRef') == ref or f.get('linkTargetColRef') == ref:
+                raise ValueError('Registration timestamp has a linked widget dependency')
+            if f.get('layoutSpec'):
+                layout = json.loads(f['layoutSpec']); revised = prune(layout) or {'children': []}
+                if revised != layout: update['layoutSpec'] = json.dumps(revised, separators=(',', ':'))
+            if f.get('sortColRefs'):
+                sorting = json.loads(f['sortColRefs'])
+                if not isinstance(sorting, list): raise ValueError('Invalid widget sort order')
+                revised = [value for value in sorting if value not in (ref, -ref)]
+                if revised != sorting: update['sortColRefs'] = json.dumps(revised)
+            if update: actions.append(['UpdateRecord', '_grist_Views_section', row['id'], update])
+        actions.append(['RemoveColumn', 'Experiments', 'RegisteredAt'])
+    if apply and actions: client.apply(actions)
+    return actions

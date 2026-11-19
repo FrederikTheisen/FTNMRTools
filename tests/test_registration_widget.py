@@ -40,14 +40,14 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(dated['PreparedDateText'],'')
 
     def test_study_is_explicit_and_never_guessed(self):
-        action=experiment_actions({'AcquisitionStatus':'Planned','Study':'DNA','AnalysisStatus':'Analyzed'},self.tables,now=123)['actions'][0]
+        action=experiment_actions({'AcquisitionStatus':'Planned','Study':'DNA','AnalysisStatus':'Analyzed'},self.tables)['actions'][0]
         self.assertEqual(action[3]['Study'],'DNA')
         self.assertEqual(action[3]['AnalysisStatus'],'Analyzed')
-        self.assertEqual(experiment_actions({'AcquisitionStatus':'Planned'},self.tables,now=123)['actions'][0][3]['Study'],'')
+        self.assertEqual(experiment_actions({'AcquisitionStatus':'Planned'},self.tables)['actions'][0][3]['Study'],'')
         with self.assertRaisesRegex(ValueError,'Invalid study'):
-            experiment_actions({'AcquisitionStatus':'Planned','Study':'unexpected'},self.tables,now=123)
+            experiment_actions({'AcquisitionStatus':'Planned','Study':'unexpected'},self.tables)
         with self.assertRaisesRegex(ValueError,'Invalid analysis status'):
-            experiment_actions({'AcquisitionStatus':'Planned','AnalysisStatus':'unexpected'},self.tables,now=123)
+            experiment_actions({'AcquisitionStatus':'Planned','AnalysisStatus':'unexpected'},self.tables)
         self.assertIn("['Electrostatics','Electrostatics']",registration_html('experiment'))
 
     def test_bulk_series_has_complete_shared_values_and_distinct_tubes(self):
@@ -122,9 +122,9 @@ class WidgetTests(unittest.TestCase):
         self.assertTrue(all(a[3]['StorageRow']=='' and a[3]['StorageColumn'] is None for a in unplaced['actions']))
 
     def test_experiment_all_unknown_numeric_null_and_temperature_zero(self):
-        plan=experiment_actions({'Temperature_C':'0','AcquisitionStatus':'Planned'},self.tables,now=123)
+        plan=experiment_actions({'Temperature_C':'0','AcquisitionStatus':'Planned'},self.tables)
         fields=plan['actions'][0][3]
-        self.assertEqual(fields['Temperature_C'],0);self.assertEqual(fields['RegisteredAt'],123)
+        self.assertEqual(fields['Temperature_C'],0);self.assertNotIn('RegisteredAt',fields)
         self.assertEqual(fields['AcquisitionStatus'],'Planned')
         for name in ['Field_MHz','D1_s','SpinLock_Hz','SpinLockOffset_Hz']+['Snapshot'+k for k in NUMERIC_RULES]:
             self.assertIn(name,fields);self.assertIsNone(fields[name])
@@ -135,7 +135,7 @@ class WidgetTests(unittest.TestCase):
         values={'Instrument':'Bruker 600','ExperimentType':'T1','PulseProgram':'t1','Acquired':'2026-11',
             'Field_MHz':'600.13','Temperature_C':'25','D1_s':'0','DelayList_s':'0.1, 0.5, 1.0',
             'SpinLock_Hz':'1000','SpinLockOffset_Hz':'-25'}
-        fields=experiment_actions(values,self.tables,now=123)['actions'][0][3]
+        fields=experiment_actions(values,self.tables)['actions'][0][3]
         self.assertEqual({k:fields[k] for k in ('Instrument','ExperimentType','PulseProgram','AcquisitionStatus','AcquisitionDateText','Field_MHz','Temperature_C','D1_s','DelayList_s','SpinLock_Hz','SpinLockOffset_Hz')},
             {'Instrument':'Bruker 600','ExperimentType':'T1','PulseProgram':'t1','AcquisitionStatus':'Planned','AcquisitionDateText':'2026-11','Field_MHz':600.13,'Temperature_C':25,'D1_s':0,'DelayList_s':'0.1, 0.5, 1.0','SpinLock_Hz':1000,'SpinLockOffset_Hz':-25})
         self.assertFalse(any(name.startswith('Observed') for name in fields))
@@ -157,7 +157,7 @@ class WidgetTests(unittest.TestCase):
         self.assertIn("field('experiment','ExperimentCategory','Experiment type','select'",html)
         self.assertIn("field('experiment','ExperimentType','Experiment')",html)
         fields=experiment_actions({'ExperimentCategory':'Assignment','ExperimentType':'custom experiment',
-                                  'PulseProgram':'BT_custom+'},self.tables,now=123)['actions'][0][3]
+                                  'PulseProgram':'BT_custom+'},self.tables)['actions'][0][3]
         self.assertNotIn('ExperimentCategory',fields)
         self.assertEqual(fields['ExperimentType'],'custom experiment')
         self.assertEqual(fields['PulseProgram'],'BT_custom+')
