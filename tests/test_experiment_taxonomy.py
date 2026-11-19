@@ -89,3 +89,31 @@ zggpw5 zgpr unknown hsqc t1 unrelated_B_HNCA_extra""".split()
         exec('def formula(value, pulse):\n' + '\n'.join('    '+line for line in body.splitlines()), namespace)
         for value, pulse in (('iHNCACB', ''), ('IHNCACB', ''), ('unknown', 'BT_iHNCACB'), ('', 'iHNCACB')):
             self.assertEqual(namespace['formula'](value, pulse), 'Assignment')
+
+
+    def test_hncanh_legacy_label_uses_single_hnn_choice(self):
+        for label in ('HNCANH', 'hncanh', 'HnCaNh', 'HNN'):
+            with self.subTest(label=label):
+                self.assertEqual(canonical_experiment(label), 'HNN')
+                self.assertEqual(category(label), 'Assignment')
+        choices = choices_by_category()['Assignment']
+        self.assertNotIn('HNCANH', choices)
+        self.assertEqual(choices.count('HNN'), 1)
+        for pulse in ('HNCANH', 'hncanh', 'HnCaNh', 'B_HNCANH', 'BT_HNCANH', 'b_hncanh+', 'bt_hncanh+'):
+            with self.subTest(pulse=pulse):
+                self.assertEqual(classify_pulse(pulse), 'HNN')
+        for pulse in ('HNcoCANH', 'BT_HNcoCANH', 'prefix_HNCANH', 'BT_HNCANH_extra', 'HNCANH+', 'HNCANH_new'):
+            with self.subTest(pulse=pulse):
+                self.assertIsNone(classify_pulse(pulse))
+                self.assertEqual(category('', pulse), 'Other')
+
+    def test_generated_formula_hncanh_legacy_label_and_known_pulses(self):
+        namespace = {}
+        body = category_formula('value', 'pulse')
+        exec('def formula(value, pulse):\n' + '\n'.join('    '+line for line in body.splitlines()), namespace)
+        for value, pulse in (('HNCANH', ''), ('hncanh', ''), ('HNN', ''),
+                             ('unknown', 'BT_HNCANH'), ('', 'b_hncanh+'), (None, 'HNCANH')):
+            with self.subTest(value=value, pulse=pulse):
+                self.assertEqual(namespace['formula'](value, pulse), 'Assignment')
+        for pulse in ('HNcoCANH', 'BT_HNCANH_extra', 'HNCANH_new'):
+            self.assertEqual(namespace['formula']('unknown', pulse), 'Other')

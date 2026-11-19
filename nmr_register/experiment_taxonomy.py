@@ -14,14 +14,14 @@ def _key(value):
 _GROUPS = {
     "Relaxation": ("T1", "T2", "T1rho", "HetNOE", "etaXY", "Water T1 (T1sat)", "CPMG"),
     "HSQC": ("HSQC", "13C HSQC"),
-    "Assignment": ("HNcaCO", "HNCA", "HNCO", "HNCACB", "HNcoCACB", "HNcoCA", "HNCANH", "HNN"),
+    "Assignment": ("HNcaCO", "HNCA", "HNCO", "HNCACB", "HNcoCACB", "HNcoCA", "HNN"),
     "Calibration": ("Calibration", "15N calibration", "13C calibration", "zg", "zg30"),
     "1D": ("1D",),
     "Other": ("HMBC", "COSY", "NOESY"),
 }
 _ALIASES = {_key(name): name for names in _GROUPS.values() for name in names}
 _ALIASES.update({
-    "ihncacb": "HNCACB", "hn(ca)co": "HNcaCO", "hn(co)ca": "HNcoCA", "hn(co)cacb": "HNcoCACB",
+    "hncanh": "HNN", "ihncacb": "HNCACB", "hn(ca)co": "HNcaCO", "hn(co)ca": "HNcoCA", "hn(co)cacb": "HNcoCACB",
     "r1": "T1", "15nt1": "T1", "r2": "T2", "r1rho": "T1rho", "t1ρ": "T1rho",
     "noe": "HetNOE", "heteronuclearnoe": "HetNOE", "ηxy": "etaXY",
     "15nhsqc": "HSQC", "nhsqc": "HSQC", "watert1": "Water T1 (T1sat)",
@@ -62,13 +62,16 @@ def classify_pulse(pulse, indirect_nucleus=""):
         return "13C HSQC"
     if lower in calibration:
         return calibration[lower]
+    # HNCANH is retained as a legacy register label for the HNN choice.
+    if lower == "hncanh":
+        return "HNN"
     if lower == "ihncacb":
         return "HNCACB"
     # Restrict assignment matching to complete known local families. Prefixes or
     # arbitrary substring matches alone cannot establish a triple-resonance type.
     match = re.fullmatch(r"(?:b_|bt_)(ihncacb|hncocacb|hncoca|hncaco|hncacb|hncanh|hnca|hnco)\+?", lower)
     if match:
-        return {"hncaco": "HNcaCO", "hncocacb": "HNcoCACB", "hncoca": "HNcoCA", "ihncacb": "HNCACB"}.get(match[1], match[1].upper())
+        return {"hncanh": "HNN", "hncaco": "HNcaCO", "hncocacb": "HNcoCACB", "hncoca": "HNcoCA", "ihncacb": "HNCACB"}.get(match[1], match[1].upper())
     if lower == "ibs_1d_sculpting" or lower in ("presat", "zgpr", "zggpw5", "m.zggpw5"):
         return "1D"
     for token, name in (("hetnoe", "HetNOE"), ("hsqcnoe", "HetNOE"), ("nnh_tr", "etaXY"),
