@@ -35,3 +35,13 @@ class TaxonomyCollectionTests(unittest.TestCase):
                 for fields in (machine, facts):
                     for field in ('ExperimentCategory', 'Sample', 'Protein', 'Notes', 'Comments'):
                         self.assertNotIn(field, fields)
+
+    def test_cached_ihncacb_preserves_raw_pulse_and_identity(self):
+        fingerprint = 'existing-ihncacb-fingerprint'
+        for observed_type, pulse in (('iHNCACB', 'BT_iHNCACB'), ('unknown', 'BT_iHNCACB'), ('unknown', 'B_iHNCACB+'), ('unknown', 'iHNCACB')):
+            with self.subTest(observed_type=observed_type, pulse=pulse):
+                machine, facts = _canonical_payload({
+                    'ObservedType': observed_type, 'ObservedPulseProgram': pulse,
+                    'ObservedFingerprint': fingerprint})
+                self.assertEqual(facts, {'ExperimentType': 'HNCACB', 'PulseProgram': pulse})
+                self.assertEqual(machine, {'ObservedFingerprint': fingerprint})

@@ -1,5 +1,5 @@
 import unittest
-from nmr_register.experiment_taxonomy import canonical_experiment, category, classify_pulse, is_calibration, category_formula
+from nmr_register.experiment_taxonomy import canonical_experiment, category, classify_pulse, is_calibration, category_formula, choices_by_category
 
 
 class ExperimentTaxonomyTests(unittest.TestCase):
@@ -12,7 +12,7 @@ class ExperimentTaxonomyTests(unittest.TestCase):
 
     def test_pulse_families(self):
         cases = {'B_HNCA':'HNCA', 'BT_HNCACO':'HNcaCO', 'B_HNCOCA':'HNcoCA',
-                 'BT_HNCOCACB':'HNcoCACB', 'BT_iHNCACB':'iHNCACB', 'BT_HNCACB+':'HNCACB',
+                 'BT_HNCOCACB':'HNcoCACB', 'BT_iHNCACB':'HNCACB', 'BT_HNCACB+':'HNCACB',
                  'N_SOFAST_TROSY':'HSQC',
                  '15N_calib':'15N calibration', 'calib13C_fast':'13C calibration', 'zg':'zg'}
         for pulse, expected in cases.items():
@@ -73,3 +73,19 @@ zggpw5 zgpr unknown hsqc t1 unrelated_B_HNCA_extra""".split()
         for value, pulse in (('', 'C_SOFAST'), (None, 'c_sofast'), ('unknown', 'C_SOFAST'), ('C_SOFAST', ''), ('c_sofast', '')):
             with self.subTest(value=value, pulse=pulse):
                 self.assertEqual(namespace['formula'](value, pulse), 'HSQC')
+
+    def test_ihncacb_legacy_alias_and_precise_choices(self):
+        for label in ('iHNCACB', 'ihncacb', 'IHNCACB'):
+            self.assertEqual(canonical_experiment(label), 'HNCACB')
+            self.assertEqual(category(label), 'Assignment')
+        self.assertNotIn('iHNCACB', choices_by_category()['Assignment'])
+        self.assertIn('HNCACB', choices_by_category()['Assignment'])
+        for pulse in ('iHNCACB', 'ihncacb', 'B_iHNCACB', 'BT_iHNCACB', 'b_ihncacb+', 'bt_ihncacb+'):
+            self.assertEqual(classify_pulse(pulse), 'HNCACB')
+        for pulse in ('prefix_iHNCACB', 'BT_iHNCACB_extra', 'iHNCACB_extra'):
+            self.assertIsNone(classify_pulse(pulse))
+        namespace = {}
+        body = category_formula('value', 'pulse')
+        exec('def formula(value, pulse):\n' + '\n'.join('    '+line for line in body.splitlines()), namespace)
+        for value, pulse in (('iHNCACB', ''), ('IHNCACB', ''), ('unknown', 'BT_iHNCACB'), ('', 'iHNCACB')):
+            self.assertEqual(namespace['formula'](value, pulse), 'Assignment')
