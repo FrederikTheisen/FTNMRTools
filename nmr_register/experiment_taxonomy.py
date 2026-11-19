@@ -34,6 +34,8 @@ def canonical_experiment(value):
     """Return a canonical precise label, retaining unfamiliar explicit labels."""
     if not isinstance(value, str) or not value.strip() or value.strip().casefold() == "unknown":
         return None
+    if value.strip().casefold() == "c_sofast":
+        return "13C HSQC"
     return _ALIASES.get(_key(value), value.strip())
 
 
@@ -56,6 +58,8 @@ def classify_pulse(pulse, indirect_nucleus=""):
         "15n_calib": "15N calibration", "13c_calib": "13C calibration",
         "calib15n_fast": "15N calibration", "calib13c_fast": "13C calibration",
         "m.calib15n.wg": "15N calibration"}
+    if lower == "c_sofast":
+        return "13C HSQC"
     if lower in calibration:
         return calibration[lower]
     # Restrict assignment matching to complete known local families. Prefixes or

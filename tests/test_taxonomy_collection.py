@@ -22,3 +22,16 @@ class TaxonomyCollectionTests(unittest.TestCase):
     def test_unknown_pulse_does_not_overwrite_user_experiment(self):
         _, facts = _canonical_payload({'ObservedType':'unknown', 'ObservedPulseProgram':'my_new_pulse'})
         self.assertNotIn('ExperimentType', facts)
+
+    def test_cached_unknown_carbon_sofast_preserves_observation_identity(self):
+        fingerprint = 'existing-carbon-sofast-fingerprint'
+        for pulse in ('C_SOFAST', 'c_sofast'):
+            with self.subTest(pulse=pulse):
+                machine, facts = _canonical_payload({
+                    'ObservedType': 'unknown', 'ObservedPulseProgram': pulse,
+                    'ObservedFingerprint': fingerprint})
+                self.assertEqual(facts, {'ExperimentType': '13C HSQC', 'PulseProgram': pulse})
+                self.assertEqual(machine, {'ObservedFingerprint': fingerprint})
+                for fields in (machine, facts):
+                    for field in ('ExperimentCategory', 'Sample', 'Protein', 'Notes', 'Comments'):
+                        self.assertNotIn(field, fields)

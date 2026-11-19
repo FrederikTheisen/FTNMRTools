@@ -51,4 +51,25 @@ zggpw5 zgpr unknown hsqc t1 unrelated_B_HNCA_extra""".split()
             for value in ('', None, 'unknown', 'Custom experiment', '15N_HSQC', 'r1'):
                 with self.subTest(pulse=pulse, value=value):
                     self.assertEqual(namespace['formula'](value, pulse), category(value, pulse))
-        self.assertIsNone(classify_pulse('C_SOFAST'))
+        self.assertEqual(classify_pulse('C_SOFAST'), '13C HSQC')
+
+    def test_carbon_sofast_exact_name_and_legacy_label(self):
+        for pulse in ('C_SOFAST', 'c_sofast', 'C_sOfAsT'):
+            with self.subTest(pulse=pulse):
+                for nucleus in ('', '15N', '13C'):
+                    self.assertEqual(classify_pulse(pulse, nucleus), '13C HSQC')
+                self.assertEqual(canonical_experiment(pulse), '13C HSQC')
+                self.assertEqual(category(pulse), 'HSQC')
+        for pulse in ('C_SOFAST_extra', 'prefix_C_SOFAST', 'C_SOFAST_TROSY', 'C-SOFAST', 'CSOFAST'):
+            with self.subTest(pulse=pulse):
+                self.assertIsNone(classify_pulse(pulse))
+                self.assertEqual(canonical_experiment(pulse), pulse)
+                self.assertEqual(category('', pulse), 'Other')
+
+    def test_generated_formula_carbon_sofast(self):
+        namespace = {}
+        body = category_formula('value', 'pulse')
+        exec('def formula(value, pulse):\n' + '\n'.join('    '+line for line in body.splitlines()), namespace)
+        for value, pulse in (('', 'C_SOFAST'), (None, 'c_sofast'), ('unknown', 'C_SOFAST'), ('C_SOFAST', ''), ('c_sofast', '')):
+            with self.subTest(value=value, pulse=pulse):
+                self.assertEqual(namespace['formula'](value, pulse), 'HSQC')
