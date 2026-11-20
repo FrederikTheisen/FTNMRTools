@@ -16,8 +16,8 @@ def parser():
     main = argparse.ArgumentParser(prog='nmr-register')
     main.add_argument('--config',type=Path,help='Non-secret configuration JSON')
     sub = main.add_subparsers(dest='command',required=True)
-    sync = sub.add_parser('sync',help='Scan locally and flush changed observations')
-    sync.add_argument('--dry-run',action='store_true',help='Scan only; no API or outbox changes')
+    sync = sub.add_parser('sync',help='Scan acquisitions and sync new or changed analysis results')
+    sync.add_argument('--dry-run',action='store_true',help='Preview acquisition and result changes; no API or outbox changes')
     sub.add_parser('status',help='Show local collector state without contacting Grist')
     credential = sub.add_parser('credential',help='Enroll API key through a terminal or zenity')
     credential.add_argument('--test',action='store_true',help='Test existing key with a read-only request')
@@ -149,15 +149,6 @@ def main(argv=None):
                             client = None if args.dry_run else _client(config)
                             result = run(config,state,client,args.dry_run)
                             if not args.dry_run:
-                                from .results import select_results,attach_results
-                                selections = None
-                                if config.results_manifest:
-                                    if not config.result_source_id:
-                                        raise ValueError('results_manifest requires result_source_id')
-                                    source = next((s for s in config.sources if s.id == config.result_source_id),None)
-                                    if source is None: raise ValueError('Unknown result_source_id')
-                                    selections = select_results(config.results_manifest,config.result_source_id,config.max_result_bytes,source.targets)
-                                result.update(attach_results(state,client,selections,config.max_result_bytes))
                                 today=datetime.now(timezone.utc).date().isoformat()
                                 if state.get_meta('last_backup_day')!=today:
                                     result['backup']=create_backup(client,config.home/'backups')

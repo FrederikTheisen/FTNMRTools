@@ -10,7 +10,7 @@ set RLX_DFIT_HEADER = relax_header.txt
 set RLX_DFIT_ESD = vEstNoise.txt
 # Empty preserves the existing prefix (filename before the first dot).
 set OUTPUT_PREFIX = ""
-set EARLY_POINT_POLICY = auto # auto, report (keep full-fit rates), off
+set EARLY_POINT_POLICY = auto # auto, report (keep full-fit rates), off, exclude_shortest
 
 # Use the shared FTNMRTools checkout; keep experiment settings in this script.
 set SCRIPT_PATH = "$0"

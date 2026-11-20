@@ -372,14 +372,23 @@ def run(config,state,client=None,dry_run=False):
         found,failures = scan_source(source, config.instrument_profiles)
         observations.extend(found)
         errors.extend(failures)
+    from .result_discovery import prepare_results
+    plan = prepare_results(config, observations)
+    result_summary = {
+        'results_discovered': plan.discovered,
+        'results_selected': len(plan.selections),
+        'results_changed': sum(state.get_meta('result_sent:'+selection.acquisition_key) !=
+                               [selection.path, selection.sha256] for selection in plan.selections),
+        'result_discovery_issues': plan.issues,
+    }
     if dry_run:
-        # Dry runs do not alter local observations/outbox or contact Grist.
-        return {'observed':len(observations),'errors':errors,'dry_run':True}
+        # Preview never queues results, changes observations or contacts Grist.
+        return {'observed':len(observations),'errors':errors,'dry_run':True, **result_summary}
     state.bind_document(config.api_base)
     state.observe(observations)
     state.set_meta('last_scan',time.time())
     state.set_meta('last_error','; '.join(errors))
-    result = {'observed':len(observations),'errors':errors,'pending':len(state.pending())}
+    result = {'observed':len(observations),'errors':errors,'pending':len(state.pending()), **result_summary}
     if client is None:
         return result
     try:
@@ -387,6 +396,9 @@ def run(config,state,client=None,dry_run=False):
         if result['conflicts']:
             errors.append(str(result['conflicts'])+' acquisition identities require reconciliation')
             state.set_meta('last_error','; '.join(errors))
+        from .results import attach_results
+        result.update(attach_results(state, client, plan.selections, config.max_result_bytes,
+                                     discovery_issues=plan.issues, eligible_keys=plan.eligible_keys))
         state.set_meta('last_sync',time.time())
         sync_scan_status(state,client,config,'; '.join(errors))
     except (GristError,OSError,ValueError) as error:

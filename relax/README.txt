@@ -122,11 +122,16 @@ the PDF and numbers table.
 
 Plots use the reported R and I0 without a second fit. Measured intensities,
 input noise bars and predicted intensities are divided by fitted I0. The
-residual panel is (measured - predicted) / input noise SD. These bars condition
-on fitted I0; they do not include uncertainty in the fitted amplitude or
-quantify overlap/processing systematics. Invalid or zero I0 receives a flagged
-raw-intensity panel without a normalized curve or residuals. The rate/NOE
-overview shows valid fitted peaks and marks overlaps.
+residual panel is (measured - predicted) / input noise SD, with +/-1 error
+bars from the same supplied plane noise used for the intensity bars. Excluded
+observations retain their open orange markers and error bars; the residual
+axis includes the full error bars. Residual bars hold the fitted curve fixed;
+they do not include uncertainty in the fitted parameters or the fitter's
+residual-based noise inflation. Repeated-delay scatter remains a separate
+diagnostic and does not replace the supplied noise. Intensity bars condition
+on fitted I0 and do not quantify overlap/processing systematics. Invalid or
+zero I0 receives a flagged raw-intensity panel without a normalized curve or
+residuals. The rate/NOE overview shows valid fitted peaks and marks overlaps.
 
 Failure handling
 ----------------

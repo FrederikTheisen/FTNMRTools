@@ -150,7 +150,7 @@ def _attachment_id(state,client,selection):
     return attachment
 
 
-def attach_results(state,client,selections=None,max_bytes=2_000_000):
+def attach_results(state,client,selections=None,max_bytes=2_000_000,discovery_issues=(),eligible_keys=None):
     if getattr(client,'base',None):
         state.bind_document(client.base)
     if selections is not None:
@@ -161,14 +161,27 @@ def attach_results(state,client,selections=None,max_bytes=2_000_000):
     if not queued:
         state.set_meta('result_issues',[])
         return {'attached':0,'pending_results':0,'blocked_results':0,'result_issues':[]}
-    # Re-verify immutable input before upload, even after restart.
-    selected = [_read_selected(row['path'],row['sha256'],row['key'],max_bytes) for row in queued]
-    rows = client.records('Experiments')
+    # A conflicted local version must also suppress an older queued attachment.
+    suppressed = {issue['key']: issue['reason'] for issue in discovery_issues}
+    blocked, selected = [], []
+    # Re-verify immutable input before upload, even after restart. A local file
+    # problem blocks that acquisition without poisoning the remaining queue.
+    for row in queued:
+        reason = suppressed.get(row['key'])
+        if eligible_keys is not None and row['key'] not in eligible_keys:
+            reason = 'Acquisition not in the current scan scope; result selection retained'
+        if reason:
+            blocked.append({'key':row['key'], 'reason':reason})
+            continue
+        try:
+            selected.append(_read_selected(row['path'],row['sha256'],row['key'],max_bytes))
+        except (OSError, ValueError) as error:
+            blocked.append({'key':row['key'], 'reason':str(error)})
+    rows = client.records('Experiments') if selected else []
     by_key = {}
     for row in rows:
         by_key.setdefault(row['fields'].get('AcquisitionKey'),[]).append(row)
     attached = 0
-    blocked = []
     def block(selection,reason):
         blocked.append({'key':selection.acquisition_key,'reason':reason})
     for selection in selected:

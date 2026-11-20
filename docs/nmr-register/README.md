@@ -273,7 +273,7 @@ nmr-register backup
 ```
 
 Run `sync --dry-run` after configuring local transferred-data roots to preview
-what the next sync would reconcile. A normal hourly sync updates observations;
+what the next sync would reconcile, including new and changed analysis results. A normal hourly sync updates observations and result attachments;
 repeat scans are idempotent. Exact registered acquisitions are matched to their
 registration. Ambiguous copies and reruns are surfaced for human review. The
 collector prunes protected subtrees before walking them and scans all configured
@@ -332,10 +332,26 @@ user session is active. The existing local credential is in use.
 
 ## Results and backups
 
-Attach only the existing current result CSV selected by an explicit manifest
-and verified checksum. Do not choose the newest CSV by timestamp or upload a
-whole experiment folder. Download attachments from Grist to the laptop when
-needed.
+`nmr-register sync` discovers `*_numbers.csv` files directly in each scanned
+acquisition folder. It verifies the source-folder/EXPNO footer, size and checksum,
+then queues new or changed results through the existing guarded attachment path.
+No separate manifest-refresh command is needed. Configured targets, protected
+paths, symlinks and derived-split exclusions retain the acquisition scan's scope.
+
+The configured results manifest remains a fallback for acquisitions without local
+analysis files. One verified local result supersedes an older manifest version;
+unchanged bytes retain the selected path. Multiple different local result files
+are reported in `result_discovery_issues` rather than chosen by timestamp, and
+any older queued upload for that acquisition is held. Put superseded local
+versions in an archive subdirectory to leave one current file. Invalid results
+are reported per acquisition while other valid results continue. `sync --dry-run`
+reports `results_discovered`, `results_selected` and `results_changed` without
+queuing or uploading. No scientific fit or human assessment is changed.
+
+Existing acquisition-reconciliation and unacknowledged result-replacement guards
+remain in force. Explicit result selection is still available with
+`nmr-register results --manifest FILE --source-id ID`. Download attachments from
+Grist to the laptop when needed.
 
 `nmr-register backup` creates a complete Grist document backup, including
 attachments, and retains the seven most recent daily backups. Before a schema

@@ -1579,6 +1579,7 @@ def report_intro(report):
                   f"Holm-adjusted departures (alpha=0.05): {report['rejected']}",
                   f"Descriptive shared-plane flags: {report['coherent'] or 'none'}",
                   'Assessment uses supplied noise SDs and assumes independent Gaussian measurement noise.',
+                  'Residual error bars: +/-1 input noise SD; fitted curve held fixed.',
                   'Shared-plane screen: >=10 eligible peaks, >=80% same sign, |median residual/SD| > 2.',
                   'This is a descriptive screen. Departures do not establish a biexponential mechanism.']
     if report.get('selection'):
@@ -1742,13 +1743,14 @@ def prepare_reports(stage, peaks, extracted, fit_text, times, noises, mode, pref
                 command = f'plot "intensity.out" index {index} using 1:2:3 with yerrorbars pt 7'
             if normalized:
                 command += f', exp(-({rate:.17g})*x) with lines'
-            plot += [command] + decay_panel_layout(residual=True, top=.82, bottom=.11) + ['set ylabel "Residual / SD"']
+            plot += [command] + decay_panel_layout(residual=True, top=.82, bottom=.11) + [
+                'set autoscale y', 'set ylabel "Residual / input SD"']
             if normalized:
                 if early_selection is not None and not all(report['used']):
-                    plot.append(f'plot "intensity.out" index {index} using 1:($7==1?$6:1/0) with points pt 7 lc rgb "#285879", '
-                                f'"intensity.out" index {index} using 1:($7==0?$6:1/0) with points pt 6 lc rgb "#c17b19", 0 with lines')
+                    plot.append(f'plot "intensity.out" index {index} using 1:($7==1?$6:1/0):(1) with yerrorbars pt 7 lc rgb "#285879", '
+                                f'"intensity.out" index {index} using 1:($7==0?$6:1/0):(1) with yerrorbars pt 6 lc rgb "#c17b19", 0 with lines')
                 else:
-                    plot.append(f'plot "intensity.out" index {index} using 1:6 with points pt 7, 0 with lines')
+                    plot.append(f'plot "intensity.out" index {index} using 1:6:(1) with yerrorbars pt 7, 0 with lines')
             else:
                 plot += ['set label 999 "Residual unavailable: invalid fit/I0" at graph 0.1,0.5',
                          f'plot [{lo:.17g}:{hi:.17g}] [-1:1] 0 with lines', 'unset label 999']
